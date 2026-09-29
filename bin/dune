@@ -1,0 +1,4 @@
+(executable
+ (name szaniec)
+ (public_name szaniec)
+ (libraries szaniec_inspection_manager szaniec_architecture_access))

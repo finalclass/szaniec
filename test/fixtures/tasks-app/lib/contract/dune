@@ -1,0 +1,7 @@
+(include_subdirs no)
+
+(library
+ (name contract)
+ (wrapped false)
+ (libraries well yojson)
+ (flags (:standard -bin-annot)))

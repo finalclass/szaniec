@@ -1,0 +1,3 @@
+(library
+ (name szaniec_architecture_access)
+ (libraries szaniec_model yojson digestif))

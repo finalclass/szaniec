@@ -1,0 +1,3 @@
+(library
+ (name szaniec_model)
+ (libraries yojson digestif))

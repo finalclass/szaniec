@@ -1,0 +1,14 @@
+(dirs :standard \ tmp)
+
+(executable
+ (name runner)
+ (libraries unix))
+
+(rule
+ (alias runtest)
+ (package szaniec)
+ (deps
+  (file %{workspace_root}/test/acceptance/run.sh)
+  (glob_files expected/*.txt))
+ (action
+  (run sh "%{workspace_root}/test/acceptance/run.sh")))

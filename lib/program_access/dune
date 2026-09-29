@@ -1,0 +1,3 @@
+(library
+ (name szaniec_program_access)
+ (libraries szaniec_model compiler-libs.common))

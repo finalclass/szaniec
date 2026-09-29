@@ -1,0 +1,8 @@
+(lang dune 3.17)
+
+(package
+ (name tasksapp)
+ (allow_empty)
+ (depends
+  (ocaml (and (>= 5.4) (< 5.5)))
+  yojson))

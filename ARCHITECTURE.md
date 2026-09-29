@@ -172,6 +172,17 @@ Retain both violations and gaps when both occur. A successful result claims only
 coverage of its declared profile. Tests and build tools have explicit scope; silently
 skipping files is not an acceptable coverage strategy.
 
+## Contracts
+
+Implementation-level contracts resolved under this architecture:
+
+- [Policy format](docs/contracts/policy-format.md) — `szaniec-policy/1`, approved-policy selection, ownership matching.
+- [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
+- [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
+- [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, determinism and exit statuses.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/1.0.0`.
+- [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
+
 ## Basis
 
 The approach is inspired by Juval Lowy's *Righting Software*: volatility-based

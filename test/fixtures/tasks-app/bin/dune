@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (flags (:standard -bin-annot))
+ (libraries app))

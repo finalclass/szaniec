@@ -1,0 +1,9 @@
+(executable
+ (name version_gate)
+ (libraries szaniec_program_access szaniec_model))
+
+(rule
+ (alias runtest)
+ (package szaniec)
+ (action
+  (run %{exe:version_gate.exe})))

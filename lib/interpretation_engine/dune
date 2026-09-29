@@ -1,0 +1,3 @@
+(library
+ (name szaniec_interpretation_engine)
+ (libraries szaniec_model))

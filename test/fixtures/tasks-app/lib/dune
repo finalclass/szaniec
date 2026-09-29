@@ -1,0 +1,6 @@
+(include_subdirs qualified)
+
+(library
+ (name app)
+ (libraries contract well)
+ (flags (:standard -bin-annot)))

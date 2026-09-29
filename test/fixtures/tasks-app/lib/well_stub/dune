@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(library
+ (name well)
+ (wrapped false)
+ (flags (:standard -bin-annot)))

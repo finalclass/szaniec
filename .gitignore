@@ -2,3 +2,7 @@
 .env
 .env.*
 !.env.example
+
+# build and scratch
+tmp/
+_build/

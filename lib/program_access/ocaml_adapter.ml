@@ -1,0 +1,934 @@
+(* OCaml ProgramAccess adapter.
+
+   Extracts normalized program facts from compiler-typed artifacts (.cmt)
+   produced by dune for the inspected project. See
+   docs/contracts/observation-schema.md and docs/decisions/stack.md.
+
+   The adapter reports facts only; architectural meaning is decided by the
+   InterpretationEngine. Supported artifacts: OCaml
+   [Szaniec_model.Version.supported_compiler_series] .cmt files. *)
+
+open Szaniec_model
+
+let ( // ) = Filename.concat
+
+(* ── filesystem scanning ─────────────────────────────────────────── *)
+
+let skip_dir_names = ["_build"; "node_modules"]
+
+let rec scan
+    (base : string)
+    (rel : string)
+    (pred : string -> bool)
+    (acc : string list ref)
+    (hidden : bool) =
+  let dir = if rel = "" then base else base // rel in
+  try
+    let entries = Sys.readdir dir in
+    Array.iter
+      (fun e ->
+        if e = "." || e = ".."
+        then ()
+        else if (not hidden) && String.length e > 0 && e.[0] = '.'
+        then ()
+        else if List.mem e skip_dir_names
+        then ()
+        else if Sys.is_directory (dir // e)
+        then scan base (if rel = "" then e else rel // e) pred acc hidden
+        else if pred e
+        then acc := (if rel = "" then e else rel // e) :: !acc )
+      entries
+  with
+  | Sys_error _ -> ()
+
+let scan_sources (project_root : string) (roots : string list) : string list =
+  let acc = ref [] in
+  List.iter
+    (fun root ->
+      if Sys.file_exists (project_root // root)
+      then
+        scan
+          project_root
+          root
+          (fun e -> Filename.check_suffix e ".ml")
+          acc
+          false )
+    roots ;
+  List.sort_uniq compare !acc
+
+let scan_artifacts (project_root : string) : string list =
+  let acc = ref [] in
+  scan project_root "_build" (fun e -> Filename.check_suffix e ".cmt") acc true ;
+  List.filter
+    (fun p -> String.length p > 15 && String.sub p 0 15 = "_build/default/")
+    !acc
+  |> List.sort compare
+
+let strip_build_prefix (p : string) : string =
+  let prefix = "_build/default/" in
+  if
+    String.length p > String.length prefix
+    && String.sub p 0 (String.length prefix) = prefix
+  then
+    String.sub p (String.length prefix) (String.length p - String.length prefix)
+  else p
+
+(* ── identity helpers ─────────────────────────────────────────────── *)
+
+let obj_lib_name (rel_build_path : string) : string =
+  let segs = String.split_on_char '/' rel_build_path in
+  let rec go = function
+    | [] -> "unknown"
+    | seg :: rest ->
+        if String.length seg > 2 && String.sub seg 0 1 = "."
+        then
+          if Filename.check_suffix seg ".objs"
+          then String.sub seg 1 (String.length seg - 6)
+          else if Filename.check_suffix seg ".eobjs"
+          then String.sub seg 1 (String.length seg - 7)
+          else go rest
+        else go rest
+  in
+  go segs
+
+let find_substring (s : string) (sub : string) : int option =
+  let n = String.length s and m = String.length sub in
+  let rec go i =
+    if i + m > n
+    then None
+    else if String.sub s i m = sub
+    then Some i
+    else go (i + 1)
+  in
+  go 0
+
+let compiler_series_of_args (args : string array) : string =
+  if Array.length args = 0
+  then "unknown"
+  else
+    match find_substring args.(0) "compiler." with
+    | None -> "unknown"
+    | Some i -> (
+        let rest =
+          String.sub args.(0) (i + 9) (String.length args.(0) - i - 9)
+        in
+        let rec take acc j =
+          if j >= String.length rest
+          then acc
+          else
+            let ch = rest.[j] in
+            if (ch >= '0' && ch <= '9') || ch = '.'
+            then take (acc ^ String.make 1 ch) (j + 1)
+            else acc
+        in
+        let v = take "" 0 in
+        match String.split_on_char '.' v with
+        | major :: minor :: _ -> major ^ "." ^ minor
+        | _ -> "unknown" )
+
+let md5_hex (path : string) : string =
+  try Digest.to_hex (Digest.file path) with
+  | Sys_error _ -> ""
+
+let sha256_hex (s : string) : string =
+  Digestif.SHA256.to_hex (Digestif.SHA256.digest_string s)
+
+let read_file (path : string) : string =
+  try
+    let ic = open_in_bin path in
+    let n = in_channel_length ic in
+    let s = really_input_string ic n in
+    close_in ic ;
+    s
+  with
+  | Sys_error _ -> ""
+
+let normalize_fname ~(project_root : string) (fname : string) : string =
+  if Filename.is_relative fname
+  then fname
+  else
+    let root = String.length project_root in
+    if
+      String.length fname > root
+      && String.sub fname 0 root = project_root
+      && fname.[root] = '/'
+    then String.sub fname (root + 1) (String.length fname - root - 1)
+    else fname
+
+let site_of_loc ~(project_root : string) (loc : Location.t) : Observation.site =
+  let start = loc.Location.loc_start in
+  { Observation.site_path= normalize_fname ~project_root start.Lexing.pos_fname
+  ; line= start.Lexing.pos_lnum
+  ; col= start.Lexing.pos_cnum - start.Lexing.pos_bol }
+
+(* ── typed tree walk ──────────────────────────────────────────────── *)
+
+type facts =
+  { mutable calls: Observation.call list
+  ; mutable vrefs: Observation.value_ref list
+  ; mutable trefs: Observation.type_ref list
+  ; mutable symbols: (string * string) list
+  ; mutable unsupported: Observation.site list }
+
+type ctx =
+  { project_root: string
+  ; unit_canonical: string
+  ; lib_cap: string
+  ; defined: (Ident.t, unit) Hashtbl.t
+  ; aliases: (string, string) Hashtbl.t
+  ; mutable def_loc: Location.t }
+
+type resolution =
+  [ `Canonical of string
+  | `LocalVar
+  | `Dynamic ]
+
+let canonicalize (c : ctx) (p : Path.t) : resolution =
+  let rec go (acc : string list) (p : Path.t) : (Ident.t * string list) option =
+    match p with
+    | Pident id -> Some (id, acc)
+    | Pdot (p, s) -> go (s :: acc) p
+    | Pextra_ty (p, _) -> go acc p
+    | Papply _ -> None
+  in
+  match go [] p with
+  | None -> `Dynamic
+  | Some (root, rest) ->
+      if (not (Ident.persistent root)) && not (Ident.global root)
+      then
+        if Hashtbl.mem c.defined root
+        then
+          (* same-unit member; resolve a direct in-unit module alias *)
+          let name = Ident.name root in
+          match rest with
+          | name2 :: more when Hashtbl.mem c.aliases name2 ->
+              let target = Hashtbl.find c.aliases name2 in
+              if more = []
+              then `Canonical target
+              else `Canonical (target ^ "." ^ String.concat "." more)
+          | _ ->
+              `Canonical (String.concat "." (c.unit_canonical :: name :: rest))
+        else `LocalVar
+      else
+        `Canonical
+          (Canonical.of_ref
+             ~unit_canonical:c.unit_canonical
+             ~lib_cap:c.lib_cap
+             (Ident.name root :: rest) )
+
+let add_defined (c : ctx) (id : Ident.t) =
+  if (not (Ident.persistent id)) && not (Ident.global id)
+  then Hashtbl.replace c.defined id ()
+
+let rec collect_pat_vars
+    (p : 'k Typedtree.general_pattern)
+    (acc : Ident.t list ref) =
+  match p.Typedtree.pat_desc with
+  | Tpat_var (id, _, _) -> acc := id :: !acc
+  | Tpat_alias (q, id, _, _, _) ->
+      collect_pat_vars q acc ;
+      acc := id :: !acc
+  | Tpat_tuple ps -> List.iter (fun (_l, q) -> collect_pat_vars q acc) ps
+  | Tpat_construct (_, _, ps, _) ->
+      List.iter (fun q -> collect_pat_vars q acc) ps
+  | Tpat_variant (_, q, _) -> (
+    match q with
+    | Some q -> collect_pat_vars q acc
+    | None -> () )
+  | Tpat_record (fs, _) ->
+      List.iter (fun (_l, _ld, q) -> collect_pat_vars q acc) fs
+  | Tpat_array (_, ps) -> List.iter (fun q -> collect_pat_vars q acc) ps
+  | Tpat_lazy q -> collect_pat_vars q acc
+  | Tpat_or (a, b, _) ->
+      collect_pat_vars a acc ;
+      collect_pat_vars b acc
+  | _ -> ()
+
+let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
+  List.iter
+    (fun (i : Typedtree.structure_item) ->
+      match i.str_desc with
+      | Tstr_value (_, vbs) ->
+          List.iter
+            (fun vb ->
+              let acc = ref [] in
+              collect_pat_vars vb.Typedtree.vb_pat acc ;
+              List.iter (add_defined c) !acc )
+            vbs
+      | Tstr_module mb -> (
+          ( match mb.Typedtree.mb_id with
+          | Some id -> add_defined c id
+          | None -> () ) ;
+          match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+          | Tmod_ident (p, _) -> (
+            match canonicalize c p with
+            | `Canonical target -> (
+              match mb.Typedtree.mb_id with
+              | Some id -> Hashtbl.replace c.aliases (Ident.name id) target
+              | None -> () )
+            | _ -> () )
+          | Tmod_structure s -> (
+            match mb.Typedtree.mb_id with
+            | Some id ->
+                let sub =
+                  {c with unit_canonical= c.unit_canonical ^ "." ^ Ident.name id}
+                in
+                pre_collect sub s.str_items
+            | None -> () )
+          | _ -> () )
+      | Tstr_recmodule mbs ->
+          List.iter
+            (fun mb ->
+              ( match mb.Typedtree.mb_id with
+              | Some id -> add_defined c id
+              | None -> () ) ;
+              match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+              | Tmod_structure s -> (
+                match mb.Typedtree.mb_id with
+                | Some id ->
+                    let sub =
+                      { c with
+                        unit_canonical= c.unit_canonical ^ "." ^ Ident.name id
+                      }
+                    in
+                    pre_collect sub s.str_items
+                | None -> () )
+              | _ -> () )
+            mbs
+      | Tstr_include inc -> (
+        match inc.incl_mod.Typedtree.mod_desc with
+        | Tmod_structure s -> pre_collect c s.str_items
+        | _ -> () )
+      | _ -> () )
+    items
+
+let rec walk_core_type
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (t : Typedtree.core_type) =
+  match t.Typedtree.ctyp_desc with
+  | Ttyp_constr (p, _, args) ->
+      ( match canonicalize c p with
+      | `Canonical target ->
+          facts.trefs <-
+            { Observation.tref_unit= c.unit_canonical
+            ; tref_caller= caller
+            ; tref_target= target
+            ; tref_site=
+                site_of_loc ~project_root:c.project_root t.Typedtree.ctyp_loc }
+            :: facts.trefs
+      | _ -> () ) ;
+      List.iter (walk_core_type c facts caller) args
+  | Ttyp_arrow (_, a, b) ->
+      walk_core_type c facts caller a ;
+      walk_core_type c facts caller b
+  | Ttyp_tuple ts ->
+      List.iter (fun (_l, t) -> walk_core_type c facts caller t) ts
+  | Ttyp_alias (t, _) -> walk_core_type c facts caller t
+  | Ttyp_poly (_, t) -> walk_core_type c facts caller t
+  | _ -> ()
+
+let walk_pat
+    (type k)
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (p : k Typedtree.general_pattern) =
+  (* Type references are taken from this pattern node's constraint extra.
+     Sub-patterns are not descended (documented coverage). *)
+  List.iter
+    (fun (extra, _loc, _attrs) ->
+      match extra with
+      | Typedtree.Tpat_constraint t -> walk_core_type c facts caller t
+      | _ -> () )
+    p.Typedtree.pat_extra
+
+let fallback_loc (c : ctx) (e : Typedtree.expression) (loc : Location.t) :
+    Location.t =
+  let pos = loc.Location.loc_start in
+  if pos.Lexing.pos_fname = "" || pos.Lexing.pos_lnum <= 0
+  then
+    let p2 = e.exp_loc.Location.loc_start in
+    if p2.Lexing.pos_fname = "" || p2.Lexing.pos_lnum <= 0
+    then c.def_loc
+    else e.exp_loc
+  else loc
+
+let rec record_call
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (callee : Path.t)
+    (resolution : Observation.resolution)
+    (loc : Location.t) =
+  match canonicalize c callee with
+  | `Canonical target ->
+      facts.calls <-
+        { Observation.call_unit= c.unit_canonical
+        ; caller
+        ; callee= target
+        ; resolution
+        ; site= site_of_loc ~project_root:c.project_root loc }
+        :: facts.calls
+  | _ ->
+      facts.calls <-
+        { Observation.call_unit= c.unit_canonical
+        ; caller
+        ; callee= ""
+        ; resolution= Observation.Unresolved_dynamic
+        ; site= site_of_loc ~project_root:c.project_root loc }
+        :: facts.calls
+
+and record_ref
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (target : Path.t)
+    (loc : Location.t) =
+  match canonicalize c target with
+  | `Canonical target ->
+      facts.vrefs <-
+        { Observation.ref_unit= c.unit_canonical
+        ; ref_caller= caller
+        ; ref_target= target
+        ; ref_site= site_of_loc ~project_root:c.project_root loc }
+        :: facts.vrefs
+  | _ -> ()
+
+and walk_expr
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (e : Typedtree.expression) =
+  match e.Typedtree.exp_desc with
+  | Texp_apply (tfun0, args) ->
+      let rec spine t =
+        match t.Typedtree.exp_desc with
+        | Texp_apply (tfun, _a) -> spine tfun
+        | _ -> t
+      in
+      let tfun = spine tfun0 in
+      ( match tfun.Typedtree.exp_desc with
+      | Texp_ident (p, loc, _d) -> (
+        match canonicalize c p with
+        | `Canonical _ ->
+            record_call c facts caller p Observation.Resolved loc.loc
+        | `LocalVar ->
+            record_call
+              c
+              facts
+              caller
+              p
+              Observation.Unresolved_local
+              (fallback_loc c e loc.loc)
+        | `Dynamic ->
+            record_call
+              c
+              facts
+              caller
+              p
+              Observation.Unresolved_dynamic
+              (fallback_loc c e loc.loc) )
+      | Texp_field _ ->
+          facts.calls <-
+            { Observation.call_unit= c.unit_canonical
+            ; caller
+            ; callee= ""
+            ; resolution= Observation.Unresolved_field
+            ; site=
+                site_of_loc
+                  ~project_root:c.project_root
+                  (fallback_loc c e tfun.exp_loc) }
+            :: facts.calls
+      | _ ->
+          facts.calls <-
+            { Observation.call_unit= c.unit_canonical
+            ; caller
+            ; callee= ""
+            ; resolution= Observation.Unresolved_dynamic
+            ; site=
+                site_of_loc
+                  ~project_root:c.project_root
+                  (fallback_loc c e tfun.exp_loc) }
+            :: facts.calls ) ;
+      List.iter
+        (fun (_lbl, arg) ->
+          match arg with
+          | Typedtree.Arg a -> (
+            match a.Typedtree.exp_desc with
+            | Texp_ident (p, loc, _d) -> (
+              match canonicalize c p with
+              | `Canonical _ -> record_ref c facts caller p loc.loc
+              | `LocalVar
+               |`Dynamic ->
+                  () )
+            | _ -> walk_expr c facts caller a )
+          | Typedtree.Omitted _ -> () )
+        args
+  | Texp_ident (p, loc, _d) -> (
+    match canonicalize c p with
+    | `Canonical _ -> record_ref c facts caller p loc.loc
+    | `LocalVar
+     |`Dynamic ->
+        () )
+  | Texp_pack m -> walk_module_expr c facts caller m
+  | Texp_function (params, body) -> (
+      List.iter
+        (fun fp ->
+          match fp.Typedtree.fp_kind with
+          | Tparam_pat p -> walk_pat c facts caller p
+          | _ -> () )
+        params ;
+      match body with
+      | Tfunction_body b -> walk_expr c facts caller b
+      | Tfunction_cases {cases; _} ->
+          List.iter
+            (fun k ->
+              walk_pat c facts caller k.Typedtree.c_lhs ;
+              walk_expr c facts caller k.Typedtree.c_rhs )
+            cases )
+  | Texp_construct (_, _, args) -> List.iter (walk_expr c facts caller) args
+  | Texp_constant _ -> ()
+  | Texp_let (_, vbs, body) ->
+      List.iter
+        (fun vb ->
+          walk_pat c facts caller vb.Typedtree.vb_pat ;
+          walk_expr c facts caller vb.Typedtree.vb_expr )
+        vbs ;
+      walk_expr c facts caller body
+  | Texp_match (scrut, comp_cases, val_cases, _) ->
+      walk_expr c facts caller scrut ;
+      List.iter
+        (fun (k : Typedtree.computation Typedtree.case) ->
+          walk_pat c facts caller k.Typedtree.c_lhs ;
+          walk_expr c facts caller k.Typedtree.c_rhs )
+        comp_cases ;
+      List.iter
+        (fun (k : Typedtree.value Typedtree.case) ->
+          walk_pat c facts caller k.Typedtree.c_lhs ;
+          walk_expr c facts caller k.Typedtree.c_rhs )
+        val_cases
+  | Texp_try (e, cases, eff_cases) ->
+      walk_expr c facts caller e ;
+      List.iter (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) cases ;
+      List.iter (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) eff_cases
+  | Texp_ifthenelse (a, b, f) -> (
+      walk_expr c facts caller a ;
+      walk_expr c facts caller b ;
+      match f with
+      | Some f -> walk_expr c facts caller f
+      | None -> () )
+  | Texp_sequence (a, b) ->
+      walk_expr c facts caller a ;
+      walk_expr c facts caller b
+  | Texp_record {fields; extended_expression= rest; _} -> (
+      Array.iter
+        (fun (_lbl, d) ->
+          match d with
+          | Typedtree.Overridden (_li, e) -> walk_expr c facts caller e
+          | Typedtree.Kept _ -> () )
+        fields ;
+      match rest with
+      | Some r -> walk_expr c facts caller r
+      | None -> () )
+  | Texp_field (e, _, _) -> walk_expr c facts caller e
+  | Texp_setfield (e, _, _, v) ->
+      walk_expr c facts caller e ;
+      walk_expr c facts caller v
+  | Texp_atomic_loc (e, _, _) -> walk_expr c facts caller e
+  | Texp_array (_, el) -> List.iter (walk_expr c facts caller) el
+  | Texp_tuple el -> List.iter (fun (_l, e) -> walk_expr c facts caller e) el
+  | Texp_open (od, body) ->
+      walk_module_expr c facts caller od.open_expr ;
+      walk_expr c facts caller body
+  | Texp_letmodule (_, _, _, m, b) ->
+      walk_module_expr c facts caller m ;
+      walk_expr c facts caller b
+  | Texp_letexception (_, b) -> walk_expr c facts caller b
+  | Texp_letop {let_; ands; body; _} ->
+      walk_expr c facts caller let_.Typedtree.bop_exp ;
+      List.iter (fun b -> walk_expr c facts caller b.Typedtree.bop_exp) ands ;
+      walk_expr c facts caller body.Typedtree.c_rhs
+  | Texp_variant (_, eo) -> (
+    match eo with
+    | Some e -> walk_expr c facts caller e
+    | None -> () )
+  | Texp_lazy e -> walk_expr c facts caller e
+  | Texp_send _
+   |Texp_object _ ->
+      facts.unsupported <-
+        site_of_loc ~project_root:c.project_root e.exp_loc :: facts.unsupported
+  | Texp_while (a, b) ->
+      walk_expr c facts caller a ;
+      walk_expr c facts caller b
+  | Texp_for (_i, _p, a, b, _d, body) ->
+      walk_expr c facts caller a ;
+      walk_expr c facts caller b ;
+      walk_expr c facts caller body
+  | Texp_assert (e, _) -> walk_expr c facts caller e
+  | Texp_extension_constructor _
+   |Texp_unreachable ->
+      ()
+  | Texp_new _ -> ()
+  | Texp_instvar _
+   |Texp_setinstvar _
+   |Texp_override _ ->
+      ()
+
+and walk_module_expr
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (m : Typedtree.module_expr) =
+  match m.mod_desc with
+  | Tmod_ident (p, lid) -> (
+    match canonicalize c p with
+    | `Canonical _ -> record_ref c facts caller p lid.loc
+    | `LocalVar
+     |`Dynamic ->
+        () )
+  | Tmod_structure s -> walk_structure c facts caller s.str_items
+  | Tmod_functor (_, body) -> walk_module_expr c facts caller body
+  | Tmod_apply (f, a, _) ->
+      walk_module_expr c facts caller f ;
+      walk_module_expr c facts caller a
+  | Tmod_apply_unit m -> walk_module_expr c facts caller m
+  | Tmod_unpack (e, _) -> walk_expr c facts caller e
+  | Tmod_constraint (m, _, _, _) -> walk_module_expr c facts caller m
+
+and walk_structure
+    (c : ctx)
+    (facts : facts)
+    (outer : string)
+    (items : Typedtree.structure_item list) =
+  List.iter
+    (fun (i : Typedtree.structure_item) ->
+      match i.str_desc with
+      | Tstr_value (_, vbs) ->
+          List.iter
+            (fun vb ->
+              let name =
+                match vb.Typedtree.vb_pat.Typedtree.pat_desc with
+                | Tpat_var (id, _, _) -> Ident.name id
+                | _ -> "<toplevel>"
+              in
+              let caller = if outer = "" then name else outer ^ "." ^ name in
+              facts.symbols <- (caller, "value") :: facts.symbols ;
+              let old_def = c.def_loc in
+              c.def_loc <- vb.Typedtree.vb_loc ;
+              walk_pat c facts caller vb.Typedtree.vb_pat ;
+              walk_expr c facts caller vb.Typedtree.vb_expr ;
+              c.def_loc <- old_def )
+            vbs
+      | Tstr_module mb ->
+          let name =
+            match mb.Typedtree.mb_name.txt with
+            | Some n -> n
+            | None -> "<toplevel>"
+          in
+          let sub = if outer = "" then name else outer ^ "." ^ name in
+          facts.symbols <- (sub, "module") :: facts.symbols ;
+          walk_module_expr c facts sub mb.Typedtree.mb_expr
+      | Tstr_recmodule mbs ->
+          List.iter
+            (fun mb ->
+              let name =
+                match mb.Typedtree.mb_name.txt with
+                | Some n -> n
+                | None -> "<toplevel>"
+              in
+              let sub = if outer = "" then name else outer ^ "." ^ name in
+              facts.symbols <- (sub, "module") :: facts.symbols ;
+              walk_module_expr c facts sub mb.Typedtree.mb_expr )
+            mbs
+      | Tstr_include inc -> walk_module_expr c facts outer inc.incl_mod
+      | Tstr_eval (e, _) ->
+          walk_expr c facts (if outer = "" then "<toplevel>" else outer) e
+      | Tstr_modtype mtd -> (
+        match mtd.Typedtree.mtd_type with
+        | Some mty -> walk_module_type c facts outer mty
+        | None -> () )
+      | Tstr_primitive vd -> walk_core_type c facts outer vd.Typedtree.val_desc
+      | Tstr_type (_, tds) ->
+          List.iter
+            (fun td ->
+              List.iter
+                (fun (ct, _vi) -> walk_core_type c facts outer ct)
+                td.Typedtree.typ_params )
+            tds
+      | Tstr_typext _
+       |Tstr_exception _
+       |Tstr_attribute _
+       |Tstr_class _
+       |Tstr_class_type _
+       |Tstr_open _ ->
+          () )
+    items
+
+and walk_module_type
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (mty : Typedtree.module_type) =
+  match mty.mty_desc with
+  | Tmty_signature sig_items ->
+      List.iter
+        (fun (si : Typedtree.signature_item) ->
+          match si.sig_desc with
+          | Tsig_value vd -> walk_core_type c facts caller vd.Typedtree.val_desc
+          | _ -> () )
+        sig_items.Typedtree.sig_items
+  | Tmty_functor (_, mty) -> walk_module_type c facts caller mty
+  | Tmty_with (mty, _) -> walk_module_type c facts caller mty
+  | _ -> ()
+
+let walk_unit
+    ~(project_root : string)
+    ~(lib : string)
+    ~(unit_name : string)
+    (cmt : Cmt_format.cmt_infos)
+    (facts : facts) =
+  match cmt.Cmt_format.cmt_annots with
+  | Cmt_format.Implementation s ->
+      let unit_canonical = Canonical.of_unit_name ~library:lib ~unit_name in
+      let c =
+        { project_root
+        ; unit_canonical
+        ; lib_cap= String.capitalize_ascii lib
+        ; defined= Hashtbl.create 64
+        ; aliases= Hashtbl.create 8
+        ; def_loc= Location.none }
+      in
+      pre_collect c s.str_items ;
+      walk_structure c facts "" s.str_items
+  | Cmt_format.Interface _
+   |Cmt_format.Packed _
+   |Cmt_format.Partial_implementation _
+   |Cmt_format.Partial_interface _ ->
+      ()
+
+(* ── observation driver ───────────────────────────────────────────── *)
+
+let in_scope (roots : string list) (path : string) : bool =
+  List.exists
+    (fun root ->
+      path = root
+      || String.length path > String.length root + 1
+         && String.sub path 0 (String.length root + 1) = root // "" )
+    roots
+
+let observe ~(project_root : string) ~(program_roots : string list) () :
+    Observation.t =
+  let sources = scan_sources project_root program_roots in
+  let artifacts = scan_artifacts project_root in
+  let gaps = ref [] in
+  let read_infos =
+    List.filter_map
+      (fun artifact ->
+        let rel = strip_build_prefix artifact in
+        let lib = obj_lib_name rel in
+        match
+          try Some (Cmt_format.read_cmt (project_root // artifact)) with
+          | _ -> None
+        with
+        | None ->
+            gaps :=
+              { Observation.gap_code= "GAP-ARTIFACT-READ"
+              ; gap_path= rel
+              ; gap_detail= "artifact could not be read" }
+              :: !gaps ;
+            None
+        | Some cmt -> Some (lib, cmt.Cmt_format.cmt_modname, artifact, cmt) )
+      artifacts
+  in
+  (* deduplicate units: byte and native artifacts carry the same facts;
+     byte artifacts sort first and win *)
+  let units_tbl : (string, string) Hashtbl.t = Hashtbl.create 64 in
+  List.iter
+    (fun (_lib, modname, artifact, _cmt) ->
+      match Hashtbl.find_opt units_tbl modname with
+      | Some prev ->
+          if Filename.check_suffix prev "/byte/"
+          then ()
+          else if Filename.check_suffix artifact "/byte/"
+          then Hashtbl.replace units_tbl modname artifact
+      | None -> Hashtbl.add units_tbl modname artifact )
+    read_infos ;
+  let units = ref [] in
+  let calls = ref [] in
+  let vrefs = ref [] in
+  let trefs = ref [] in
+  let compiler_series = ref "unknown" in
+  List.iter
+    (fun (lib, modname, artifact, cmt) ->
+      let source_path =
+        match cmt.Cmt_format.cmt_sourcefile with
+        | Some f -> f
+        | None -> ""
+      in
+      if
+        source_path = ""
+        || Filename.check_suffix source_path ".ml-gen"
+        || not (in_scope program_roots source_path)
+      then ()
+      else if
+        Hashtbl.find_opt units_tbl modname
+        |> Option.map (fun a -> not (String.equal a artifact))
+        |> Option.value ~default:false
+      then ()
+      else if not (Sys.file_exists (project_root // source_path))
+      then ()
+      else
+        let series = compiler_series_of_args cmt.Cmt_format.cmt_args in
+        if !compiler_series = "unknown" then compiler_series := series ;
+        if series <> Version.supported_compiler_series
+        then
+          gaps :=
+            { Observation.gap_code= "GAP-UNSUPPORTED-COMPILER"
+            ; gap_path= source_path
+            ; gap_detail=
+                Printf.sprintf
+                  "artifact built with compiler series %s, adapter supports %s"
+                  series
+                  Version.supported_compiler_series }
+            :: !gaps
+        else
+          let file_digest = md5_hex (project_root // source_path) in
+          let cmt_digest =
+            match cmt.Cmt_format.cmt_source_digest with
+            | Some d -> Digest.to_hex d
+            | None -> ""
+          in
+          let fresh =
+            file_digest <> "" && String.equal file_digest cmt_digest
+          in
+          let unit_canonical =
+            Canonical.of_unit_name ~library:lib ~unit_name:modname
+          in
+          if not fresh
+          then (
+            let detail =
+              if file_digest = ""
+              then "source file missing"
+              else "source changed after the artifact was built"
+            in
+            gaps :=
+              { Observation.gap_code= "GAP-STALE-ARTIFACT"
+              ; gap_path= source_path
+              ; gap_detail= detail }
+              :: !gaps ;
+            units :=
+              { Observation.unit_id= modname
+              ; canonical= unit_canonical
+              ; source_path
+              ; source_digest= cmt_digest
+              ; artifact_path= artifact
+              ; fresh= false }
+              :: !units )
+          else
+            let facts =
+              {calls= []; vrefs= []; trefs= []; symbols= []; unsupported= []}
+            in
+            walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+            gaps :=
+              List.map
+                (fun site ->
+                  { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
+                  ; gap_path= site.Observation.site_path
+                  ; gap_detail=
+                      Printf.sprintf
+                        "construct at line %d cannot be followed by this \
+                         adapter"
+                        site.Observation.line } )
+                (List.sort_uniq compare facts.unsupported)
+              @ !gaps ;
+            calls := List.rev_append facts.calls !calls ;
+            vrefs := List.rev_append facts.vrefs !vrefs ;
+            trefs := List.rev_append facts.trefs !trefs ;
+            units :=
+              { Observation.unit_id= modname
+              ; canonical= unit_canonical
+              ; source_path
+              ; source_digest= cmt_digest
+              ; artifact_path= artifact
+              ; fresh= true }
+              :: !units )
+    read_infos ;
+  (* sources without artifacts *)
+  List.iter
+    (fun source ->
+      if
+        not
+          (List.exists
+             (fun (u : Observation.unit_info) ->
+               String.equal u.Observation.source_path source )
+             !units )
+      then
+        gaps :=
+          { Observation.gap_code= "GAP-UNOBSERVED-SOURCE"
+          ; gap_path= source
+          ; gap_detail= "no build artifact found for this source file" }
+          :: !gaps )
+    sources ;
+  let source_files =
+    List.map (fun s -> (s, sha256_hex (read_file (project_root // s)))) sources
+  in
+  let snapshot_digest =
+    sha256_hex
+      (String.concat "\n" (List.map (fun (p, d) -> p ^ ":" ^ d) source_files))
+  in
+  let site_key s =
+    (s.Observation.site_path, s.Observation.line, s.Observation.col)
+  in
+  let by_unit (a : Observation.call) (b : Observation.call) =
+    compare
+      ( a.Observation.call_unit
+      , a.Observation.caller
+      , a.Observation.callee
+      , site_key a.Observation.site )
+      ( b.Observation.call_unit
+      , b.Observation.caller
+      , b.Observation.callee
+      , site_key b.Observation.site )
+  in
+  let by_ref a b =
+    compare
+      ( a.Observation.ref_unit
+      , a.Observation.ref_caller
+      , a.Observation.ref_target
+      , site_key a.Observation.ref_site )
+      ( b.Observation.ref_unit
+      , b.Observation.ref_caller
+      , b.Observation.ref_target
+      , site_key b.Observation.ref_site )
+  in
+  let by_tref a b =
+    compare
+      ( a.Observation.tref_unit
+      , a.tref_caller
+      , a.tref_target
+      , site_key a.tref_site )
+      ( b.Observation.tref_unit
+      , b.tref_caller
+      , b.tref_target
+      , site_key b.tref_site )
+  in
+  let by_gap a b =
+    compare
+      (a.Observation.gap_code, a.Observation.gap_path, a.Observation.gap_detail)
+      (b.Observation.gap_code, b.Observation.gap_path, b.Observation.gap_detail)
+  in
+  { Observation.project_root
+  ; program_roots
+  ; compiler_series= !compiler_series
+  ; units=
+      List.sort
+        (fun a b -> compare a.Observation.canonical b.Observation.canonical)
+        !units
+  ; calls= List.sort by_unit !calls
+  ; value_refs= List.sort by_ref !vrefs
+  ; type_refs= List.sort by_tref !trefs
+  ; source_files
+  ; snapshot_digest
+  ; gaps= List.sort_uniq by_gap !gaps }

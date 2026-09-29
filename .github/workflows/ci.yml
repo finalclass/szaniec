@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.4.1
+          opam-pin: false
+      - name: Install dune
+        run: opam install dune -y
+      - name: Resolve package lock
+        run: opam exec -- dune pkg lock
+      - name: Formatter check
+        run: opam exec -- dune exec ocamlformat -- --check $(git ls-files '*.ml')
+      - name: Build
+        run: opam exec -- dune build @all
+      - name: Acceptance suite
+        run: opam exec -- test/acceptance/run.sh
