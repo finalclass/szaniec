@@ -9,8 +9,6 @@ let exclusions =
   [ ".mlx view files (MLX preprocessor not in this profile)"
   ; ".mli interfaces (implementation facts only)"
   ; "dune wrapper units (.ml-gen)"
-  ; "queued-command, publish/subscribe and use-case rules (messaging recorded \
-     as evidence only)"
   ; "resource access beyond framework-known APIs (recorded as external calls)"
   ]
 
@@ -21,8 +19,40 @@ let registration_apis =
 
 let route_apis = ["Well.get"; "Well.post"; "Well.live"]
 
-let messaging_apis =
-  ["Well.subscribe_keyed"; "Well.publish_keyed"; "Well.request"]
+(* Verified Well surface (fixture revision
+   5c573753367f10d7226f5eaedf1adbeacab2c09d). Nothing else is a queue or
+   an event. *)
+let publish_apis =
+  ["Well.publish"; "Well.publish_keyed"; "Well.MessageBus.publish"]
+
+let subscribe_apis =
+  [ "Well.subscribe"
+  ; "Well.subscribe_keyed"
+  ; "Well.MessageBus.subscribe"
+  ; "Well.MessageBus.once" ]
+
+let request_apis = ["Well.request"]
+
+let messaging_apis = publish_apis @ subscribe_apis @ request_apis
+
+let topic_key (args : Observation.call_arg list) ~(labeled : string) :
+    string option =
+  let matching =
+    List.filter
+      (fun (a : Observation.call_arg) ->
+        if labeled = ""
+        then a.Observation.arg_label = ""
+        else String.equal a.Observation.arg_label labeled )
+      args
+  in
+  match matching with
+  | [] -> None
+  | a :: _ ->
+      if a.Observation.arg_target <> ""
+      then Some ("path:" ^ a.Observation.arg_target)
+      else if a.Observation.arg_literal <> ""
+      then Some ("lit:" ^ a.Observation.arg_literal)
+      else None
 
 (* Resource APIs are framework knowledge, not project policy. *)
 let framework_resources : (string * string) list =
@@ -70,6 +100,55 @@ let family_segment_matches (segs : string list) (svc : string) : bool =
         seg )
     segs
 
+let dir_segments (source_path : string) : string list =
+  match List.rev (String.split_on_char '/' source_path) with
+  | [] -> []
+  | _file :: rev_dirs -> List.rev rev_dirs
+
+let module_ident_of_dir (seg : string) : string = String.capitalize_ascii seg
+
+let services_matching_segment
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (seg : string) =
+  List.filter
+    (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+      Szaniec_architecture_access.Cyrograf.segment_matches_service
+        ~service:s.Szaniec_architecture_access.Cyrograf.svc_name
+        seg )
+    cy.Szaniec_architecture_access.Cyrograf.services
+
+(* Nearest directory to the file. [`Conflict] when that directory names
+   more than one service. A `client` directory that names no service is
+   an implicit client family. *)
+let source_layout_family
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (source_path : string) =
+  let ends_client (seg : string) : bool =
+    let l = String.lowercase_ascii seg in
+    let n = String.length l in
+    n >= 6 && String.sub l (n - 6) 6 = "client"
+  in
+  let rec walk = function
+    | [] -> None
+    | seg :: rest -> (
+      match services_matching_segment cy seg with
+      | _ :: _ :: _ -> Some (`Conflict seg)
+      | [s] -> Some (`Family s.Szaniec_architecture_access.Cyrograf.svc_name)
+      | [] ->
+          if ends_client seg
+          then Some (`Family (module_ident_of_dir seg))
+          else walk rest )
+  in
+  walk (List.rev (dir_segments source_path))
+
+let impl_suffix_matches (segs : string list) (svc : string) : bool =
+  List.exists
+    (fun seg ->
+      String.equal
+        (Szaniec_architecture_access.Cyrograf.normalize_stem seg)
+        (Szaniec_architecture_access.Cyrograf.normalize_stem svc ^ "impl") )
+    segs
+
 (* Implicit client boundary: any segment ending with "client". *)
 let client_segment (segs : string list) : string option =
   List.find_opt
@@ -78,6 +157,30 @@ let client_segment (segs : string list) : string option =
       let n = String.length l in
       n >= 6 && String.sub l (n - 6) 6 = "client" )
     segs
+
+let canonical_family
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (segs : string list) : string option =
+  match
+    List.find_opt
+      (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+        family_segment_matches
+          segs
+          s.Szaniec_architecture_access.Cyrograf.svc_name )
+      cy.Szaniec_architecture_access.Cyrograf.services
+  with
+  | Some s -> Some s.Szaniec_architecture_access.Cyrograf.svc_name
+  | None -> (
+    match
+      List.find_opt
+        (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+          impl_suffix_matches
+            segs
+            s.Szaniec_architecture_access.Cyrograf.svc_name )
+        cy.Szaniec_architecture_access.Cyrograf.services
+    with
+    | Some s -> Some s.Szaniec_architecture_access.Cyrograf.svc_name
+    | None -> client_segment segs )
 
 let classify_ownership
     (cy : Szaniec_architecture_access.Cyrograf.t)
@@ -168,81 +271,93 @@ let classify_ownership
           | None -> () )
       | _ -> () )
     obs.Observation.value_refs ;
+  let push_name (acc : string list) (name : string option) : string list =
+    match name with
+    | None -> acc
+    | Some n -> if List.mem n acc then acc else n :: acc
+  in
+  let owner_of_family canonical segs source_name family =
+    let on_contract_surface =
+      family_segment_matches segs family
+      && (not (app_prefixed canonical))
+      &&
+      match source_name with
+      | Some n -> not (String.equal n family)
+      | None -> true
+    in
+    let cls =
+      if on_contract_surface
+      then Interpretation.Contract_of family
+      else Interpretation.Implementation_of family
+    in
+    { Interpretation.owner_module= canonical
+    ; owner_class= cls
+    ; owner_service= family }
+  in
   List.iter
     (fun (u : Observation.unit_info) ->
       let canonical = u.Observation.canonical in
       let segs = Canonical.split_dots canonical in
+      let is_framework =
+        List.exists
+          (fun seg ->
+            String.equal (String.lowercase_ascii seg) "well"
+            || String.equal (String.lowercase_ascii seg) "well_stub" )
+          segs
+      in
       let owner =
-        match
-          List.find_opt
-            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-              family_segment_matches
-                segs
-                s.Szaniec_architecture_access.Cyrograf.svc_name )
-            cy.Szaniec_architecture_access.Cyrograf.services
-        with
-        | Some s ->
-            let cls =
-              if app_prefixed canonical
-              then
-                Interpretation.Implementation_of
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-              else
-                Interpretation.Contract_of
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-            in
-            { Interpretation.owner_module= canonical
-            ; owner_class= cls
-            ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name }
-        | None -> (
-          match Hashtbl.find_opt impl_of canonical with
-          | Some svc_name ->
+        if is_framework
+        then
+          { Interpretation.owner_module= canonical
+          ; owner_class= Interpretation.ExternalLibrary "well"
+          ; owner_service= "" }
+        else
+          let source = source_layout_family cy u.Observation.source_path in
+          match source with
+          | Some (`Conflict seg) ->
+              gaps :=
+                { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                ; gap_path= u.Observation.source_path
+                ; gap_detail=
+                    Printf.sprintf
+                      "directory %s matches more than one service family"
+                      seg }
+                :: !gaps ;
               { Interpretation.owner_module= canonical
-              ; owner_class= Interpretation.Implementation_of svc_name
-              ; owner_service= svc_name }
-          | None -> (
-            match
-              List.find_opt
-                (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-                  List.exists
-                    (fun seg ->
-                      String.equal
-                        (Szaniec_architecture_access.Cyrograf.normalize_stem
-                           seg )
-                        ( Szaniec_architecture_access.Cyrograf.normalize_stem
-                            s.Szaniec_architecture_access.Cyrograf.svc_name
-                        ^ "impl" ) )
-                    segs )
-                cy.Szaniec_architecture_access.Cyrograf.services
-            with
-            | Some s ->
-                { Interpretation.owner_module= canonical
-                ; owner_class=
-                    Interpretation.Implementation_of
-                      s.Szaniec_architecture_access.Cyrograf.svc_name
-                ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name
-                }
-            | None -> (
-              match client_segment segs with
-              | Some seg ->
+              ; owner_class= Interpretation.Unclassified
+              ; owner_service= "" }
+          | _ -> (
+              let source_name =
+                match source with
+                | Some (`Family n) -> Some n
+                | _ -> None
+              in
+              let names =
+                [] |> fun acc ->
+                push_name acc source_name |> fun acc ->
+                push_name acc (canonical_family cy segs) |> fun acc ->
+                push_name acc (Hashtbl.find_opt impl_of canonical)
+                |> List.sort_uniq compare
+              in
+              match names with
+              | [] ->
                   { Interpretation.owner_module= canonical
-                  ; owner_class= Interpretation.Implementation_of seg
-                  ; owner_service= seg }
-              | None ->
-                  if
-                    List.exists
-                      (fun seg ->
-                        String.equal (String.lowercase_ascii seg) "well"
-                        || String.equal (String.lowercase_ascii seg) "well_stub" )
-                      segs
-                  then
-                    { Interpretation.owner_module= canonical
-                    ; owner_class= Interpretation.ExternalLibrary "well"
-                    ; owner_service= "" }
-                  else
-                    { Interpretation.owner_module= canonical
-                    ; owner_class= Interpretation.Unclassified
-                    ; owner_service= "" } ) ) )
+                  ; owner_class= Interpretation.Unclassified
+                  ; owner_service= "" }
+              | [family] -> owner_of_family canonical segs source_name family
+              | many ->
+                  gaps :=
+                    { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                    ; gap_path= u.Observation.source_path
+                    ; gap_detail=
+                        Printf.sprintf
+                          "unit %s matches families %s"
+                          canonical
+                          (String.concat " and " many) }
+                    :: !gaps ;
+                  { Interpretation.owner_module= canonical
+                  ; owner_class= Interpretation.Unclassified
+                  ; owner_service= "" } )
       in
       Hashtbl.replace map canonical owner )
     obs.Observation.units ;
@@ -267,12 +382,11 @@ let classify_ownership
               ; owner_service= "" }
         | None -> () )
     obs.Observation.calls ;
-  (* helper refinement: a unit without ownership consumed by exactly one
-     boundary belongs to that boundary (private helper); consumed by two
-     or more it stays unclassified — sharing without approval *)
-  let consumer_boundaries : (string, string list) Hashtbl.t =
-    Hashtbl.create 32
-  in
+  (* An unclassified unit reached only by its own calls is a helper of
+     itself. The complexity inventory reports that class. One foreign
+     caller does not adopt the unit into the caller's family. *)
+  let self_helpers : (string, unit) Hashtbl.t = Hashtbl.create 16 in
+  let foreign_callers : (string, unit) Hashtbl.t = Hashtbl.create 16 in
   List.iter
     (fun (c : Observation.call) ->
       if String.length c.Observation.callee > 0
@@ -287,52 +401,26 @@ let classify_ownership
         with
         | Some target_unit, Some caller -> (
           match Hashtbl.find_opt map target_unit with
-          | Some {owner_class= Interpretation.Unclassified; _} -> (
-              let consumer =
-                if String.equal caller.Interpretation.owner_service ""
-                then caller.Interpretation.owner_module
-                else caller.Interpretation.owner_service
-              in
-              match Hashtbl.find_opt consumer_boundaries target_unit with
-              | Some l ->
-                  if not (List.mem consumer l)
-                  then
-                    Hashtbl.replace
-                      consumer_boundaries
-                      target_unit
-                      (consumer :: l)
-              | None ->
-                  Hashtbl.replace consumer_boundaries target_unit [consumer] )
-          | Some _ -> () (* owned already *)
-          | None -> () )
+          | Some {owner_class= Interpretation.Unclassified; _} ->
+              if String.equal caller.Interpretation.owner_module target_unit
+              then Hashtbl.replace self_helpers target_unit ()
+              else Hashtbl.replace foreign_callers target_unit ()
+          | Some _
+           |None ->
+              () )
         | _ -> () )
     obs.Observation.calls ;
   Hashtbl.iter
-    (fun target consumers ->
-      match consumers with
-      | [single] ->
-          let svc =
-            List.find_opt
-              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-                String.equal
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-                  single )
-              cy.Szaniec_architecture_access.Cyrograf.services
-          in
-          let owner_service, owner_class =
-            match svc with
-            | Some s ->
-                ( s.Szaniec_architecture_access.Cyrograf.svc_name
-                , Interpretation.Helper_of
-                    s.Szaniec_architecture_access.Cyrograf.svc_name )
-            | None -> (single, Interpretation.Helper_of single)
-          in
-          Hashtbl.replace
-            map
-            target
-            {Interpretation.owner_module= target; owner_class; owner_service}
-      | _ -> () )
-    consumer_boundaries ;
+    (fun target () ->
+      if not (Hashtbl.mem foreign_callers target)
+      then
+        Hashtbl.replace
+          map
+          target
+          { Interpretation.owner_module= target
+          ; owner_class= Interpretation.Helper_of target
+          ; owner_service= target } )
+    self_helpers ;
   (map, List.sort_uniq compare !gaps, impl_of)
 
 type node =
@@ -652,25 +740,22 @@ let interpret
             | None -> (
               match target_of_callee callee with
               | None ->
-                  (* not observed in the build tree: external package *)
-                  let kind =
-                    if
-                      List.exists
-                        (fun a -> String.equal a callee)
-                        messaging_apis
-                    then Interpretation.MessagingEvidence
-                    else Interpretation.ExternalCall
-                  in
-                  record_interaction
-                    kind
-                    (from_name c.Observation.call_unit)
-                    ""
-                    ""
-                    callee
-                    ""
-                    callee
-                    (path @ [callee])
-                    site
+                  (* Messaging APIs are classified in a later pass so a
+                     request is never also a publication, and a
+                     publication is never a service request. *)
+                  if List.exists (fun a -> String.equal a callee) messaging_apis
+                  then ()
+                  else
+                    record_interaction
+                      Interpretation.ExternalCall
+                      (from_name c.Observation.call_unit)
+                      ""
+                      ""
+                      callee
+                      ""
+                      callee
+                      (path @ [callee])
+                      site
               | Some target -> (
                   let to_owner = owner_of_path target.n_unit in
                   let self_call =
@@ -725,11 +810,25 @@ let interpret
                         callee
                         (path @ [callee])
                         site
+                  | Interpretation.Unclassified
+                    when from_owner.Interpretation.owner_service <> ""
+                         && not
+                              (String.equal
+                                 from_owner.Interpretation.owner_module
+                                 target.n_unit ) ->
+                      record_interaction
+                        Interpretation.ImplementationAccess
+                        (from_name c.Observation.call_unit)
+                        ""
+                        ""
+                        target.n_unit
+                        ""
+                        callee
+                        (path @ [callee])
+                        site
                   | Interpretation.CompositionRoot
                    |Interpretation.Unclassified
                    |Interpretation.ExternalLibrary _ ->
-                      (* no rule crosses into these; unclassified units
-                             report their own interactions as origins *)
                       () ) ) )
       in
       List.iter handle (out_edges_of n)
@@ -853,27 +952,192 @@ let interpret
                   v.Observation.ref_target
                   [v.Observation.ref_target]
                   v.Observation.ref_site
+            | Interpretation.Unclassified
+              when caller_owner.Interpretation.owner_service <> ""
+                   && not
+                        (String.equal
+                           caller_owner.Interpretation.owner_module
+                           target_unit ) ->
+                record_interaction
+                  Interpretation.ImplementationAccess
+                  (from_name v.Observation.ref_unit)
+                  ""
+                  ""
+                  target_unit
+                  ""
+                  v.Observation.ref_target
+                  [v.Observation.ref_target]
+                  v.Observation.ref_site
             | _ -> () )
       | None -> () )
     obs.Observation.value_refs ;
-  let sort_interactions
-      (a : Interpretation.interaction)
-      (b : Interpretation.interaction) =
-    compare
-      ( Interpretation.kind_name a.kind
-      , a.from_owner
-      , a.to_service
-      , a.to_method
-      , a.target_module
-      , a.api
-      , String.concat ">" a.evidence_path )
-      ( Interpretation.kind_name b.kind
-      , b.from_owner
-      , b.to_service
-      , b.to_method
-      , b.target_module
-      , b.api
-      , String.concat ">" b.evidence_path )
+  (* Queue and event calls. Subscriptions are collected first so a
+     request can name the services that handle its topic. *)
+  let messaging_calls =
+    List.filter
+      (fun (c : Observation.call) ->
+        c.Observation.resolution = Observation.Resolved
+        && List.exists
+             (fun a -> String.equal a c.Observation.callee)
+             messaging_apis
+        &&
+        match unit_owner_class c.Observation.call_unit with
+        | Interpretation.Contract_of _
+         |Interpretation.ExternalLibrary _ ->
+            false
+        | _ -> true )
+      obs.Observation.calls
+  in
+  let subscribers : (string * string) list ref = ref [] in
+  List.iter
+    (fun (c : Observation.call) ->
+      if
+        List.exists
+          (fun a -> String.equal a c.Observation.callee)
+          subscribe_apis
+      then
+        match topic_key c.Observation.args ~labeled:"" with
+        | Some topic ->
+            let owner = from_name c.Observation.call_unit in
+            if
+              not
+                (List.exists
+                   (fun (t, o) -> t = topic && o = owner)
+                   !subscribers )
+            then subscribers := (topic, owner) :: !subscribers
+        | None -> () )
+    messaging_calls ;
+  List.iter
+    (fun (c : Observation.call) ->
+      let from_owner = from_name c.Observation.call_unit in
+      let site = c.Observation.site in
+      let evidence =
+        [ c.Observation.call_unit ^ "." ^ c.Observation.caller
+        ; c.Observation.callee ]
+      in
+      let publish =
+        List.exists (fun a -> String.equal a c.Observation.callee) publish_apis
+      in
+      let subscribe =
+        List.exists
+          (fun a -> String.equal a c.Observation.callee)
+          subscribe_apis
+      in
+      if publish
+      then
+        let topic =
+          Option.value (topic_key c.Observation.args ~labeled:"") ~default:""
+        in
+        record_interaction
+          Interpretation.Publication
+          from_owner
+          ""
+          ""
+          c.Observation.callee
+          ""
+          topic
+          evidence
+          site
+      else if subscribe
+      then
+        let topic =
+          Option.value (topic_key c.Observation.args ~labeled:"") ~default:""
+        in
+        record_interaction
+          Interpretation.Subscription
+          from_owner
+          ""
+          ""
+          c.Observation.callee
+          ""
+          topic
+          evidence
+          site
+      else if
+        List.exists (fun a -> String.equal a c.Observation.callee) request_apis
+      then
+        let unresolved detail =
+          gaps :=
+            { gap_code= "GAP-UNRESOLVED-TARGET"
+            ; gap_path= site.Observation.site_path
+            ; gap_detail= detail }
+            :: !gaps ;
+          record_interaction
+            Interpretation.QueuedCommand
+            from_owner
+            ""
+            ""
+            c.Observation.callee
+            ""
+            ""
+            evidence
+            site
+        in
+        match topic_key c.Observation.args ~labeled:"cmd" with
+        | None ->
+            unresolved
+              (Printf.sprintf
+                 "queued command topic cannot be resolved in %s.%s at %s:%d"
+                 c.Observation.call_unit
+                 c.Observation.caller
+                 site.Observation.site_path
+                 site.Observation.line )
+        | Some topic -> (
+          match
+            List.filter (fun (t, _) -> String.equal t topic) !subscribers
+            |> List.map snd
+            |> List.sort_uniq compare
+          with
+          | [] ->
+              unresolved
+                (Printf.sprintf
+                   "queued command topic %s has no subscriber (%s.%s at %s:%d)"
+                   topic
+                   c.Observation.call_unit
+                   c.Observation.caller
+                   site.Observation.site_path
+                   site.Observation.line )
+          | targets ->
+              List.iter
+                (fun target ->
+                  record_interaction
+                    Interpretation.QueuedCommand
+                    from_owner
+                    target
+                    ""
+                    c.Observation.callee
+                    ""
+                    topic
+                    evidence
+                    site )
+                targets ) )
+    messaging_calls ;
+  let interaction_key (i : Interpretation.interaction) =
+    ( Interpretation.kind_name i.kind
+    , i.from_owner
+    , i.to_service
+    , i.to_method
+    , i.target_module
+    , i.api
+    , String.concat ">" i.evidence_path )
+  in
+  let sort_interactions a b = compare (interaction_key a) (interaction_key b) in
+  (* Same request reached from one origin is one interaction, but every
+     call site is kept. Dropping a site hides that call from path rules
+     when another copy of the call sits in a function value. *)
+  let merge_sites
+      (acc : Interpretation.interaction list)
+      (i : Interpretation.interaction) =
+    match
+      List.find_opt (fun prev -> interaction_key prev = interaction_key i) acc
+    with
+    | None -> i :: acc
+    | Some prev ->
+        let sites = List.sort_uniq compare (prev.sites @ i.sites) in
+        {prev with Interpretation.sites}
+        :: List.filter
+             (fun prev -> interaction_key prev <> interaction_key i)
+             acc
   in
   let ownerships =
     Hashtbl.fold (fun _ o acc -> o :: acc) ownership_map []
@@ -893,7 +1157,10 @@ let interpret
             , b.Interpretation.binding_kind ) )
         bindings
   ; interactions=
-      List.sort_uniq sort_interactions !interactions
+      List.fold_left merge_sites [] !interactions
+      |> List.sort sort_interactions
       |> List.map (fun i ->
-          {i with Interpretation.sites= List.sort compare i.Interpretation.sites} )
+          { i with
+            Interpretation.sites= List.sort_uniq compare i.Interpretation.sites
+          } )
   ; gaps= List.sort_uniq compare !gaps }

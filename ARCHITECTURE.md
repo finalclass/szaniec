@@ -57,17 +57,17 @@ How-to-access -> Where
 
 | Component | Responsibility | Conceptual operation |
 |---|---|---|
-| CheckClient | Accept a request, render text/JSON, map the result to an exit status | Run the check or the suggestion review |
+| CheckClient | Accept a request, render text/JSON, map the result to an exit status | Run the check, the complexity inventory, or the suggestion review |
 | InspectionManager | Coordinate policy resolution, observation, interpretation and evaluation | Check |
 | SuggestionManager | Select local candidates, apply judgment templates, compose the suggestion report | Suggest |
-| ProgramAccess | Supply program facts and the function catalog while hiding compiler, build and artifact access | Observe, Catalog |
+| ProgramAccess | Supply program facts, the complexity inventory, and the suggestion catalog while hiding compiler, build and artifact access | Observe, Catalog |
 | ArchitectureAccess | Supply a consistent policy with its approved identity, and service ownership | Resolve |
 | ModelAccess | Submit bounded typed questions and return typed answers | Judge |
 | InterpretationEngine | Bind code to architectural boundaries and interpret interactions | Interpret |
 | ConformanceEngine | Evaluate the model and policy, preserving evidence and analysis gaps | Evaluate |
 
-CheckClient calls InspectionManager for a check and SuggestionManager for
-suggestions. InspectionManager calls ProgramAccess, ArchitectureAccess, and both
+CheckClient calls InspectionManager for a check and for the complexity
+inventory, and SuggestionManager for suggestions. InspectionManager calls ProgramAccess, ArchitectureAccess, and both
 Engines. SuggestionManager calls ProgramAccess, ArchitectureAccess, and
 ModelAccess. It does not call either Engine. InspectionManager does not call
 ModelAccess or SuggestionManager. The Engines do not call each other. Access
@@ -131,6 +131,13 @@ declared methods are its public surface. Roles are inferred from the
 service name suffix (`manager`, `client`, `engine`, `access`; any other
 name is a Utility) — see
 [the decision record](docs/decisions/donts-based-rules.md).
+
+A private helper belongs to a service family only when its source path
+lies in that family's directory tree (nested directories and nested
+modules included) or compiler evidence binds the unit to the service.
+One observed caller does not move an outside module into the family.
+A name such as `Shared`, `Common` or `Utils` does not create a boundary
+and does not approve infrastructure.
 
 New in-scope code without ownership produces a diagnostic.
 Distinguish:
@@ -214,7 +221,8 @@ Implementation-level contracts resolved under this architecture:
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.1.0`, don'ts-based.
+- [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cc/1`, local function inventory.
 - [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.

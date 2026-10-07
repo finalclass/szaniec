@@ -4,12 +4,19 @@
  (name runner)
  (libraries unix))
 
+(executable
+ (name complexity_runner)
+ (libraries unix yojson))
+
 (rule
  (alias runtest)
  (package szaniec)
  (deps
   (file %{workspace_root}/test/acceptance/run.sh)
-  (glob_files expected/*.txt))
+  (glob_files expected/*.txt)
+  %{bin:szaniec}
+  runner.exe
+  complexity_runner.exe)
  (action
   (run sh "%{workspace_root}/test/acceptance/run.sh")))
 

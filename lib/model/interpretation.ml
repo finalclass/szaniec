@@ -6,7 +6,9 @@ type kind =
   | ResourceAccess
   | Registration
   | ExternalCall
-  | MessagingEvidence
+  | QueuedCommand
+  | Publication
+  | Subscription
 
 type ownership_class =
   | Contract_of of string
@@ -44,7 +46,9 @@ let kind_name = function
   | ResourceAccess -> "resource-access"
   | Registration -> "registration"
   | ExternalCall -> "external-call"
-  | MessagingEvidence -> "messaging"
+  | QueuedCommand -> "queued-command"
+  | Publication -> "publication"
+  | Subscription -> "subscription"
 
 let class_name = function
   | Contract_of s -> "contract of " ^ s

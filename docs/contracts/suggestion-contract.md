@@ -77,9 +77,10 @@ Remote calls are not added to the OCaml adapter.
 ## Function catalog
 
 ProgramAccess returns one catalog for the fresh in-scope
-implementations. The catalog is not the cyclomatic-complexity inventory:
-this command does not report complexity numbers, and a later inventory
-report should replace this extractor rather than grow a second one.
+implementations. `szaniec complexity` is a separate inventory of
+cyclomatic complexity and does not store bodies, parameters, or
+comments. This command does not report complexity numbers. The
+suggestion catalog reads source text for the judgments below.
 
 Each definition has:
 

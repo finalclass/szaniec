@@ -5,7 +5,7 @@ module Impl : Task_access.IMPL = struct
 
   let list _ctx (req : Task_access.ListReq.t) =
     Well.Db.with_conn (Lazy.force pool) @@ fun _db ->
-    let titles = Json_util.normalize "a" :: ["b"] in
+    let titles = Json_util.normalize "a" :: Rows.titles () in
     let tasks =
       if req.limit > 0
       then

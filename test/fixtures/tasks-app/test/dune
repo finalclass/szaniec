@@ -1,7 +1,5 @@
-(include_subdirs no)
-
 (library
- (name common)
+ (name probes)
  (wrapped false)
  (flags
   (:standard -bin-annot)))

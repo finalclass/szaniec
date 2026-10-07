@@ -9,6 +9,8 @@ Format identifiers: request is CLI-only; machine-readable report is
 szaniec approve --policy <path> [--approval <path>]
 szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
                 [--rebuild] [--json] [--out <path>] [--no-callgraph]
+szaniec complexity --policy <path> [--approval <path>] [--project-root <dir>]
+                   [--rebuild] [--json] [--sort location|complexity]
 ```
 
 - `approve` writes the approval file recording the policy name and
@@ -24,12 +26,20 @@ szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
   Without it, stale or missing artifacts are reported as gaps, never used
   as current evidence.
 - `--json` emits the machine-readable report instead of the text report.
-- Exit status: `0` no violations and no gaps; `1` violations with
-  complete required analysis; `2` incomplete analysis, execution failure,
-  or unapproved policy — including when violations were also found.
+- Exit status for `check`: `0` no violations and no gaps; `1` violations
+  with complete required analysis; `2` incomplete analysis, execution
+  failure, or unapproved policy — including when violations were also found.
+- `complexity` inventories every syntactic function and reports
+  [szaniec-cc/1](complexity-metric.md). It does not write `szaniec.json`
+  and it does not judge thresholds. `--sort location` (the default) lists
+  definitions in source order; `--sort complexity` lists them by
+  descending complexity with `id` as the tie-break. Exit status: `0` when
+  coverage is complete, `2` when a file or construct could not be
+  measured. Policy approval is recorded and does not by itself change
+  that status.
 - `szaniec suggestions` is specified separately in the
-  [suggestion contract](suggestion-contract.md). It does not change this
-  exit status and does not add findings to the check report.
+  [suggestion contract](suggestion-contract.md). It does not change the
+  check exit status and does not add findings to the check report.
 
 ## Profile
 
@@ -42,11 +52,14 @@ Declared exclusions of the profile (reported in the report, never gaps):
 - `.mlx` view files (MLX preprocessor not in profile),
 - `.mli` interfaces (implementation facts only),
 - dune wrapper units (`.ml-gen`),
-- queued-command, publish/subscribe and use-case rules (messaging APIs
-  are recorded as evidence only),
 - resource access beyond policy-declared `apiPrefixes` (e.g. direct
   `Sqlite3.*` calls) — recorded as external calls, not resource
   interactions.
+
+Queued commands, publications, subscriptions and Client use-case paths
+are in the profile. Their evidence requirements and gaps are the rule
+catalog and the interpretation contract. A publication is not reported
+as a request edge in `szaniec.json`.
 
 ## Report JSON
 
@@ -62,9 +75,9 @@ Declared exclusions of the profile (reported in the report, never gaps):
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.0.0",
-      "interpretation": "szaniec-well-adapter/2.0.0",
-      "rules": "szaniec-rules/2.0.0"
+      "programAccess": "szaniec-ocaml-adapter/1.2.0",
+      "interpretation": "szaniec-well-adapter/3.1.0",
+      "rules": "szaniec-rules/3.1.0"
     },
     "exclusions": ["...", "..."]
   },
