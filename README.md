@@ -82,6 +82,10 @@ followed only inside one service boundary.
 Services are discovered from `.cyrograf` contract files that declare
 `rpc` methods. The role of a service is the suffix of its name
 (`manager`, `client`, `engine`, `access`; any other name is a utility).
+A private helper belongs to a service only when its source path sits in
+that service's directory tree or compiler evidence binds the unit.
+One caller does not adopt an outside module. `approvedSharedModules`
+is an exception only while the policy digest matches the approval.
 
 Szaniec checks implementation conformance. It does not judge whether the
 approved architecture was correctly decomposed around volatility.

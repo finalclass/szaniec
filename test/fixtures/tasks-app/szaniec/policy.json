@@ -2,7 +2,7 @@
   "format": "szaniec-policy/2",
   "policyName": "tasks-app",
   "program": { "roots": ["lib"] },
-  "approvedSharedModules": [],
+  "approvedSharedModules": ["App.Clock"],
   "resources": [
     { "name": "database", "apiPrefixes": ["Well.Db.", "Sqlite3."] }
   ]

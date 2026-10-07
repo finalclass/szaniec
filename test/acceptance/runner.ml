@@ -74,11 +74,171 @@ let tasks_handler req =
           , {|Task_access_impl.Impl.list ctx req|} ) ]
   ; sc
       "shared-unapproved"
+      ~add_files:
+        [ ( "lib/kit/dune"
+          , {|(include_subdirs no)
+
+(library
+ (name kit)
+ (wrapped false)
+ (flags
+  (:standard -bin-annot)))
+|}
+          )
+        ; ( "lib/kit/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "lib/task_manager/dune"
+          , "(libraries contract well task_access_lib)"
+          , "(libraries contract well task_access_lib kit)" )
+        ; ( "lib/formatting_engine/dune"
+          , "(libraries contract well)"
+          , "(libraries contract well kit)" )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    let _h = Hash.sha req.title in
+    Task_access.create ~ctx ~title:req.title|}
+          )
+        ; ( "lib/formatting_engine/formatting_engine_impl.ml"
+          , {|  let render _ctx text = String.uppercase_ascii text|}
+          , {|  let render _ctx text = String.uppercase_ascii (Hash.sha text)|}
+          ) ]
+  ; sc
+      "shared-by-callback"
+      ~add_files:
+        [ ( "lib/util/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|  let _s = Shared.render_title "help" in|}
+          , {|  let _s = Shared.render_title "help" in
+  let _mapped = List.map Util.Hash.sha ["help"] in|}
+          )
+        ; ( "lib/report_client/page.ml"
+          , {|let show () = Clock.now ()|}
+          , {|let show () =
+  let _mapped = List.map Util.Hash.sha ["report"] in
+  Clock.now ()|}
+          ) ]
+  ; sc
+      "family-outside-layout"
+      ~add_files:[("lib/loose.ml", {|let ping () = 1
+|})]
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore (Loose.ping ()) ;|}
+          ) ]
+  ; sc
+      "family-foreign-alias"
       ~mutations:
         [ ( "lib/task_manager/task_manager_impl.ml"
+          , {|module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    (Task_manager.list ~ctx ~limit:req.limit).tasks|}
+          , {|module Priv = Task_access_impl
+
+let through ctx req = Priv.Impl.list ctx req
+
+module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    through ctx req|}
+          ) ]
+  ; sc
+      "type-only-no-sharing"
+      ~add_files:[("lib/shapes/shape.ml", {|type t = {n: int}
+|})]
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|  let _s = Shared.render_title "help" in|}
+          , {|  let _s = Shared.render_title "help" in
+  let _kind : Shapes.Shape.t = {n= 1} in|}
+          )
+        ; ( "lib/report_client/page.ml"
+          , {|let show () = Clock.now ()|}
+          , {|let show () =
+  let _kind : Shapes.Shape.t = {n= 2} in
+  Clock.now ()|}
+          ) ]
+  ; sc
+      "unapproved-whitelist"
+      ~reapprove:true
+      ~add_files:
+        [ ( "lib/kit/dune"
+          , {|(include_subdirs no)
+
+(library
+ (name kit)
+ (wrapped false)
+ (flags
+  (:standard -bin-annot)))
+|}
+          )
+        ; ( "lib/kit/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "szaniec/policy.json"
+          , {|  "approvedSharedModules": ["App.Clock"],|}
+          , {|  "approvedSharedModules": ["App.Clock", "Hash"],|} )
+        ; ( "lib/task_manager/dune"
+          , "(libraries contract well task_access_lib)"
+          , "(libraries contract well task_access_lib kit)" )
+        ; ( "lib/formatting_engine/dune"
+          , "(libraries contract well)"
+          , "(libraries contract well kit)" )
+        ; ( "lib/task_manager/task_manager_impl.ml"
           , {|    Task_access.create ~ctx ~title:req.title|}
-          , {|    let _h = Json_util.sha_hex req.title in
+          , {|    let _h = Hash.sha req.title in
     Task_access.create ~ctx ~title:req.title|}
+          )
+        ; ( "lib/formatting_engine/formatting_engine_impl.ml"
+          , {|  let render _ctx text = String.uppercase_ascii text|}
+          , {|  let render _ctx text = String.uppercase_ascii (Hash.sha text)|}
+          ) ]
+  ; sc
+      "ambiguous-family"
+      ~add_files:
+        [ ( "lib/task_manager/foreign_bind.ml"
+          , {|module I : Task_access.IMPL = struct
+  let list _ctx _req = []
+
+  let create _ctx title = {Task_access.Task.id= 0; title}
+end
+
+let spec = Task_access.make_spec (module I)
+|}
+          ) ]
+  ; sc
+      "unsupported-indirection"
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|let help_handler req =
+  ignore req ;
+  let _s = Shared.render_title "help" in
+  ignore (Clock.now ()) ;
+  ignore _s ;
+  0|}
+          , {|module type S = sig
+  val ping : unit -> int
+end
+
+let help_handler req =
+  ignore req ;
+  let _s = Shared.render_title "help" in
+  ignore (Clock.now ()) ;
+  let m = (module struct let ping () = 1 end : S) in
+  let module M = (val m : S) in
+  let _n = M.ping () in
+  ignore _s ;
+  ignore _n ;
+  0|}
           ) ]
     (* Manager -> Engine is allowed. A synchronous Manager -> Manager
        call is not; that case is manager-manager-sync. *)

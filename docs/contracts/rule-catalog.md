@@ -1,6 +1,6 @@
 # Contract: rule catalog
 
-Catalog version: `szaniec-rules/3.0.0`.
+Catalog version: `szaniec-rules/3.1.0`.
 
 Rules evaluate the interpretation model against the service roles and
 the policy. There is no permitted-calls list: conformance follows the
@@ -167,32 +167,45 @@ publisher to a subscriber.
 ## Project-policy rules
 
 ### `IMPL-ACCESS-CROSS-SERVICE`
-- Precondition: `implementation-access` interaction (call or value
-  reference into another service's implementation module outside
-  registration patterns).
+- Precondition: `implementation-access` interaction. The target is
+  another family's implementation, or an unclassified repository-local
+  module. Calls, resolved aliases, value references and callbacks all
+  count. A single consumer is enough. The target is not an approved
+  shared module of the approved policy, and the reference is not a
+  registration pattern.
+- Evidence: both owners (the caller's family and the target service or
+  module), source sites, and the helper or alias path.
 - Outcome: violation.
 
 ### `SHARED-UNAPPROVED`
-- Precondition: an in-scope unit is consumed by calls from more than one
-  boundary, is not a contract of any service, not declared in
-  `approvedSharedModules`, and not role-Unclassified-owned by a single
-  boundary.
-- Evidence: consumer list with call sites, module canonical path.
+- Precondition: an unclassified in-scope unit is reached by executable
+  dependencies from more than one family. Executable dependencies are
+  calls, resolved aliases, value references and callbacks. Type-only
+  references do not count. The unit is not a contract, not an external
+  library, and not an approved shared module of the approved policy.
+  A module owned by one family is that family's implementation; another
+  family's use of it is `IMPL-ACCESS-CROSS-SERVICE`, not this rule.
+- Evidence: the shared module, the distinct consumer families, the
+  source sites, and the reference paths.
 - Outcome: violation naming the module and all consumers.
+- An unread artifact is not an empty consumer set. Confirmed accesses
+  from units that were read stay in the report; the observation gap
+  keeps the result at exit 2.
 
 ### `RESOURCE-BOUNDARY`
-- Precondition: `resource-access` interaction whose performing unit is
-  not an Access-role service, not a Utility-role service, and not an
-  approved shared module.
+- Precondition: `resource-access` interaction whose performing boundary
+  is not an Access-role service, not a Utility-role service, and not an
+  approved shared module of the approved policy.
 - Evidence: resource name, API path, call site.
 - Outcome: violation. Framework library approval never grants resource
   access.
 
 ### `POLICY-UNCLASSIFIED`
 - Precondition: an in-scope, non-generated unit has no ownership class
-  and is not listed in `approvedSharedModules`. A unit whose artifact
-  was not read (stale, missing or unsupported) is not judged here:
-  missing evidence is not an unowned unit.
+  and is not an approved shared module of the approved policy. A unit
+  whose artifact was not read (stale, missing or unsupported) is not
+  judged here. A unit already reported as `GAP-AMBIGUOUS-OWNERSHIP` is
+  not judged here either: ambiguous evidence is not "no owner".
 - Outcome: violation. No silent exclusion of unowned code.
 
 ## Specification rules
@@ -227,7 +240,7 @@ publisher to a subscriber.
 | `GAP-ARTIFACT-READ` | artifact unreadable | exit 2 |
 | `GAP-UNRESOLVED-CALL` | dynamic callee in in-scope application code | exit 2 |
 | `GAP-UNSUPPORTED-CONSTRUCT` | construct the adapter cannot follow | exit 2 |
-| `GAP-AMBIGUOUS-OWNERSHIP` | declared module name matches several units | exit 2 |
+| `GAP-AMBIGUOUS-OWNERSHIP` | family evidence disagrees, or one directory name matches several services | exit 2 |
 | `GAP-POLICY-NOT-APPROVED` | policy content ≠ approved digest | exit 2 |
 | `GAP-PROFILE-UNSUPPORTED` | policy requests an unknown profile | exit 2 |
 | `GAP-AMBIGUOUS-PATH` | executable alternatives for a function cannot be built (width cap, mixed `try`/`with`, or recursive inlining) | exit 2 |

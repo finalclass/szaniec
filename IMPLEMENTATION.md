@@ -57,7 +57,8 @@ The initial profile must cover:
 - Cross-service implementation access and unapproved shared executable modules.
 - Explicit unresolved-call, unsupported-adapter and unclassified-code diagnostics.
 
-Queued-command, event and use-case rules are part of `szaniec-rules/3.0.0`.
+Queued-command, event and use-case rules and service-family ownership
+are part of `szaniec-rules/3.1.0`.
 The acceptance suite is the check that extraction and evaluation agree,
 including separate handlers, mutually exclusive branches, and a gap when
 a path cannot be built. Do not claim a wider messaging surface than the

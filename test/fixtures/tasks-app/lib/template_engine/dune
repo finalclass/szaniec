@@ -3,6 +3,6 @@
 (library
  (name template_engine_lib)
  (wrapped false)
- (libraries contract well common formatting_engine_lib)
+ (libraries contract well formatting_engine_lib)
  (flags
   (:standard -bin-annot)))

@@ -321,16 +321,24 @@ let canonicalize (c : ctx) (p : Path.t) : resolution =
       then
         if Hashtbl.mem c.defined root
         then
-          (* same-unit member; resolve a direct in-unit module alias *)
+          (* Structure-level [module Alias = Path] resolves to Path.
+             A nested alias recorded on a later segment resolves the same
+             way. Anything else stays a member of this compilation unit. *)
           let name = Ident.name root in
-          match rest with
-          | name2 :: more when Hashtbl.mem c.aliases name2 ->
-              let target = Hashtbl.find c.aliases name2 in
-              if more = []
-              then `Canonical target
-              else `Canonical (target ^ "." ^ String.concat "." more)
-          | _ ->
-              `Canonical (String.concat "." (c.unit_canonical :: name :: rest))
+          let aliased target more =
+            if more = []
+            then `Canonical target
+            else `Canonical (target ^ "." ^ String.concat "." more)
+          in
+          if Hashtbl.mem c.aliases name
+          then aliased (Hashtbl.find c.aliases name) rest
+          else
+            match rest with
+            | name2 :: more when Hashtbl.mem c.aliases name2 ->
+                aliased (Hashtbl.find c.aliases name2) more
+            | _ ->
+                `Canonical
+                  (String.concat "." (c.unit_canonical :: name :: rest))
         else `LocalVar
       else
         `Canonical
@@ -839,6 +847,10 @@ and walk_as_binding
            cases )
   | _ -> walk_expr c facts caller e
 
+and note_unsupported (c : ctx) (facts : facts) (loc : Location.t) =
+  facts.unsupported <-
+    site_of_loc ~project_root:c.project_root loc :: facts.unsupported
+
 and walk_module_expr
     (c : ctx)
     (facts : facts)
@@ -850,14 +862,19 @@ and walk_module_expr
     | `Canonical _ -> record_ref c facts caller p lid.loc
     | `LocalVar
      |`Dynamic ->
-        () )
+        note_unsupported c facts lid.loc )
   | Tmod_structure s -> walk_structure c facts caller s.str_items
   | Tmod_functor (_, body) -> walk_module_expr c facts caller body
   | Tmod_apply (f, a, _) ->
+      note_unsupported c facts m.mod_loc ;
       walk_module_expr c facts caller f ;
       walk_module_expr c facts caller a
-  | Tmod_apply_unit m -> walk_module_expr c facts caller m
-  | Tmod_unpack (e, _) -> ignore (walk_expr c facts caller e)
+  | Tmod_apply_unit m ->
+      note_unsupported c facts m.mod_loc ;
+      walk_module_expr c facts caller m
+  | Tmod_unpack (e, _) ->
+      note_unsupported c facts m.mod_loc ;
+      ignore (walk_expr c facts caller e)
   | Tmod_constraint (m, _, _, _) -> walk_module_expr c facts caller m
 
 and walk_structure
