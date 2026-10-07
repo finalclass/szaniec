@@ -1,0 +1,5 @@
+(library
+ (name probes)
+ (wrapped false)
+ (flags
+  (:standard -bin-annot)))

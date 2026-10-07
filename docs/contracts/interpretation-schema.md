@@ -1,14 +1,16 @@
 # Contract: interpretation (Well adapter)
 
-Format identifier (conceptual): `szaniec-interpretation/1`.
+Format identifier (conceptual): `szaniec-interpretation/2`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/2.1.0`
-for Well applications, plus the boundary binding.
+First delivery contains one framework adapter: `szaniec-well-adapter/3.1.0`
+for Well applications, plus the boundary binding. The recognized
+messaging surface is the public Well API recorded by the tasks-app
+fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
 
 ## Service family
 
@@ -48,6 +50,7 @@ in-scope, non-generated unit is classified exactly once:
 | `implementation of service S` | source layout, compiler evidence or the canonical path binds the unit to S, and it is not S's contract surface. Private helpers in that directory tree use this class |
 | `composition root` | unit calling `Well.Service.register`/`register_drut`/`expose` |
 | `external library` | `Well.*` (framework knowledge) and any target not observed in the build tree |
+| `helper of M` | an unclassified compilation unit whose only observed callers are that same unit. A single foreign caller does not create this class and does not adopt the unit |
 | `unclassified` | everything else, including a repository-local module that no family evidence binds |
 
 A separate Dune library under a program root is observed. It is not an
@@ -102,10 +105,25 @@ Derived from calls and value references, with helper paths:
   interactions by themselves.
 - `external-call` — call into an external library unit. Recorded for
   evidence; library approval does not grant resource access.
-- `messaging` — calls to Well messaging APIs
-  (`Well.subscribe_keyed`, `Well.publish_keyed`, `Well.request`) are
-  recorded as evidence only. Queue and event semantics are declared
-  exclusions of this profile.
+- `queued-command` — a call to `Well.request`. The topic is the
+  canonical path of the `~cmd` argument (`path:<canonical>`), or a
+  string literal when the argument is a literal. Targets are the
+  owners of observed `subscription` interactions on that same topic,
+  one interaction per target service. `Well.request` is not a
+  publication. A topic that is not a resolved path or literal, or a
+  topic with no subscriber, is `GAP-UNRESOLVED-TARGET` and carries no
+  target.
+- `publication` — a call to `Well.publish`, `Well.publish_keyed` or
+  `Well.MessageBus.publish`. The topic is recorded. Subscribers of
+  that topic are not request targets and are not command targets.
+- `subscription` — a call to `Well.subscribe`, `Well.subscribe_keyed`,
+  `Well.MessageBus.subscribe` or `Well.MessageBus.once`. The topic is
+  the first unlabeled topic value or channel literal.
+
+No other call is given queue or event meaning. `Well.Service.cast`,
+`Well.replay`, `Well.MessageBus.replay` and `Well.topic` stay
+`external-call`. A locally bound function that happens to be one of
+the APIs above is `GAP-UNRESOLVED-CALL`, not a guessed kind.
 
 ## Suppression rules (framework-generated mechanics)
 
