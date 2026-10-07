@@ -23,3 +23,5 @@ jobs:
         run: opam exec -- dune build @all
       - name: Acceptance suite
         run: opam exec -- test/acceptance/run.sh
+      - name: Coverage suite
+        run: opam exec -- test/coverage/run.sh

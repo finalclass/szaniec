@@ -1,0 +1,4 @@
+(library
+ (name szaniec_probe_runtime)
+ (public_name szaniec.probe_runtime)
+ (libraries unix))

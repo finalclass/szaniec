@@ -1,0 +1,15 @@
+(library
+ (name szaniec_instrumentation_ppx)
+ (public_name szaniec.instrumentation.ppx)
+ (kind ppx_rewriter)
+ (modules instrument)
+ (libraries ppxlib bisect_ppx_ng)
+ (ppx_runtime_libraries szaniec.coverage_runtime szaniec.probe_runtime
+   bisect_ppx_ng.runtime))
+
+(library
+ (name szaniec_instrumentation)
+ (public_name szaniec.instrumentation)
+ (modules szaniec_instrumentation)
+ (instrumentation.backend
+  (ppx szaniec.instrumentation.ppx)))

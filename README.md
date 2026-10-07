@@ -43,6 +43,57 @@ szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
 - Exit status: `0` no violations and no gaps; `1` violations with
   complete analysis; `2` incomplete analysis or execution failure.
 
+## Coverage
+
+`szaniec coverage` measures an existing application scenario. It does not
+change conformance rules and it does not apply a coverage threshold.
+
+The consumer hook is one Dune backend on every in-scope library and
+executable:
+
+```lisp
+(instrumentation (backend szaniec.instrumentation))
+```
+
+Ordinary `dune build` does not instrument. `szaniec coverage` adds
+`--instrument-with szaniec.instrumentation` to the configured build.
+An application PPX rewriter stays in its own `(preprocess (pps ...))`
+stanza. A second measurement engine is composed inside this same
+backend; consumers do not add another instrumentation line.
+
+```sh
+szaniec coverage --project-root . --config szaniec/coverage.json --json
+```
+
+The configuration format is `szaniec-coverage-config/1`. The machine
+report is `szaniec-coverage/1`: point coverage over instrumented points,
+not branch or path coverage. A function with no points is uninstrumented.
+A function with points that did not run is measured and unexecuted.
+CRAP is available only when a `szaniec-functions/1` inventory supplies
+complexity for that function; otherwise the score is unavailable. There
+is no CRAP gate. The command, the `supervise` runner, sanitized
+environments, and the gap codes are specified in
+[the coverage contract](docs/contracts/coverage.md).
+
+The public fixture is `test/fixtures/coverage-app`: two application
+libraries, a local ppxlib rewriter, nested and unused functions, an MLX
+file, and a Deno HTTP scenario. The scenario assertions stay as they
+are. `test/coverage/run.sh` checks that a normal build is not
+instrumented, then that one `szaniec coverage` command builds the
+instrumented server, runs those assertions, and writes the report.
+It also exercises a sanitized environment, a restart, concurrent
+servers, `SIGTERM` flush, `SIGKILL`, a library missing the hook, and a
+source change during the run.
+
+Verified with the locked toolchain: OCaml 5.4.1 (the compiler reports
+`5.4.1+relocatable`), dune 3.24.2, and ppxlib 0.38.0. The internal
+points engine is `bisect_ppx_ng` 3.0.0, because released `bisect_ppx`
+2.8.3 requires ppxlib older than 0.36. That package is not part of the
+consumer hook or the report. MLX is excluded unless the dune project
+declares an `mlx` dialect, in which case an in-scope `.mlx` file is a
+gap. Raw point files and reports stay in a temporary directory and are
+not committed.
+
 Findings examples: a Client calling an Access service (also through
 helpers or supported proxies), a Client calling an Engine, an Engine
 calling another Engine, a service bypassing another service's public
@@ -76,8 +127,9 @@ package lock through `dune pkg`; first run needs network access):
 dune pkg lock                       # resolve/verify dune.lock
 dune build @all                     # build everything
 dune exec ocamlformat -- --check $(git ls-files '*.ml')   # formatter check
-dune build @runtest                 # unit gate test + acceptance suite (13 scenarios)
-test/acceptance/run.sh              # same suite, standalone entry point
+dune build @runtest                 # unit tests, acceptance suite, coverage suite
+test/acceptance/run.sh              # architecture acceptance, standalone
+test/coverage/run.sh                # coverage fixture, standalone
 ```
 
 The acceptance suite copies `test/fixtures/tasks-app` (a minimal
@@ -105,7 +157,7 @@ locally bound functions (reported as `GAP-UNRESOLVED-CALL`, exit 2).
 - [Implementation brief](IMPLEMENTATION.md): first delivery, acceptance scenarios,
   unresolved implementation decisions, and verification expectations.
 - [Contract documents](docs/contracts): policy format, observation schema,
-  interpretation schema, inspection contract, rule catalog.
+  interpretation schema, inspection contract, rule catalog, coverage.
 - [Agent instructions](AGENTS.md): repository rules for an implementing agent.
 
 The checker is a local command-line program. It needs no server or

@@ -69,6 +69,13 @@ Manager passes interpretation results to evaluation. Access components do not ca
 each other. Rendering belongs to the Client; diagnostic meaning belongs to the
 inspection contract.
 
+Coverage measurement uses the same components. CheckClient adds `szaniec coverage`.
+InspectionManager sequences the instrumented build, the scenario process, and
+collection. ProgramAccess owns the Dune instrumentation facade, runtime flush,
+and point-to-function evidence. ConformanceEngine does not score coverage and
+does not apply a threshold. The facade is not an architectural service of the
+program under check. See [the coverage contract](docs/contracts/coverage.md).
+
 ## Adapters
 
 Language/toolchain adapters live inside ProgramAccess. They extract symbol identity,
@@ -185,6 +192,7 @@ Implementation-level contracts resolved under this architecture:
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
+- [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
 - [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.

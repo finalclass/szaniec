@@ -1,9 +1,21 @@
 (executable
  (name version_gate)
+ (modules version_gate)
  (libraries szaniec_program_access szaniec_model szaniec_architecture_access))
+
+(executable
+ (name coverage_facts_test)
+ (modules coverage_facts_test)
+ (libraries szaniec_program_access szaniec_model unix))
 
 (rule
  (alias runtest)
  (package szaniec)
  (action
   (run %{exe:version_gate.exe})))
+
+(rule
+ (alias runtest)
+ (package szaniec)
+ (action
+  (run %{exe:coverage_facts_test.exe})))

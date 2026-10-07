@@ -9,7 +9,13 @@ Format identifiers: request is CLI-only; machine-readable report is
 szaniec approve --policy <path> [--approval <path>]
 szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
                 [--rebuild] [--json] [--out <path>] [--no-callgraph]
+szaniec coverage [--project-root <dir>] [--config <path>] [--json] [--out <path>]
+                 [--keep-work] [--function-inventory <path>]
+szaniec coverage supervise --port <int> [--pass-env <name>]... -- <command>...
 ```
+
+`coverage` is specified in [the coverage contract](coverage.md). It does not
+run conformance rules and it does not require an approved policy.
 
 - `approve` writes the approval file recording the policy name and
   SHA-256 digest of the current policy content (see

@@ -65,3 +65,15 @@ application:
     (`(match !_service_ref with Some f -> f ...)`) which is genuinely
     unresolved at the type level; interpretation suppresses this known
     generated-proxy pattern inside policy-declared contract modules.
+
+## Coverage instrumentation
+
+`szaniec coverage` was verified on the same lock: OCaml **5.4.1**
+(`5.4.1+relocatable`), dune **3.24.2**, ppxlib **0.38.0**. The points
+engine inside the `szaniec.instrumentation` facade is `bisect_ppx_ng`
+**3.0.0**. Released `bisect_ppx` 2.8.3 does not solve against this
+toolchain: it requires ppxlib older than 0.36 and cmdliner older than
+2. The facade's public backend name stays `szaniec.instrumentation`.
+MLX is not instrumented. A dune project that does not declare an `mlx`
+dialect records that as an exclusion; a declared `mlx` dialect with an
+in-scope `.mlx` file is an instrumentation gap.

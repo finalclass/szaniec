@@ -19,6 +19,20 @@ let adapter_well = "szaniec-well-adapter/2.0.0"
 
 let rules = "szaniec-rules/2.0.0"
 
+let coverage_format = "szaniec-coverage/1"
+
+let coverage_config_format = "szaniec-coverage-config/1"
+
+let functions_format = "szaniec-functions/1"
+
+let complexity_metric = "szaniec-complexity/1"
+
+let instrumentation_facade = "szaniec-instrumentation/1"
+
+let coverage_points = "szaniec-points/1"
+
+let coverage_probe = "szaniec-probe/1"
+
 let default_profile = "well-ocaml-core"
 
 (* The compiler series whose .cmt artifacts this build of the OCaml adapter

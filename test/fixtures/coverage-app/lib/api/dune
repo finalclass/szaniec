@@ -1,0 +1,7 @@
+(library
+ (name coverage_app_api)
+ (libraries coverage_app_core)
+ (preprocess
+  (pps coverage_app_mark))
+ (instrumentation
+  (backend szaniec.instrumentation)))
