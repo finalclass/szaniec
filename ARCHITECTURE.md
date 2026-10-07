@@ -185,7 +185,7 @@ Implementation-level contracts resolved under this architecture:
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.0.0`, don'ts-based.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
 

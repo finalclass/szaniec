@@ -45,12 +45,18 @@ szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
 
 Findings examples: a Client calling an Access service (also through
 helpers or supported proxies), a Client calling an Engine, an Engine
-calling another Engine, a service bypassing another service's public
-contract, an unapproved shared module, direct access to a protected
-resource by a non-accessor, a contract call that is not a declared
-`rpc` method, and unclassified code. A layer-correct call is not a
-violation merely because no edge list names it: allowed calls come
-from the IDesign don'ts, not from a specification of permitted edges.
+calling another Engine, a Manager, Engine or Access calling a Client,
+a synchronous Manager-to-Manager call, a Client calling two Managers
+on one executable path, a queued command fanning out to several
+Managers or aimed at an Engine or Access service, a publication or
+subscription from a role that may not use it, a service bypassing
+another service's public contract, an unapproved shared module, direct
+access to a protected resource by a non-accessor, a contract call that
+is not a declared `rpc` method, and unclassified code. A layer-correct
+call is not a violation merely because no edge list names it: allowed
+calls come from the IDesign don'ts, not from a specification of
+permitted edges. A queued Manager-to-Manager command is allowed.
+Separate handlers and mutually exclusive branches are not one path.
 
 Every check writes `szaniec.json` in the project root: for each service
 and each declared method, the outgoing and incoming calls observed in
@@ -76,7 +82,7 @@ package lock through `dune pkg`; first run needs network access):
 dune pkg lock                       # resolve/verify dune.lock
 dune build @all                     # build everything
 dune exec ocamlformat -- --check $(git ls-files '*.ml')   # formatter check
-dune build @runtest                 # unit gate test + acceptance suite (13 scenarios)
+dune build @runtest                 # unit gate test + acceptance suite
 test/acceptance/run.sh              # same suite, standalone entry point
 ```
 
@@ -94,9 +100,11 @@ CI (`.github/workflows/ci.yml`) runs the same commands.
 
 Declared exclusions of the `well-ocaml-core` profile (reported in every
 check, never silently dropped): `.mlx` view files, `.mli` interfaces,
-dune wrapper units, queued-command/publish/subscribe and use-case rules,
-resource access beyond policy-declared API prefixes, and calls through
-locally bound functions (reported as `GAP-UNRESOLVED-CALL`, exit 2).
+dune wrapper units, resource access beyond policy-declared API prefixes,
+and calls through locally bound functions (reported as `GAP-UNRESOLVED-CALL`,
+exit 2). Queued commands (`Well.request`), publications and subscriptions
+are checked. A topic that cannot be resolved, or a function whose
+executable paths cannot be built, is an analysis gap (exit 2), not a pass.
 
 ## Design
 

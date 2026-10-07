@@ -222,7 +222,9 @@ let build_callgraph
         | Interpretation.ImplementationAccess ->
             Some (Callgraph.External_target i.Interpretation.target_module)
         | Interpretation.Registration
-         |Interpretation.MessagingEvidence ->
+         |Interpretation.QueuedCommand
+         |Interpretation.Publication
+         |Interpretation.Subscription ->
             None
       in
       match

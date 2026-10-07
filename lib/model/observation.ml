@@ -11,12 +11,31 @@ type resolution =
   | Unresolved_field
   | Unresolved_dynamic
 
+type call_arg =
+  { arg_label: string (* "" for a positional argument *)
+  ; arg_target: string (* canonical path, or "" *)
+  ; arg_literal: string (* string literal, or "" *) }
+
 type call =
   { call_unit: string (* canonical unit path *)
   ; caller: string (* symbol path relative to the unit *)
   ; callee: string (* canonical path; empty for unresolved *)
   ; resolution: resolution
-  ; site: site }
+  ; site: site
+  ; args: call_arg list }
+
+type path_step =
+  { step_callee: string
+  ; step_resolution: resolution
+  ; step_site: site
+  ; step_args: call_arg list }
+
+type exec_paths =
+  { paths_unit: string
+  ; paths_caller: string
+  ; alternatives: path_step list list
+        (* each inner list co-occurs; empty when ambiguous *)
+  ; ambiguous: bool }
 
 type value_ref =
   { ref_unit: string
@@ -50,6 +69,7 @@ type t =
   ; units: unit_info list
         (* sorted by canonical path; generated units excluded *)
   ; calls: call list (* sorted *)
+  ; exec_paths: exec_paths list (* sorted by unit, caller *)
   ; value_refs: value_ref list (* sorted *)
   ; type_refs: type_ref list (* sorted *)
   ; source_files: (string * string) list (* path, sha256 hex; sorted *)
