@@ -8,6 +8,7 @@
    InterpretationEngine. Supported artifacts: OCaml
    [Szaniec_model.Version.supported_compiler_series] .cmt files. *)
 
+module Measurement = Complexity
 open Szaniec_model
 
 let ( // ) = Filename.concat
@@ -794,6 +795,9 @@ let observe
   let calls = ref [] in
   let vrefs = ref [] in
   let trefs = ref [] in
+  let functions = ref [] in
+  let measure_gaps = ref [] in
+  let measured_paths = ref [] in
   let compiler_series = ref "unknown" in
   List.iter
     (fun (lib, modname, artifact, cmt) ->
@@ -805,10 +809,8 @@ let observe
       match real_source recorded with
       | None -> () (* .mlx-derived unit: declared profile exclusion *)
       | Some source_path ->
-          if
-            source_path = ""
-            || Filename.check_suffix source_path ".ml-gen"
-            || not (in_scope program_roots source_path)
+          let generated = Filename.check_suffix source_path ".ml-gen" in
+          if source_path = "" || not (in_scope program_roots source_path)
           then ()
           else if
             Hashtbl.find_opt units_tbl modname
@@ -833,62 +835,120 @@ let observe
             else
               let source_abs = project_root // source_path in
               let source_exists = Sys.file_exists source_abs in
+              (* Dune's wrapped-library stub is often recorded as
+                 [lib/name.ml-gen] but kept only inside [_build]. There is
+                 no project source to go stale against, so the artifact is
+                 the inventory source. A wrapper file that does exist in
+                 the tree is held to the same mtime check as other sources. *)
               let fresh =
-                source_exists
-                && ( assume_fresh
-                   || fresher_or_equal source_abs (project_root // artifact) )
+                (generated && not source_exists)
+                || source_exists
+                   && ( assume_fresh
+                      || fresher_or_equal source_abs (project_root // artifact)
+                      )
               in
               let unit_canonical =
                 Canonical.of_unit_name ~library:lib ~unit_name:modname
               in
               if not fresh
-              then (
+              then
                 let detail =
                   if source_exists
                   then "source changed after the artifact was built"
                   else "source file missing"
                 in
-                gaps :=
-                  { Observation.gap_code= "GAP-STALE-ARTIFACT"
-                  ; gap_path= source_path
-                  ; gap_detail= detail }
-                  :: !gaps ;
-                units :=
-                  { Observation.unit_id= modname
-                  ; canonical= unit_canonical
-                  ; source_path
-                  ; source_digest= ""
-                  ; artifact_path= artifact
-                  ; fresh= false }
-                  :: !units )
-              else
-                let facts =
-                  {calls= []; vrefs= []; trefs= []; symbols= []; unsupported= []}
-                in
-                walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
-                gaps :=
-                  List.map
-                    (fun site ->
-                      { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
-                      ; gap_path= site.Observation.site_path
-                      ; gap_detail=
-                          Printf.sprintf
-                            "construct at line %d cannot be followed by this \
-                             adapter"
-                            site.Observation.line } )
-                    (List.sort_uniq compare facts.unsupported)
-                  @ !gaps ;
-                calls := List.rev_append facts.calls !calls ;
-                vrefs := List.rev_append facts.vrefs !vrefs ;
-                trefs := List.rev_append facts.trefs !trefs ;
-                units :=
-                  { Observation.unit_id= modname
-                  ; canonical= unit_canonical
-                  ; source_path
-                  ; source_digest= ""
-                  ; artifact_path= artifact
-                  ; fresh= true }
-                  :: !units )
+                (* Wrapper units stay out of the conformance unit list.
+                   Their staleness is a coverage fact for the inventory. *)
+                if generated
+                then
+                  measure_gaps :=
+                    { Observation.gap_code= "GAP-STALE-ARTIFACT"
+                    ; gap_path= source_path
+                    ; gap_detail= detail }
+                    :: !measure_gaps
+                else (
+                  gaps :=
+                    { Observation.gap_code= "GAP-STALE-ARTIFACT"
+                    ; gap_path= source_path
+                    ; gap_detail= detail }
+                    :: !gaps ;
+                  units :=
+                    { Observation.unit_id= modname
+                    ; canonical= unit_canonical
+                    ; source_path
+                    ; source_digest= ""
+                    ; artifact_path= artifact
+                    ; fresh= false }
+                    :: !units )
+              else (
+                if not generated
+                then (
+                  let facts =
+                    { calls= []
+                    ; vrefs= []
+                    ; trefs= []
+                    ; symbols= []
+                    ; unsupported= [] }
+                  in
+                  walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+                  gaps :=
+                    List.map
+                      (fun site ->
+                        { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
+                        ; gap_path= site.Observation.site_path
+                        ; gap_detail=
+                            Printf.sprintf
+                              "construct at line %d cannot be followed by this \
+                               adapter"
+                              site.Observation.line } )
+                      (List.sort_uniq compare facts.unsupported)
+                    @ !gaps ;
+                  calls := List.rev_append facts.calls !calls ;
+                  vrefs := List.rev_append facts.vrefs !vrefs ;
+                  trefs := List.rev_append facts.trefs !trefs ;
+                  units :=
+                    { Observation.unit_id= modname
+                    ; canonical= unit_canonical
+                    ; source_path
+                    ; source_digest= ""
+                    ; artifact_path= artifact
+                    ; fresh= true }
+                    :: !units ) ;
+                match cmt.Cmt_format.cmt_annots with
+                | Cmt_format.Implementation structure -> (
+                  try
+                    let fns, mgaps =
+                      Measurement.measure
+                        ~project_root
+                        ~source_path
+                        ~unit_canonical
+                        structure
+                    in
+                    functions := List.rev_append fns !functions ;
+                    measure_gaps := List.rev_append mgaps !measure_gaps ;
+                    measured_paths := source_path :: !measured_paths
+                  with
+                  | exn ->
+                      measure_gaps :=
+                        { Observation.gap_code= "GAP-UNMEASURABLE"
+                        ; gap_path= source_path
+                        ; gap_detail=
+                            "complexity walk failed: " ^ Printexc.to_string exn
+                        }
+                        :: !measure_gaps )
+                | Cmt_format.Interface _
+                 |Cmt_format.Partial_implementation _
+                 |Cmt_format.Partial_interface _
+                 |Cmt_format.Packed _ ->
+                    (* A partial typedtree means the source did not
+                       type-check. Inventing an empty inventory would
+                       report that file as measured. *)
+                    measure_gaps :=
+                      { Observation.gap_code= "GAP-UNMEASURABLE"
+                      ; gap_path= source_path
+                      ; gap_detail= "typedtree is not a complete implementation"
+                      }
+                      :: !measure_gaps ) )
     read_infos ;
   (* sources without artifacts *)
   List.iter
@@ -954,6 +1014,105 @@ let observe
       (a.Observation.gap_code, a.Observation.gap_path, a.Observation.gap_detail)
       (b.Observation.gap_code, b.Observation.gap_path, b.Observation.gap_detail)
   in
+  let by_fn a b =
+    compare
+      ( a.Observation.fn_path
+      , a.Observation.fn_line
+      , a.Observation.fn_col
+      , a.Observation.fn_id )
+      ( b.Observation.fn_path
+      , b.Observation.fn_line
+      , b.Observation.fn_col
+      , b.Observation.fn_id )
+  in
+  let functions = List.sort by_fn !functions in
+  let gap_status (path : string) : string option =
+    let for_path =
+      List.filter (fun g -> String.equal g.Observation.gap_path path) !gaps
+    in
+    if
+      List.exists
+        (fun g -> g.Observation.gap_code = "GAP-UNOBSERVED-SOURCE")
+        for_path
+    then Some "unobserved"
+    else if
+      List.exists
+        (fun g -> g.Observation.gap_code = "GAP-STALE-ARTIFACT")
+        for_path
+    then Some "stale"
+    else if
+      List.exists
+        (fun g -> g.Observation.gap_code = "GAP-ARTIFACT-READ")
+        for_path
+    then Some "unreadable"
+    else if
+      List.exists
+        (fun g -> g.Observation.gap_code = "GAP-UNSUPPORTED-COMPILER")
+        for_path
+    then Some "unsupported-compiler"
+    else None
+  in
+  let count_fns path =
+    List.length
+      (List.filter (fun f -> String.equal f.Observation.fn_path path) functions)
+  in
+  (* Whole-file measurement failures. A function that contains an
+     unmeasurable construct stays on a [measured] file and is listed
+     with null complexity; these details mean the file itself has no
+     inventory. *)
+  let file_unmeasured path =
+    List.exists
+      (fun g ->
+        String.equal g.Observation.gap_path path
+        && String.equal g.Observation.gap_code "GAP-UNMEASURABLE"
+        && ( String.starts_with ~prefix:"typedtree " g.Observation.gap_detail
+           || String.starts_with
+                ~prefix:"complexity walk failed"
+                g.Observation.gap_detail ) )
+      !measure_gaps
+  in
+  let coverage_of path status provenance =
+    { Observation.cov_path= path
+    ; cov_provenance= provenance
+    ; cov_status= status
+    ; cov_functions= (if status = "measured" then count_fns path else 0) }
+  in
+  let source_coverage =
+    List.map
+      (fun (path, _digest) ->
+        let status =
+          match gap_status path with
+          | Some s -> s
+          | None when file_unmeasured path -> "unmeasurable"
+          | None -> "measured"
+        in
+        coverage_of path status (Measurement.file_provenance path) )
+      source_files
+  in
+  let extra_coverage =
+    List.sort_uniq
+      compare
+      ( !measured_paths
+      @ List.map (fun g -> g.Observation.gap_path) !measure_gaps )
+    |> List.filter (fun path ->
+        not (List.exists (fun (p, _) -> String.equal p path) source_files) )
+    |> List.map (fun path ->
+        let stale =
+          List.exists
+            (fun g ->
+              g.Observation.gap_code = "GAP-STALE-ARTIFACT"
+              && String.equal g.Observation.gap_path path )
+            !measure_gaps
+        in
+        let status =
+          if stale
+          then "stale"
+          else if file_unmeasured path
+          then "unmeasurable"
+          else "measured"
+        in
+        coverage_of path status (Measurement.file_provenance path) )
+  in
   { Observation.project_root
   ; program_roots
   ; compiler_series= !compiler_series
@@ -964,6 +1123,12 @@ let observe
   ; calls= List.sort by_unit !calls
   ; value_refs= List.sort by_ref !vrefs
   ; type_refs= List.sort by_tref !trefs
+  ; functions
+  ; coverage=
+      List.sort
+        (fun a b -> compare a.Observation.cov_path b.Observation.cov_path)
+        (source_coverage @ extra_coverage)
   ; source_files
   ; snapshot_digest
-  ; gaps= List.sort_uniq by_gap !gaps }
+  ; gaps= List.sort_uniq by_gap !gaps
+  ; measure_gaps= List.sort_uniq by_gap !measure_gaps }

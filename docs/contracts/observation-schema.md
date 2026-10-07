@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/1`.
+Format identifier (conceptual): `szaniec-observation/2`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -69,6 +69,28 @@ ownership or findings. `.mli` interfaces are not analyzed in this profile.
 
 Calls, valueRefs and typeRefs are sorted by `(unit, caller, callee, site)`
 before the observation is consumed, so downstream stages are deterministic.
+
+## Functions
+
+`functions` is the syntactic-function inventory measured by
+[szaniec-cc/1](complexity-metric.md). Each entry has a deterministic id,
+a source span, provenance (`authored`, `generated`, or `test`), and
+either a complexity or an unmeasurable status. Nested bodies are
+separate entries. Aliases and partial applications are absent.
+
+`coverage` lists every scanned source file and every generated file the
+adapter opened, with a status of `measured`, `stale`, `unobserved`,
+`unreadable`, `unsupported-compiler`, or `unmeasurable`.
+`unmeasurable` means the artifact's typedtree is not a complete
+implementation, or the complexity walk failed; the file contributes no
+function rows. A measured file may still contain individual functions
+whose complexity is null. `measureGaps` records complexity gaps
+(`GAP-UNMEASURABLE`, and staleness of generated wrappers). Those gaps
+are not conformance findings: `szaniec check` does not read `functions`,
+`coverage`, or `measureGaps`.
+
+Dune `.ml-gen` wrappers are measured for the inventory and still excluded
+from the conformance unit list.
 
 ## Completeness
 

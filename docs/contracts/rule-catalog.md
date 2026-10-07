@@ -142,3 +142,5 @@ Violations and gaps coexist in one report; gaps force exit 2.
   declared).
 - Any role or ownership inference beyond the accepted name-suffix rule.
 - Volatility/decomposition quality judgments.
+- Cyclomatic-complexity thresholds. The inventory itself is
+  [szaniec-cc/1](complexity-metric.md); it is not a conformance finding.
