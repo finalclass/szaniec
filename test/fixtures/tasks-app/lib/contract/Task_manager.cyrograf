@@ -1,0 +1,3 @@
+rpc list(ListReq) -> TaskList
+
+rpc add(AddReq) -> Task

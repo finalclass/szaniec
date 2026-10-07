@@ -60,3 +60,5 @@ let create ~ctx ~title =
   match !_service_ref with
   | Some f -> Task.of_wire (f "create" ctx req)
   | None -> failwith "TaskAccess: service not registered"
+
+let debug_dump () = "task-access-debug"

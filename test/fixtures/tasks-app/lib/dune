@@ -2,5 +2,13 @@
 
 (library
  (name app)
- (libraries contract well)
- (flags (:standard -bin-annot)))
+ (libraries
+  contract
+  well
+  task_access_lib
+  task_manager_lib
+  template_engine_lib
+  formatting_engine_lib
+  notification_manager_lib)
+ (flags
+  (:standard -bin-annot)))

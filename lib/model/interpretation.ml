@@ -26,6 +26,7 @@ type interaction =
   { kind: kind
   ; from_owner: string (* owning boundary of the origin *)
   ; to_service: string (* target service name when applicable *)
+  ; to_method: string (* called rpc method when applicable *)
   ; target_module: string
   ; resource: string (* for ResourceAccess *)
   ; api: string (* resolved callee path *)

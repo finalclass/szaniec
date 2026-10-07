@@ -1,6 +1,6 @@
 (executable
  (name version_gate)
- (libraries szaniec_program_access szaniec_model))
+ (libraries szaniec_program_access szaniec_model szaniec_architecture_access))
 
 (rule
  (alias runtest)

@@ -1,0 +1,6 @@
+(* TaskAccess contract: generated-code surface declared once here.
+   rpc lines are the service's public methods. *)
+
+rpc list(ListReq) -> TaskList
+
+rpc create(CreateReq) -> Task

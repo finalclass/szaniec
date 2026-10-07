@@ -1,4 +1,11 @@
 (executable
  (name main)
- (flags (:standard -bin-annot))
- (libraries app))
+ (flags
+  (:standard -bin-annot))
+ (libraries
+  app
+  task_access_lib
+  task_manager_lib
+  template_engine_lib
+  formatting_engine_lib
+  notification_manager_lib))

@@ -1,6 +1,5 @@
-(* Private helper of the TaskAccess service boundary (declared in the
-   policy). Consumed by a second service in the shared-implementation
-   scenario. *)
+(* Private helper of the TaskAccess boundary. The shared-implementation
+   scenario makes a second service call it. *)
 
 let sha_hex (s : string) : string = String.length s |> string_of_int
 

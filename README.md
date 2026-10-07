@@ -43,19 +43,29 @@ szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
 - Exit status: `0` no violations and no gaps; `1` violations with
   complete analysis; `2` incomplete analysis or execution failure.
 
-Findings examples: a Client calling ResourceAccess (also through helpers
-or supported proxies), an Engine calling another Engine, a service
-bypassing another service's public contract, an unapproved shared module,
-layer-correct but unapproved calls, direct access to a protected resource
-by a non-accessor, unclassified code.
+Findings examples: a Client calling an Access service (also through
+helpers or supported proxies), a Client calling an Engine, an Engine
+calling another Engine, a service bypassing another service's public
+contract, an unapproved shared module, direct access to a protected
+resource by a non-accessor, a contract call that is not a declared
+`rpc` method, and unclassified code. A layer-correct call is not a
+violation merely because no edge list names it: allowed calls come
+from the IDesign don'ts, not from a specification of permitted edges.
+
+Every check writes `szaniec.json` in the project root: for each service
+and each declared method, the outgoing and incoming calls observed in
+that run.
 
 The checker preserves legitimate boundaries: `Client -> Manager -> Access`
 is never misreported as a direct `Client -> Access` call; helpers are
 followed only inside one service boundary.
 
+Services are discovered from `.cyrograf` contract files that declare
+`rpc` methods. The role of a service is the suffix of its name
+(`manager`, `client`, `engine`, `access`; any other name is a utility).
+
 Szaniec checks implementation conformance. It does not judge whether the
-approved architecture was correctly decomposed around volatility, and it
-does not infer architectural roles from class or file names.
+approved architecture was correctly decomposed around volatility.
 
 ## Build and verification
 

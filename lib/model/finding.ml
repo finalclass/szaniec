@@ -72,4 +72,5 @@ type report =
   { status: status
   ; inputs: inputs
   ; findings: t list
-  ; summary: summary }
+  ; summary: summary
+  ; callgraph: Callgraph.t option }

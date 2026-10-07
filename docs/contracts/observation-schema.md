@@ -26,10 +26,18 @@ One entry per observed compilation unit (implementation module):
   `Lib.Sub.Module`; for a wrapped-false library, `Module.Sub`; for
   executables, `Main` (the `Dune__exe__` prefix is stripped).
 - `sourcePath` — path relative to the project root.
-- `sourceDigest` — from the artifact (`cmt_source_digest`), verified
-  against the file on disk.
+- `sourcePath` — mapped back from the recorded preprocessed source: dune
+  pp targets `x.pp.ml` (from `x.ml`) and `x.mlx.pp.ml` (from `x.mlx`);
+  units derived from `.mlx` view files are a declared profile exclusion.
+- `sourceDigest` — reserved metadata; content digests cannot verify
+  freshness for preprocessed sources.
 - `artifactPath` — the `.cmt` file used.
-- `fresh` — digest matches the current source file.
+- `fresh` — source file exists and is current. With a successful rebuild
+  (`--rebuild`, exit 0) freshness is assumed for all artifacts: dune
+  guarantees content freshness of its outputs. Without a rebuild,
+  freshness is an mtime comparison (safe direction: an artifact older than
+  its source, or a missing source file, is stale; a touch without content
+  change also reports stale and a rebuild clears it).
 - `generated` — dune-generated wrapper units (`.ml-gen` sources); they
   are excluded from rules and diagnostics.
 

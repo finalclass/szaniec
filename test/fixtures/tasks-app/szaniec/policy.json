@@ -1,63 +1,9 @@
 {
-  "format": "szaniec-policy/1",
+  "format": "szaniec-policy/2",
   "policyName": "tasks-app",
   "program": { "roots": ["lib"] },
-  "compositionRoots": ["App", "Main"],
-  "services": [
-    {
-      "name": "WebClient",
-      "role": "client",
-      "contractModules": [],
-      "implementationModules": ["Pages.Tasks_page", "Pages.Help_page"],
-      "helperModules": ["Pages.Shared"]
-    },
-    {
-      "name": "TaskManager",
-      "role": "manager",
-      "contractModules": ["Task_manager"],
-      "implementationModules": ["Services.Task_manager_impl"],
-      "helperModules": []
-    },
-    {
-      "name": "TaskAccess",
-      "role": "access",
-      "contractModules": ["Task_access"],
-      "implementationModules": ["Services.Task_access_impl"],
-      "helperModules": ["Common.Json_util"]
-    },
-    {
-      "name": "TemplateEngine",
-      "role": "engine",
-      "contractModules": ["Template_engine"],
-      "implementationModules": ["Services.Template_engine_impl"],
-      "helperModules": []
-    },
-    {
-      "name": "FormattingEngine",
-      "role": "engine",
-      "contractModules": ["Formatting_engine"],
-      "implementationModules": ["Services.Formatting_engine_impl"],
-      "helperModules": []
-    },
-    {
-      "name": "NotificationManager",
-      "role": "manager",
-      "contractModules": ["Notification_manager"],
-      "implementationModules": ["Services.Notification_manager_impl"],
-      "helperModules": []
-    }
-  ],
-  "approvedCalls": [
-    { "from": "WebClient", "to": "TaskManager" },
-    { "from": "TaskManager", "to": "TaskAccess" }
-  ],
   "approvedSharedModules": [],
   "resources": [
-    { "name": "database", "apiPrefixes": ["Well.Db."], "accessors": ["TaskAccess"] }
-  ],
-  "externalLibraries": [
-    { "name": "well", "unitPrefixes": ["Well"] },
-    { "name": "yojson", "unitPrefixes": ["Yojson"] },
-    { "name": "stdlib", "unitPrefixes": ["Stdlib"] }
+    { "name": "database", "apiPrefixes": ["Well.Db.", "Sqlite3."] }
   ]
 }

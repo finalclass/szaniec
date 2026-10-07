@@ -1,4 +1,4 @@
-(* ArchitectureAccess: parse and validate the approved policy (szaniec-policy/1)
+(* ArchitectureAccess: parse and validate the approved policy (szaniec-policy/2)
    and verify the approved-policy selection (szaniec-approval/1). *)
 
 open Szaniec_model
@@ -75,84 +75,15 @@ let parse_policy (path : string) : (Policy.t, error) result =
           | _ -> None
         in
         match get_str "format" with
-        | Some f when String.equal f Szaniec_model.Version.policy_format ->
+        | Some f when String.equal f Version.policy_format ->
             let name = Option.value ~default:"unnamed" (get_str "policyName") in
-            let profile =
-              Option.value ~default:Version.default_profile (get_str "profile")
-            in
             let program_roots =
               match get "program" with
               | Some (`Assoc pf) -> (
                 match List.assoc_opt "roots" pf with
                 | Some roots -> string_list roots
-                | None -> ["bin"; "lib"] )
-              | _ -> ["bin"; "lib"]
-            in
-            let composition_roots =
-              match get "compositionRoots" with
-              | Some l -> string_list l
-              | None -> []
-            in
-            let services =
-              match get "services" with
-              | Some (`List svcs) ->
-                  List.filter_map
-                    (fun s ->
-                      match s with
-                      | `Assoc sf -> (
-                          let getf k =
-                            match List.assoc_opt k sf with
-                            | Some (`String x) -> Some x
-                            | _ -> None
-                          in
-                          let getl k =
-                            match List.assoc_opt k sf with
-                            | Some x -> Some (string_list x)
-                            | None -> None
-                          in
-                          match (getf "name", getf "role") with
-                          | Some n, Some r -> (
-                            match Policy.role_of_string r with
-                            | Some role ->
-                                Some
-                                  { Policy.name= n
-                                  ; role
-                                  ; contract_modules=
-                                      Option.value
-                                        ~default:[]
-                                        (getl "contractModules")
-                                  ; implementation_modules=
-                                      Option.value
-                                        ~default:[]
-                                        (getl "implementationModules")
-                                  ; helper_modules=
-                                      Option.value
-                                        ~default:[]
-                                        (getl "helperModules") }
-                            | None -> None )
-                          | _ -> None )
-                      | _ -> None )
-                    svcs
-              | _ -> []
-            in
-            let approved_calls =
-              match get "approvedCalls" with
-              | Some (`List items) ->
-                  List.filter_map
-                    (fun i ->
-                      match i with
-                      | `Assoc ef -> (
-                          let getf k =
-                            match List.assoc_opt k ef with
-                            | Some (`String x) -> Some x
-                            | _ -> None
-                          in
-                          match (getf "from", getf "to") with
-                          | Some a, Some b -> Some (a, b)
-                          | _ -> None )
-                      | _ -> None )
-                    items
-              | _ -> []
+                | None -> ["lib"] )
+              | _ -> ["lib"]
             in
             let approved_shared =
               match get "approvedSharedModules" with
@@ -183,40 +114,7 @@ let parse_policy (path : string) : (Policy.t, error) result =
                                 ; api_prefixes=
                                     Option.value
                                       ~default:[]
-                                      (getl "apiPrefixes")
-                                ; accessors=
-                                    Option.value ~default:[] (getl "accessors")
-                                }
-                          | None -> None )
-                      | _ -> None )
-                    items
-              | _ -> []
-            in
-            let externals =
-              match get "externalLibraries" with
-              | Some (`List items) ->
-                  List.filter_map
-                    (fun i ->
-                      match i with
-                      | `Assoc ef -> (
-                          let getf k =
-                            match List.assoc_opt k ef with
-                            | Some (`String x) -> Some x
-                            | _ -> None
-                          in
-                          let getl k =
-                            match List.assoc_opt k ef with
-                            | Some x -> Some (string_list x)
-                            | None -> None
-                          in
-                          match getf "name" with
-                          | Some n ->
-                              Some
-                                { Policy.lib_name= n
-                                ; unit_prefixes=
-                                    Option.value
-                                      ~default:[]
-                                      (getl "unitPrefixes") }
+                                      (getl "apiPrefixes") }
                           | None -> None )
                       | _ -> None )
                     items
@@ -224,14 +122,9 @@ let parse_policy (path : string) : (Policy.t, error) result =
             in
             Ok
               { Policy.name
-              ; profile
               ; program_roots
-              ; composition_roots
-              ; services
-              ; approved_calls
               ; approved_shared_modules= approved_shared
-              ; resources
-              ; external_libraries= externals }
+              ; resources }
         | Some _ ->
             Error (Printf.sprintf "policy file %s has wrong format" path)
         | None -> Error (Printf.sprintf "policy file %s is missing format" path)

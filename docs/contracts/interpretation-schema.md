@@ -7,26 +7,27 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/1.0.0`
-for Well applications, plus the boundary binding that applies the policy.
+First delivery contains one framework adapter: `szaniec-well-adapter/2.0.0`
+for Well applications, plus the boundary binding.
 
 ## Ownership binding
 
-Every in-scope, non-generated unit is classified exactly once:
+Services come from cyrograf contract files (ArchitectureAccess). Every
+in-scope, non-generated unit is classified exactly once:
 
 | Class | Source |
 |---|---|
-| `contract of service S` | policy `contractModules` |
-| `implementation of service S` | policy `implementationModules` |
-| `helper of service S` | policy `helperModules` |
-| `composition root` | policy `compositionRoots` |
-| `external library` | policy `externalLibraries[].unitPrefixes` |
+| `contract of service S` | unit whose canonical path lies on S's contract surface: a segment equals the service stem (case-insensitive) or ends with `_` + stem, and the unit is not under the application library prefix (`App.`) |
+| `implementation of service S` | unit under the application library whose canonical path carries S's stem segment, or which calls `make_spec` on S's contract module |
+| `composition root` | unit calling `Well.Service.register`/`register_drut`/`expose` |
+| `external library` | `Well.*` (framework knowledge) and any target not observed in the build tree |
 | `unclassified` | everything else |
 
-Prefix rules for external libraries use canonical path prefixes
-(`Well.Db` matches `Well`, `Well.Db.Anything`). Ownership ambiguity
-declared in the policy produces `GAP-AMBIGUOUS-OWNERSHIP` at
-ArchitectureAccess time; here it is carried as a gap finding.
+Client families: a canonical segment ending with `client`
+(case-insensitive) makes the unit part of an implicit Client boundary
+named by that segment. Units are never classified by their own file
+names beyond these rules; code without ownership is a
+`POLICY-UNCLASSIFIED` finding.
 
 Registration evidence gathered from code, reported but not trusted above
 the policy:
@@ -44,14 +45,15 @@ A conflict between registration evidence and policy ownership produces
 Derived from calls and value references, with helper paths:
 
 - `service-request` — caller boundary calls a contract module of another
-  service: a request/response interaction via the public contract. The
-  caller-side path through private helpers of the same boundary is
-  resolved by walking the per-value call graph inside the boundary
-  backwards from the contract call to boundary origins (values with no
-  in-boundary callers, e.g. route handlers). Paths never cross a service
-  boundary: a call into another boundary stops the walk, so legitimate
-  `Client -> Manager -> Access` produces two interactions, not a
-  transitive `Client -> Access` edge.
+  service: a request/response interaction via the public contract,
+  carrying the called method name (the final member of the callee path)
+  validated against the service's declared rpc methods. The caller-side
+  path through private helpers of the same boundary is resolved by
+  walking the per-value call graph inside the boundary from boundary
+  origins (values with no in-boundary callers, e.g. route handlers).
+  Paths never cross a service boundary: a call into another boundary
+  stops the walk, so legitimate `Client -> Manager -> Access` produces
+  two interactions, not a transitive `Client -> Access` edge.
 - `implementation-access` — call or value reference into another
   service's implementation module outside the registration patterns
   below.
@@ -78,6 +80,10 @@ Derived from calls and value references, with helper paths:
   conversion) produce no interactions.
 - Calls from a service implementation to its own contract module
   (`make_spec`) are binding evidence, not interactions.
+- Generated-code mechanic members of contract units (wire codecs, `make`,
+  `spec`, `_service_ref` and friends — see the rule catalog) produce no
+  interactions; calls to any other contract member are checked against
+  the declared rpc methods.
 - Calls within one boundary (helpers, own contract proxies for
   self-dispatch) produce no cross-boundary interactions; they remain in
   the helper path evidence.

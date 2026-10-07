@@ -1,6 +1,7 @@
 (* InterpretationEngine: binds observed code to architectural boundaries
    and interprets interactions for Well applications.
-   See docs/contracts/interpretation-schema.md. *)
+   See docs/contracts/interpretation-schema.md and
+   docs/decisions/donts-based-rules.md. *)
 
 open Szaniec_model
 
@@ -10,138 +11,329 @@ let exclusions =
   ; "dune wrapper units (.ml-gen)"
   ; "queued-command, publish/subscribe and use-case rules (messaging recorded \
      as evidence only)"
-  ; "resource access beyond policy-declared apiPrefixes (recorded as external \
-     calls)" ]
+  ; "resource access beyond framework-known APIs (recorded as external calls)"
+  ]
 
 (* Well framework APIs interpreted as registration/wiring: implementation
    references passed through them are framework mechanics. *)
-let registration_apis = ["Well.Service.register"; "Well.Service.expose"]
+let registration_apis =
+  ["Well.Service.register"; "Well.Service.register_drut"; "Well.Service.expose"]
 
 let route_apis = ["Well.get"; "Well.post"; "Well.live"]
 
 let messaging_apis =
   ["Well.subscribe_keyed"; "Well.publish_keyed"; "Well.request"]
 
-let external_of (policy : Policy.t) (canonical : string) : string option =
-  List.find_map
-    (fun (e : Policy.external_library) ->
-      if
-        List.exists
-          (fun p -> Canonical.starts_with ~prefix:p canonical)
-          e.Policy.unit_prefixes
-      then Some e.Policy.lib_name
-      else None )
-    policy.Policy.external_libraries
+(* Resource APIs are framework knowledge, not project policy. *)
+let framework_resources : (string * string) list =
+  [("Well.Db.", "database"); ("Sqlite3.", "database")]
+
+(* Generated-code mechanic members of contract units (wire codecs,
+   binding and dispatch). Calls to any other contract member are checked
+   against the declared rpc methods. *)
+let contract_mechanics =
+  [ "make_spec"
+  ; "spec"
+  ; "_service_ref"
+  ; "make"
+  ; "to_wire"
+  ; "of_wire"
+  ; "to_data"
+  ; "from_data"
+  ; "to_drut"
+  ; "from_drut"
+  ; "wire_of_storage"
+  ; "storage_of_wire"
+  ; "to_storage_value"
+  ; "from_storage_value" ]
+
+(* ── ownership ────────────────────────────────────────────────────── *)
+
+(* Role of a service name: suffix rule (decision record). *)
+let role_of_name = Szaniec_architecture_access.Cyrograf.role_of_suffix
+
+(* Last dot-separated member of a canonical path. *)
+let last_segment (path : string) : string =
+  match String.rindex_opt path '.' with
+  | Some i -> String.sub path (i + 1) (String.length path - i - 1)
+  | None -> path
 
 type ownership_map = (string, Interpretation.ownership) Hashtbl.t
 
-let classify_ownership (policy : Policy.t) (obs : Observation.t) :
-    ownership_map * Observation.gap list =
+(* A canonical path segment equals the service stem (case-insensitive) or
+   ends with "_" + stem. *)
+let family_segment_matches (segs : string list) (svc : string) : bool =
+  List.exists
+    (fun seg ->
+      Szaniec_architecture_access.Cyrograf.segment_matches_service
+        ~service:svc
+        seg )
+    segs
+
+(* Implicit client boundary: any segment ending with "client". *)
+let client_segment (segs : string list) : string option =
+  List.find_opt
+    (fun seg ->
+      let l = String.lowercase_ascii seg in
+      let n = String.length l in
+      n >= 6 && String.sub l (n - 6) 6 = "client" )
+    segs
+
+let classify_ownership
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (obs : Observation.t) :
+    ownership_map * Observation.gap list * (string, string) Hashtbl.t =
   let map : ownership_map = Hashtbl.create 64 in
   let gaps = ref [] in
-  let canonical_paths =
-    List.map
-      (fun (u : Observation.unit_info) -> u.Observation.canonical)
-      obs.Observation.units
+  let app_prefixed (canonical : string) : bool =
+    match Canonical.split_dots canonical with
+    | "App" :: _ -> true
+    | _ -> false
   in
-  let declared :
-      (string * string * string * Interpretation.ownership_class) list =
-    List.concat_map
-      (fun (s : Policy.service) ->
-        let cls kind =
-          match kind with
-          | "contract" -> Interpretation.Contract_of s.Policy.name
-          | "implementation" -> Interpretation.Implementation_of s.Policy.name
-          | _ -> Interpretation.Helper_of s.Policy.name
-        in
-        List.map
-          (fun m -> (m, s.Policy.name, "contract", cls "contract"))
-          s.Policy.contract_modules
-        @ List.map
-            (fun m -> (m, s.Policy.name, "implementation", cls "implementation"))
-            s.Policy.implementation_modules
-        @ List.map
-            (fun m -> (m, s.Policy.name, "helper", cls "helper"))
-            s.Policy.helper_modules )
-      policy.Policy.services
-  in
-  let candidates name =
-    List.filter (fun c -> Canonical.matches ~declared:name c) canonical_paths
-  in
-  let add_gap code path detail =
-    gaps :=
-      {Observation.gap_code= code; gap_path= path; gap_detail= detail} :: !gaps
-  in
+  (* implementation binding from compiler evidence: a unit calling
+     <Contract>.make_spec implements that service, even when its own
+     module name does not carry the service stem *)
+  let impl_of : (string, string) Hashtbl.t = Hashtbl.create 16 in
   List.iter
-    (fun (declared_name, service, kind, cls) ->
-      match candidates declared_name with
-      | [] -> ()
-      | _ :: _ :: _ ->
-          add_gap
-            "GAP-AMBIGUOUS-OWNERSHIP"
-            declared_name
-            (Printf.sprintf
-               "declared %s of %s matches several units: %s"
-               kind
-               service
-               (String.concat ", " (candidates declared_name)) )
-      | [c] -> (
-        match Hashtbl.find_opt map c with
-        | Some _ ->
-            add_gap
-              "GAP-AMBIGUOUS-OWNERSHIP"
-              c
-              (Printf.sprintf
-                 "unit %s is claimed by more than one declared module"
-                 c )
-        | None ->
-            Hashtbl.replace
-              map
-              c
-              {owner_module= c; owner_class= cls; owner_service= service} ) )
-    declared ;
+    (fun (c : Observation.call) ->
+      match List.rev (Canonical.split_dots c.Observation.callee) with
+      | "make_spec" :: prev :: _ -> (
+          let svc =
+            List.find_opt
+              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                family_segment_matches
+                  [prev]
+                  s.Szaniec_architecture_access.Cyrograf.svc_name )
+              cy.Szaniec_architecture_access.Cyrograf.services
+          in
+          match svc with
+          | Some s ->
+              Hashtbl.replace
+                impl_of
+                c.Observation.call_unit
+                s.Szaniec_architecture_access.Cyrograf.svc_name
+          | None -> () )
+      | _ -> () )
+    obs.Observation.calls ;
+  (* registration evidence: X.spec passed to a registration API binds X's
+     unit to that service *)
   List.iter
-    (fun name ->
-      match candidates name with
-      | [] -> ()
-      | _ :: _ :: _ ->
-          add_gap
-            "GAP-AMBIGUOUS-OWNERSHIP"
-            name
-            (Printf.sprintf
-               "declared module matches several units: %s"
-               (String.concat ", " (candidates name)) )
-      | [c] ->
-          if not (Hashtbl.mem map c)
-          then
-            Hashtbl.replace
-              map
-              c
-              { owner_module= c
-              ; owner_class= Interpretation.CompositionRoot
-              ; owner_service= "" } )
-    (policy.Policy.composition_roots @ policy.Policy.approved_shared_modules) ;
+    (fun (v : Observation.value_ref) ->
+      match List.rev (Canonical.split_dots v.Observation.ref_target) with
+      | "spec" :: mod_segs_rev -> (
+          let unit_root = List.hd mod_segs_rev in
+          let stem_candidates =
+            [unit_root]
+            @
+            if
+              String.length unit_root > 5
+              && String.sub
+                   (String.lowercase_ascii unit_root)
+                   (String.length unit_root - 5)
+                   5
+                 = "_impl"
+            then [String.sub unit_root 0 (String.length unit_root - 5)]
+            else []
+          in
+          let svc =
+            List.find_opt
+              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                List.exists
+                  (fun seg ->
+                    Szaniec_architecture_access.Cyrograf.segment_matches_service
+                      ~service:s.Szaniec_architecture_access.Cyrograf.svc_name
+                      seg )
+                  stem_candidates )
+              cy.Szaniec_architecture_access.Cyrograf.services
+          in
+          match svc with
+          | Some s ->
+              let target_unit =
+                match
+                  Canonical.unit_prefix
+                    (List.map
+                       (fun (u : Observation.unit_info) ->
+                         u.Observation.canonical )
+                       obs.Observation.units )
+                    v.Observation.ref_target
+                with
+                | Some u -> u
+                | None ->
+                    List.hd (Canonical.split_dots v.Observation.ref_target)
+              in
+              Hashtbl.replace
+                impl_of
+                target_unit
+                s.Szaniec_architecture_access.Cyrograf.svc_name
+          | None -> () )
+      | _ -> () )
+    obs.Observation.value_refs ;
   List.iter
     (fun (u : Observation.unit_info) ->
-      if not (Hashtbl.mem map u.Observation.canonical)
-      then
-        match external_of policy u.Observation.canonical with
-        | Some lib ->
-            Hashtbl.replace
-              map
-              u.Observation.canonical
-              { owner_module= u.Observation.canonical
-              ; owner_class= Interpretation.ExternalLibrary lib
-              ; owner_service= "" }
-        | None ->
-            Hashtbl.replace
-              map
-              u.Observation.canonical
-              { owner_module= u.Observation.canonical
-              ; owner_class= Interpretation.Unclassified
-              ; owner_service= "" } )
+      let canonical = u.Observation.canonical in
+      let segs = Canonical.split_dots canonical in
+      let owner =
+        match
+          List.find_opt
+            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+              family_segment_matches
+                segs
+                s.Szaniec_architecture_access.Cyrograf.svc_name )
+            cy.Szaniec_architecture_access.Cyrograf.services
+        with
+        | Some s ->
+            let cls =
+              if app_prefixed canonical
+              then
+                Interpretation.Implementation_of
+                  s.Szaniec_architecture_access.Cyrograf.svc_name
+              else
+                Interpretation.Contract_of
+                  s.Szaniec_architecture_access.Cyrograf.svc_name
+            in
+            { Interpretation.owner_module= canonical
+            ; owner_class= cls
+            ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name }
+        | None -> (
+          match Hashtbl.find_opt impl_of canonical with
+          | Some svc_name ->
+              { Interpretation.owner_module= canonical
+              ; owner_class= Interpretation.Implementation_of svc_name
+              ; owner_service= svc_name }
+          | None -> (
+            match
+              List.find_opt
+                (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                  List.exists
+                    (fun seg ->
+                      String.equal
+                        (Szaniec_architecture_access.Cyrograf.normalize_stem
+                           seg )
+                        ( Szaniec_architecture_access.Cyrograf.normalize_stem
+                            s.Szaniec_architecture_access.Cyrograf.svc_name
+                        ^ "impl" ) )
+                    segs )
+                cy.Szaniec_architecture_access.Cyrograf.services
+            with
+            | Some s ->
+                { Interpretation.owner_module= canonical
+                ; owner_class=
+                    Interpretation.Implementation_of
+                      s.Szaniec_architecture_access.Cyrograf.svc_name
+                ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name
+                }
+            | None -> (
+              match client_segment segs with
+              | Some seg ->
+                  { Interpretation.owner_module= canonical
+                  ; owner_class= Interpretation.Implementation_of seg
+                  ; owner_service= seg }
+              | None ->
+                  if
+                    List.exists
+                      (fun seg ->
+                        String.equal (String.lowercase_ascii seg) "well"
+                        || String.equal (String.lowercase_ascii seg) "well_stub" )
+                      segs
+                  then
+                    { Interpretation.owner_module= canonical
+                    ; owner_class= Interpretation.ExternalLibrary "well"
+                    ; owner_service= "" }
+                  else
+                    { Interpretation.owner_module= canonical
+                    ; owner_class= Interpretation.Unclassified
+                    ; owner_service= "" } ) ) )
+      in
+      Hashtbl.replace map canonical owner )
     obs.Observation.units ;
-  (map, List.sort_uniq compare !gaps)
+  (* composition roots: units calling registration APIs (auto-detected) *)
+  let is_registration (callee : string) : bool =
+    List.exists (fun a -> String.equal a callee) registration_apis
+  in
+  List.iter
+    (fun (c : Observation.call) ->
+      if is_registration c.Observation.callee
+      then
+        match Hashtbl.find_opt map c.Observation.call_unit with
+        | Some o
+          when o.Interpretation.owner_class = Interpretation.CompositionRoot ->
+            ()
+        | Some o ->
+            Hashtbl.replace
+              map
+              c.Observation.call_unit
+              { o with
+                owner_class= Interpretation.CompositionRoot
+              ; owner_service= "" }
+        | None -> () )
+    obs.Observation.calls ;
+  (* helper refinement: a unit without ownership consumed by exactly one
+     boundary belongs to that boundary (private helper); consumed by two
+     or more it stays unclassified — sharing without approval *)
+  let consumer_boundaries : (string, string list) Hashtbl.t =
+    Hashtbl.create 32
+  in
+  List.iter
+    (fun (c : Observation.call) ->
+      if String.length c.Observation.callee > 0
+      then
+        match
+          ( Canonical.unit_prefix
+              (List.map
+                 (fun (u : Observation.unit_info) -> u.Observation.canonical)
+                 obs.Observation.units )
+              c.Observation.callee
+          , Hashtbl.find_opt map c.Observation.call_unit )
+        with
+        | Some target_unit, Some caller -> (
+          match Hashtbl.find_opt map target_unit with
+          | Some {owner_class= Interpretation.Unclassified; _} -> (
+              let consumer =
+                if String.equal caller.Interpretation.owner_service ""
+                then caller.Interpretation.owner_module
+                else caller.Interpretation.owner_service
+              in
+              match Hashtbl.find_opt consumer_boundaries target_unit with
+              | Some l ->
+                  if not (List.mem consumer l)
+                  then
+                    Hashtbl.replace
+                      consumer_boundaries
+                      target_unit
+                      (consumer :: l)
+              | None ->
+                  Hashtbl.replace consumer_boundaries target_unit [consumer] )
+          | Some _ -> () (* owned already *)
+          | None -> () )
+        | _ -> () )
+    obs.Observation.calls ;
+  Hashtbl.iter
+    (fun target consumers ->
+      match consumers with
+      | [single] ->
+          let svc =
+            List.find_opt
+              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                String.equal
+                  s.Szaniec_architecture_access.Cyrograf.svc_name
+                  single )
+              cy.Szaniec_architecture_access.Cyrograf.services
+          in
+          let owner_service, owner_class =
+            match svc with
+            | Some s ->
+                ( s.Szaniec_architecture_access.Cyrograf.svc_name
+                , Interpretation.Helper_of
+                    s.Szaniec_architecture_access.Cyrograf.svc_name )
+            | None -> (single, Interpretation.Helper_of single)
+          in
+          Hashtbl.replace
+            map
+            target
+            {Interpretation.owner_module= target; owner_class; owner_service}
+      | _ -> () )
+    consumer_boundaries ;
+  (map, List.sort_uniq compare !gaps, impl_of)
 
 type node =
   { n_unit: string
@@ -155,8 +347,11 @@ let same_boundary (a : Interpretation.ownership) (b : Interpretation.ownership)
   && String.equal a.Interpretation.owner_service b.Interpretation.owner_service
   || String.equal a.Interpretation.owner_module b.Interpretation.owner_module
 
-let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
-  let ownership_map, ownership_gaps = classify_ownership policy obs in
+let interpret
+    ~(policy : Policy.t)
+    ~(cy : Szaniec_architecture_access.Cyrograf.t)
+    (obs : Observation.t) : Interpretation.t =
+  let ownership_map, ownership_gaps, impl_of = classify_ownership cy obs in
   let unit_paths =
     List.map
       (fun (u : Observation.unit_info) -> u.Observation.canonical)
@@ -171,27 +366,45 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
         ; owner_service= "" }
   in
   let unit_owner_class path = (owner_of_path path).owner_class in
-  let resource_of_api callee =
-    List.find_map
-      (fun (r : Policy.resource) ->
-        if
-          List.exists
-            (fun p -> Canonical.starts_with ~prefix:p callee)
-            r.Policy.api_prefixes
-        then Some r.Policy.resource_name
-        else None )
-      policy.Policy.resources
+  (* target service of a contract-member call: previous segment matches a
+     service stem *)
+  let contract_call_target (callee : string) :
+      (Szaniec_architecture_access.Cyrograf.service * string (* method *))
+      option =
+    let segs = Canonical.split_dots callee in
+    match List.rev segs with
+    | method_name :: prev :: _ -> (
+        let svc =
+          List.find_opt
+            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+              Szaniec_architecture_access.Cyrograf.segment_matches_service
+                ~service:s.Szaniec_architecture_access.Cyrograf.svc_name
+                prev )
+            cy.Szaniec_architecture_access.Cyrograf.services
+        in
+        match svc with
+        | Some s -> Some (s, method_name)
+        | None -> None )
+    | _ -> None
   in
-  let implementation_service module_path =
-    List.find_map
-      (fun (s : Policy.service) ->
-        if
-          List.exists
-            (fun m -> Canonical.matches ~declared:m module_path)
-            s.Policy.implementation_modules
-        then Some s.Policy.name
-        else None )
-      policy.Policy.services
+  let resource_of_api (callee : string) : string option =
+    match
+      List.find_opt
+        (fun (prefix, _) -> Canonical.starts_with ~prefix callee)
+        framework_resources
+    with
+    | Some (_, name) -> Some name
+    | None -> (
+      match
+        List.find_opt
+          (fun (r : Policy.resource) ->
+            List.exists
+              (fun p -> Canonical.starts_with ~prefix:p callee)
+              r.Policy.api_prefixes )
+          policy.Policy.resources
+      with
+      | Some r -> Some r.Policy.resource_name
+      | None -> None )
   in
   let node_of_call (c : Observation.call) : node =
     {n_unit= c.Observation.call_unit; n_symbol= c.Observation.caller}
@@ -274,6 +487,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
       kind
       from_owner
       to_service
+      to_method
       target_module
       resource
       api
@@ -283,6 +497,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
       { Interpretation.kind
       ; from_owner
       ; to_service
+      ; to_method
       ; target_module
       ; resource
       ; api
@@ -344,27 +559,96 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
     else
       let () = Hashtbl.replace visited key () in
       let () = Hashtbl.replace seen key () in
-      List.iter
-        (fun (c : Observation.call) ->
-          let site = c.Observation.site in
-          if c.Observation.resolution <> Observation.Resolved
-          then unresolved_gap c
-          else if String.length c.Observation.callee = 0
-          then ()
-          else
-            let callee = c.Observation.callee in
-            let from_owner = owner_of_path c.Observation.call_unit in
-            match resource_of_api callee with
-            | Some resource ->
-                record_interaction
-                  Interpretation.ResourceAccess
-                  (from_name c.Observation.call_unit)
-                  ""
-                  callee
-                  resource
-                  callee
-                  (path @ [callee])
-                  site
+      let handle (c : Observation.call) =
+        let site = c.Observation.site in
+        if c.Observation.resolution <> Observation.Resolved
+        then unresolved_gap c
+        else if String.length c.Observation.callee = 0
+        then ()
+        else
+          let callee = c.Observation.callee in
+          let from_owner = owner_of_path c.Observation.call_unit in
+          match resource_of_api callee with
+          | Some resource ->
+              record_interaction
+                Interpretation.ResourceAccess
+                (from_name c.Observation.call_unit)
+                ""
+                ""
+                callee
+                resource
+                callee
+                (path @ [callee])
+                site
+          | None -> (
+            match contract_call_target callee with
+            | Some (svc, method_name) ->
+                let target_unit =
+                  match target_of_callee callee with
+                  | Some t -> t.n_unit
+                  | None -> ""
+                in
+                let to_owner = owner_of_path target_unit in
+                let self_call =
+                  String.equal to_owner.owner_service from_owner.owner_service
+                  && from_owner.owner_service <> ""
+                in
+                let declared =
+                  List.exists
+                    (fun m ->
+                      String.equal
+                        m.Szaniec_architecture_access.Cyrograf.m_name
+                        method_name )
+                    svc.Szaniec_architecture_access.Cyrograf.svc_methods
+                in
+                let mechanic =
+                  List.exists
+                    (fun m -> String.equal m (last_segment callee))
+                    contract_mechanics
+                in
+                if (not declared) && not mechanic
+                then
+                  gaps :=
+                    { gap_code= "SPEC-UNDECLARED-METHOD"
+                    ; gap_path= site.Observation.site_path
+                    ; gap_detail=
+                        Printf.sprintf
+                          "call %s is not a declared rpc method of service %s"
+                          callee
+                          svc.Szaniec_architecture_access.Cyrograf.svc_name }
+                    :: !gaps ;
+                (* make_spec on the service's own contract is binding
+                   evidence. Any other non-mechanic member called from
+                   another boundary is a service request, including
+                   declared rpc methods. A self call (own proxy or codec)
+                   stays inside the boundary and is not an interaction. *)
+                if String.equal (last_segment callee) "make_spec"
+                then
+                  if self_call
+                  then
+                    record_interaction
+                      Interpretation.Registration
+                      (from_name c.Observation.call_unit)
+                      svc.Szaniec_architecture_access.Cyrograf.svc_name
+                      ""
+                      callee
+                      ""
+                      callee
+                      (path @ [callee])
+                      site
+                  else ()
+                else if (not self_call) && not mechanic
+                then
+                  record_interaction
+                    Interpretation.ServiceRequest
+                    (from_name c.Observation.call_unit)
+                    svc.Szaniec_architecture_access.Cyrograf.svc_name
+                    method_name
+                    callee
+                    ""
+                    callee
+                    (path @ [callee])
+                    site
             | None -> (
               match target_of_callee callee with
               | None ->
@@ -381,6 +665,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                     kind
                     (from_name c.Observation.call_unit)
                     ""
+                    ""
                     callee
                     ""
                     callee
@@ -395,12 +680,13 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                   match to_owner.owner_class with
                   | Interpretation.Contract_of s when self_call ->
                       (* own contract: binding evidence, not an interaction *)
-                      if Filename.basename callee = "make_spec"
+                      if String.equal (last_segment callee) "make_spec"
                       then
                         record_interaction
                           Interpretation.Registration
                           (from_name c.Observation.call_unit)
                           s
+                          ""
                           target.n_unit
                           ""
                           callee
@@ -411,6 +697,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                         Interpretation.ServiceRequest
                         (from_name c.Observation.call_unit)
                         s
+                        ""
                         target.n_unit
                         ""
                         callee
@@ -432,6 +719,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                         Interpretation.ImplementationAccess
                         (from_name c.Observation.call_unit)
                         s
+                        ""
                         target.n_unit
                         ""
                         callee
@@ -440,10 +728,11 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                   | Interpretation.CompositionRoot
                    |Interpretation.Unclassified
                    |Interpretation.ExternalLibrary _ ->
-                      (* no rule crosses into these; unclassified units report
-                           their own interactions as origins *)
+                      (* no rule crosses into these; unclassified units
+                             report their own interactions as origins *)
                       () ) ) )
-        (out_edges_of n)
+      in
+      List.iter handle (out_edges_of n)
   in
   let walkable (n : node) =
     match unit_owner_class n.n_unit with
@@ -471,45 +760,51 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
   List.iter
     (fun n -> if not (Hashtbl.mem seen (node_id n)) then walk_from n)
     leftover ;
-  (* registration evidence: make_spec calls on own contract were recorded
-     as Registration interactions; route-handler wiring recorded here *)
+  (* registration evidence: spec references passed to registration APIs *)
   let bindings =
     List.filter_map
       (fun (v : Observation.value_ref) ->
-        let caller_owner = owner_of_path v.Observation.ref_unit in
-        match caller_owner.owner_class with
-        | Interpretation.CompositionRoot ->
-            let is_wiring =
-              List.exists
-                (fun (c : Observation.call) ->
-                  String.equal c.Observation.call_unit v.Observation.ref_unit
-                  && String.equal c.Observation.caller v.Observation.ref_caller
-                  && List.exists
-                       (fun a -> String.equal a c.Observation.callee)
-                       (registration_apis @ route_apis) )
-                obs.Observation.calls
-            in
-            if is_wiring
-            then
-              match implementation_service v.Observation.ref_target with
-              | Some s ->
-                  Some
-                    { Interpretation.binding_service= s
-                    ; binding_kind= "registration"
-                    ; binding_module= v.Observation.ref_target }
-              | None -> (
-                match
-                  implementation_service
-                    (owner_of_path v.Observation.ref_target).owner_module
-                with
-                | Some s ->
+        if not (String.equal (last_segment v.Observation.ref_target) "spec")
+        then None
+        else
+          let caller_owner = owner_of_path v.Observation.ref_unit in
+          match caller_owner.owner_class with
+          | Interpretation.CompositionRoot -> (
+              let is_wiring =
+                List.exists
+                  (fun (c : Observation.call) ->
+                    String.equal c.Observation.call_unit v.Observation.ref_unit
+                    && String.equal
+                         c.Observation.caller
+                         v.Observation.ref_caller
+                    && List.exists
+                         (fun a -> String.equal a c.Observation.callee)
+                         (registration_apis @ route_apis) )
+                  obs.Observation.calls
+              in
+              if not is_wiring
+              then None
+              else
+                let target_unit =
+                  match
+                    Canonical.unit_prefix
+                      (List.map
+                         (fun (u : Observation.unit_info) ->
+                           u.Observation.canonical )
+                         obs.Observation.units )
+                      v.Observation.ref_target
+                  with
+                  | Some u -> u
+                  | None -> v.Observation.ref_target
+                in
+                match Hashtbl.find_opt impl_of target_unit with
+                | Some svc_name ->
                     Some
-                      { Interpretation.binding_service= s
-                      ; binding_kind= "route-handler"
+                      { Interpretation.binding_service= svc_name
+                      ; binding_kind= "registration"
                       ; binding_module= v.Observation.ref_target }
                 | None -> None )
-            else None
-        | _ -> None )
+          | _ -> None )
       obs.Observation.value_refs
   in
   (* implementation access by value reference, outside registration
@@ -540,6 +835,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                   Interpretation.ImplementationAccess
                   (from_name v.Observation.ref_unit)
                   s
+                  ""
                   target_unit
                   ""
                   v.Observation.ref_target
@@ -551,6 +847,7 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
                   Interpretation.ImplementationAccess
                   (from_name v.Observation.ref_unit)
                   s
+                  ""
                   target_unit
                   ""
                   v.Observation.ref_target
@@ -566,12 +863,14 @@ let interpret ~(policy : Policy.t) (obs : Observation.t) : Interpretation.t =
       ( Interpretation.kind_name a.kind
       , a.from_owner
       , a.to_service
+      , a.to_method
       , a.target_module
       , a.api
       , String.concat ">" a.evidence_path )
       ( Interpretation.kind_name b.kind
       , b.from_owner
       , b.to_service
+      , b.to_method
       , b.target_module
       , b.api
       , String.concat ">" b.evidence_path )

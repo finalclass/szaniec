@@ -1,7 +1,8 @@
 (include_subdirs no)
 
 (library
- (name well)
+ (name notification_manager_lib)
  (wrapped false)
+ (libraries contract well common)
  (flags
   (:standard -bin-annot)))

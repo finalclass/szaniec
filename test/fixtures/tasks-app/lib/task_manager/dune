@@ -1,7 +1,8 @@
 (include_subdirs no)
 
 (library
- (name well)
+ (name task_manager_lib)
  (wrapped false)
+ (libraries contract well common task_access_lib)
  (flags
   (:standard -bin-annot)))

@@ -3,7 +3,9 @@
 
 let report_format = "szaniec-report/1"
 
-let policy_format = "szaniec-policy/1"
+let callgraph_format = "szaniec-callgraph/1"
+
+let policy_format = "szaniec-policy/2"
 
 let approval_format = "szaniec-approval/1"
 
@@ -13,9 +15,9 @@ let interpretation_format = "szaniec-interpretation/1"
 
 let adapter_ocaml = "szaniec-ocaml-adapter/1.0.0"
 
-let adapter_well = "szaniec-well-adapter/1.0.0"
+let adapter_well = "szaniec-well-adapter/2.0.0"
 
-let rules = "szaniec-rules/1.0.0"
+let rules = "szaniec-rules/2.0.0"
 
 let default_profile = "well-ocaml-core"
 

@@ -1,0 +1,1 @@
+rpc publish(TextRequest) -> OkResponse

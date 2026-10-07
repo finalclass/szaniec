@@ -13,10 +13,8 @@ exception Policy_error of string
 
 (* When szaniec itself is invoked from inside a dune process (e.g. `dune
    exec` or a dune action), the injected variables point at the outer
-   workspace and break the nested build of the inspected project: toolchain
-   paths (DUNE_OCAML_*, OCAMLPATH), root detection (DUNE_SOURCEROOT,
-   INSIDE_DUNE) and path rewriting (BUILD_PATH_PREFIX_MAP). Strip them so
-   the nested dune resolves its own toolchain and roots. *)
+   workspace and break the nested build of the inspected project. Strip
+   them so the nested dune resolves its own toolchain and roots. *)
 let env_unsets_for_nested_dune : string list =
   Unix.environment ()
   |> Array.to_list
@@ -45,13 +43,243 @@ let run_dune_build (project_root : string) : int =
   ( try Unix.chdir project_root with
   | Sys_error _ -> () ) ;
   (* Incremental rebuild. Byte .cmt artifacts (which the adapter prefers)
-     survive no-op dune runs; changed sources force their rebuild, so this
-     restores freshness for mutated trees. *)
+     survive no-op dune runs; changed sources force their rebuild. *)
   let unsets = String.concat " " env_unsets_for_nested_dune in
-  let code = Sys.command ("unset " ^ unsets ^ "; dune build") in
+  (* DUNE_CACHE=disabled: cache-restored artifacts carry old mtimes, which
+     would defeat the mtime-based freshness check *)
+  let code =
+    Sys.command ("unset " ^ unsets ^ "; DUNE_CACHE=disabled dune build")
+  in
   ( try Unix.chdir old_cwd with
   | Sys_error _ -> () ) ;
   code
+
+(* Project the interpretation onto the per-service/per-method call
+   network. *)
+let build_callgraph
+    ~(cy : Szaniec_architecture_access.Cyrograf.t)
+    ~(observation : Observation.t)
+    ~(interpretation : Interpretation.t) : Callgraph.t =
+  let idx : (string * string, Callgraph.method_info ref) Hashtbl.t =
+    Hashtbl.create 32
+  in
+  let services =
+    List.map
+      (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+        { Callgraph.si_name= s.Szaniec_architecture_access.Cyrograf.svc_name
+        ; si_role=
+            Szaniec_architecture_access.Cyrograf.role_to_string
+              s.Szaniec_architecture_access.Cyrograf.svc_role
+        ; si_methods=
+            List.map
+              (fun (m : Szaniec_architecture_access.Cyrograf.method_decl) ->
+                { Callgraph.mi_name=
+                    m.Szaniec_architecture_access.Cyrograf.m_name
+                ; mi_request= m.Szaniec_architecture_access.Cyrograf.m_request
+                ; mi_response= m.Szaniec_architecture_access.Cyrograf.m_response
+                ; mi_calls= []
+                ; mi_called_by= [] } )
+              s.Szaniec_architecture_access.Cyrograf.svc_methods } )
+      cy.Szaniec_architecture_access.Cyrograf.services
+  in
+  List.iter
+    (fun (si : Callgraph.service_info) ->
+      List.iter
+        (fun (mi : Callgraph.method_info) ->
+          Hashtbl.replace
+            idx
+            (si.Callgraph.si_name, mi.Callgraph.mi_name)
+            (ref mi) )
+        si.Callgraph.si_methods )
+    services ;
+  (* Attribute a boundary-crossing interaction to the rpc method that
+     originated it. The evidence path starts at `Unit.Symbol` (for
+     example `Task_manager_impl.Impl.add`); the symbol may contain
+     module nesting, so the unit is the longest owned prefix and the
+     method is the symbol's last segment. Only a declared rpc method of
+     that service is a callgraph node. *)
+  let starts_with (s : string) (prefix : string) : bool =
+    let n = String.length prefix in
+    String.length s >= n && String.sub s 0 n = prefix
+  in
+  let method_of_symbol (symbol : string) : (string * string) option =
+    let owners =
+      List.filter
+        (fun (own : Interpretation.ownership) ->
+          own.Interpretation.owner_service <> ""
+          && ( String.equal symbol own.Interpretation.owner_module
+             || starts_with symbol (own.Interpretation.owner_module ^ ".") ) )
+        interpretation.Interpretation.ownerships
+      |> List.sort (fun a b ->
+          compare
+            (String.length b.Interpretation.owner_module)
+            (String.length a.Interpretation.owner_module) )
+    in
+    match owners with
+    | [] -> None
+    | own :: _ ->
+        let prefix = own.Interpretation.owner_module ^ "." in
+        let rest =
+          if starts_with symbol prefix
+          then
+            String.sub
+              symbol
+              (String.length prefix)
+              (String.length symbol - String.length prefix)
+          else ""
+        in
+        let method_name =
+          match List.rev (String.split_on_char '.' rest) with
+          | name :: _ when name <> "" -> name
+          | _ -> ""
+        in
+        let declared =
+          List.exists
+            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+              String.equal
+                s.Szaniec_architecture_access.Cyrograf.svc_name
+                own.Interpretation.owner_service
+              && List.exists
+                   (fun (m : Szaniec_architecture_access.Cyrograf.method_decl)
+                      ->
+                     String.equal
+                       m.Szaniec_architecture_access.Cyrograf.m_name
+                       method_name )
+                   s.Szaniec_architecture_access.Cyrograf.svc_methods )
+            cy.Szaniec_architecture_access.Cyrograf.services
+        in
+        if declared
+        then Some (own.Interpretation.owner_service, method_name)
+        else None
+  in
+  let method_of_origin (_owner : string) (evidence : string list) :
+      (string * string) option =
+    match evidence with
+    | origin :: _ -> method_of_symbol origin
+    | [] -> None
+  in
+  let add_edge src tgt sites =
+    match Hashtbl.find_opt idx src with
+    | None -> ()
+    | Some r -> (
+        let mi = !r in
+        match
+          List.find_opt
+            (fun (e : Callgraph.edge) ->
+              Callgraph.compare_target e.Callgraph.target tgt = 0 )
+            mi.Callgraph.mi_calls
+        with
+        | Some e ->
+            r :=
+              { mi with
+                Callgraph.mi_calls=
+                  List.sort
+                    Callgraph.compare_edge
+                    ( { e with
+                        Callgraph.sites=
+                          List.sort_uniq compare (e.Callgraph.sites @ sites) }
+                    :: List.filter
+                         (fun x ->
+                           Callgraph.compare_target x.Callgraph.target tgt <> 0 )
+                         mi.Callgraph.mi_calls ) }
+        | None ->
+            r :=
+              { mi with
+                Callgraph.mi_calls=
+                  List.sort
+                    Callgraph.compare_edge
+                    ({Callgraph.target= tgt; sites} :: mi.Callgraph.mi_calls) }
+        )
+  in
+  let add_called_by tgt src =
+    match Hashtbl.find_opt idx tgt with
+    | None -> ()
+    | Some r ->
+        let mi = !r in
+        if not (List.mem src mi.Callgraph.mi_called_by)
+        then
+          r :=
+            { mi with
+              Callgraph.mi_called_by=
+                List.sort compare (src :: mi.Callgraph.mi_called_by) }
+  in
+  List.iter
+    (fun (i : Interpretation.interaction) ->
+      let tgt =
+        match i.Interpretation.kind with
+        | Interpretation.ServiceRequest when i.Interpretation.to_method <> "" ->
+            Some
+              (Callgraph.Service_method
+                 (i.Interpretation.to_service, i.Interpretation.to_method) )
+        | Interpretation.ServiceRequest ->
+            Some
+              (Callgraph.Service_method
+                 (i.Interpretation.to_service, i.Interpretation.api) )
+        | Interpretation.ResourceAccess ->
+            Some (Callgraph.Resource_target i.Interpretation.resource)
+        | Interpretation.ExternalCall ->
+            Some (Callgraph.External_target i.Interpretation.api)
+        | Interpretation.ImplementationAccess ->
+            Some (Callgraph.External_target i.Interpretation.target_module)
+        | Interpretation.Registration
+         |Interpretation.MessagingEvidence ->
+            None
+      in
+      match
+        ( tgt
+        , method_of_origin
+            i.Interpretation.from_owner
+            i.Interpretation.evidence_path )
+      with
+      | Some tgt, Some src -> (
+          add_edge src tgt i.Interpretation.sites ;
+          (* calledBy is the reverse projection over service methods
+             only; a client page is not a cyrograf method *)
+          match tgt with
+          | Callgraph.Service_method (a, b) when Hashtbl.mem idx src ->
+              add_called_by (a, b) src
+          | _ -> () )
+      | _ -> () )
+    interpretation.Interpretation.interactions ;
+  let services =
+    List.map
+      (fun (si : Callgraph.service_info) ->
+        { si with
+          Callgraph.si_methods=
+            List.map
+              (fun (mi : Callgraph.method_info) ->
+                match
+                  Hashtbl.find_opt
+                    idx
+                    (si.Callgraph.si_name, mi.Callgraph.mi_name)
+                with
+                | Some r -> !r
+                | None -> mi )
+              si.Callgraph.si_methods } )
+      services
+  in
+  let unresolved =
+    List.filter_map
+      (fun (c : Observation.call) ->
+        if c.Observation.resolution <> Observation.Resolved
+        then
+          Some
+            (c.Observation.call_unit, c.Observation.caller, c.Observation.site)
+        else None )
+      observation.Observation.calls
+    |> List.sort_uniq compare
+  in
+  let unclassified =
+    List.filter_map
+      (fun (o : Interpretation.ownership) ->
+        match o.Interpretation.owner_class with
+        | Interpretation.Unclassified -> Some o.Interpretation.owner_module
+        | _ -> None )
+      interpretation.Interpretation.ownerships
+  in
+  { Callgraph.services
+  ; unresolved
+  ; unclassified_units= List.sort_uniq compare unclassified }
 
 let check (req : request) : Finding.report =
   (* 1. resolve the approved policy *)
@@ -82,34 +310,59 @@ let check (req : request) : Finding.report =
         (String.length p - String.length root - 1)
     else Filename.basename p
   in
-  (* 2. observe the program *)
-  if req.rebuild then ignore (run_dune_build req.project_root) ;
+  (* services come from the cyrograf contract files *)
+  let cy =
+    match
+      Szaniec_architecture_access.Cyrograf.load
+        ~project_root:req.project_root
+        ~program_roots:policy.Policy.program_roots
+    with
+    | Ok cy -> cy
+    | Error e -> raise (Policy_error e)
+  in
+  (* 2. observe the program; a successful rebuild guarantees that dune's
+     content-tracked artifacts are current, so freshness is assumed for
+     them; without a rebuild freshness is verified by mtimes *)
+  let assume_fresh =
+    if req.rebuild
+    then
+      let code = run_dune_build req.project_root in
+      code = 0
+    else false
+  in
   let observation =
     Szaniec_program_access.Ocaml_adapter.observe
       ~project_root:req.project_root
       ~program_roots:policy.Policy.program_roots
+      ~assume_fresh
       ()
   in
   (* 3. interpret *)
   let interpretation =
-    Szaniec_interpretation_engine.Well_adapter.interpret ~policy observation
+    Szaniec_interpretation_engine.Well_adapter.interpret ~policy ~cy observation
   in
   (* 4. evaluate *)
   let violations =
     Szaniec_conformance_engine.Conformance_engine.evaluate
       ~policy
+      ~cy
       ~observation
       ~interpretation
   in
+  let callgraph = build_callgraph ~cy ~observation ~interpretation in
   let obs_gaps =
     List.map
       Szaniec_conformance_engine.Conformance_engine.gap_finding
       observation.Observation.gaps
   in
+  (* SPEC-UNDECLARED-METHOD travels on the gap channel so the
+     conformance engine can turn it into a violation. It is not an
+     analysis gap and must not force exit 2. *)
   let interp_gaps =
-    List.map
-      Szaniec_conformance_engine.Conformance_engine.gap_finding
-      interpretation.Interpretation.gaps
+    interpretation.Interpretation.gaps
+    |> List.filter (fun (g : Observation.gap) ->
+        not (String.equal g.Observation.gap_code "SPEC-UNDECLARED-METHOD") )
+    |> List.map Szaniec_conformance_engine.Conformance_engine.gap_finding
   in
   let approval_gap_findings =
     match approval_gap with
@@ -162,12 +415,13 @@ let check (req : request) : Finding.report =
               resolution
                 .Szaniec_architecture_access.Architecture_access.approved_digest
           }
-      ; profile= policy.Policy.profile
+      ; profile= Version.default_profile
       ; program_roots= policy.Policy.program_roots
       ; snapshot_digest= observation.Observation.snapshot_digest
       ; compiler
       ; exclusions= Szaniec_interpretation_engine.Well_adapter.exclusions }
   ; findings= all_findings
+  ; callgraph= Some callgraph
   ; summary=
       { Finding.violations= n_violations
       ; gaps= n_gaps

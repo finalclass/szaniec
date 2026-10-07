@@ -29,25 +29,21 @@ let sc
 
 let fixture_policy_edited =
   ( "szaniec/policy.json"
-  , {|    { "from": "WebClient", "to": "TaskManager" },
-    { "from": "TaskManager", "to": "TaskAccess" }|}
-  , {|    { "from": "WebClient", "to": "TaskManager" },
-    { "from": "TaskManager", "to": "TaskAccess" },
-    { "from": "TaskManager", "to": "NotificationManager" }|}
-  )
+  , {|"policyName": "tasks-app"|}
+  , {|"policyName": "tasks-app-edited"|} )
 
 let scenarios =
   [ sc "base-pass" ~check_twice:true
   ; sc
       "client-access-direct"
       ~mutations:
-        [ ( "lib/pages/tasks_page.ml"
+        [ ( "lib/web_client/tasks_page.ml"
           , "Task_manager.add ~ctx:ctx_w ~title:req.title"
           , "Task_access.create ~ctx:ctx_w ~title:req.title" ) ]
   ; sc
       "client-access-via-helper"
       ~mutations:
-        [ ( "lib/pages/tasks_page.ml"
+        [ ( "lib/web_client/tasks_page.ml"
           , {|let tasks_handler req =
   ignore req ;
   let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
@@ -66,28 +62,30 @@ let tasks_handler req =
   ; sc
       "engine-engine"
       ~mutations:
-        [ ( "lib/services/template_engine_impl.ml"
+        [ ( "lib/template_engine/template_engine_impl.ml"
           , {|let expand _ctx text = "{" ^ text ^ "}"|}
           , {|let expand ctx text = "{" ^ Formatting_engine.render ~ctx ~text ^ "}"|}
           ) ]
   ; sc
       "bypass-contract"
       ~mutations:
-        [ ( "lib/services/task_manager_impl.ml"
+        [ ( "lib/task_manager/task_manager_impl.ml"
           , {|(Task_manager.list ~ctx ~limit:req.limit).tasks|}
           , {|Task_access_impl.Impl.list ctx req|} ) ]
   ; sc
       "shared-unapproved"
       ~mutations:
-        [ ( "lib/services/task_manager_impl.ml"
+        [ ( "lib/task_manager/task_manager_impl.ml"
           , {|    Task_access.create ~ctx ~title:req.title|}
-          , {|    let _h = Common.Json_util.sha_hex req.title in
+          , {|    let _h = Json_util.sha_hex req.title in
     Task_access.create ~ctx ~title:req.title|}
           ) ]
+    (* Manager -> Manager is allowed by the don'ts, so the absence of
+     an edge list is not a violation. *)
   ; sc
       "layer-correct-unapproved"
       ~mutations:
-        [ ( "lib/services/task_manager_impl.ml"
+        [ ( "lib/task_manager/task_manager_impl.ml"
           , {|    Task_access.create ~ctx ~title:req.title|}
           , {|    ignore (Notification_manager.publish ~ctx ~text:req.title);
     Task_access.create ~ctx ~title:req.title|}
@@ -95,7 +93,7 @@ let tasks_handler req =
   ; sc
       "resource-boundary"
       ~mutations:
-        [ ( "lib/pages/help_page.ml"
+        [ ( "lib/web_client/help_page.ml"
           , {|  let _s = Shared.render_title "help" in|}
           , {|  let _s = Shared.render_title "help" in
   let _c = Well.Db.with_conn (Well.Db.create_pool ()) (fun _db -> 0) in|}
@@ -103,7 +101,7 @@ let tasks_handler req =
   ; sc
       "unresolved-call"
       ~mutations:
-        [ ( "lib/pages/tasks_page.ml"
+        [ ( "lib/web_client/tasks_page.ml"
           , {|  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
   let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
           , {|  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
@@ -112,40 +110,34 @@ let tasks_handler req =
   ; sc
       "stale-artifacts"
       ~mutations:
-        [ ( "lib/pages/tasks_page.ml"
+        [ ( "lib/web_client/tasks_page.ml"
           , {|(* Client layer — page handler calls the TaskManager service *)|}
           , {|(* Client layer — page handler calls the TaskManager service *)
 (* edited after the last build *)|}
           ) ]
       ~no_rebuild:true
   ; sc "policy-edited" ~mutations:[fixture_policy_edited] ~reapprove:true
+    (* A unit outside every service and client family, called by nobody,
+     stays unowned. A page under web_client would be a client. *)
   ; sc
       "unclassified-code"
-      ~mutations:
-        [ ( "lib/app.ml"
-          , {|  Well.get "/help" Pages.Help_page.help_handler ;|}
-          , {|  Well.get "/help" Pages.Help_page.help_handler ;
-  Well.get "/contact" Pages.Contact_page.contact_handler ;|}
-          ) ]
       ~add_files:
-        [ ( "lib/pages/contact_page.ml"
-          , {|(* New client page without a policy declaration *)
+        [ ( "lib/orphan.ml"
+          , {|(* In-scope unit with no service, client or composition-root role *)
 
-let contact_handler req =
-  ignore req ;
-  0
+let ping () = 0
 |}
           ) ]
   ; sc
       "violations-and-gaps"
       ~mutations:
-        [ ( "lib/pages/tasks_page.ml"
+        [ ( "lib/web_client/tasks_page.ml"
           , {|  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
   let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
           , {|  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
   let _task = dispatcher "x" in|}
           )
-        ; ( "lib/pages/help_page.ml"
+        ; ( "lib/web_client/help_page.ml"
           , {|  let _s = Shared.render_title "help" in|}
           , {|  let _s = Shared.render_title "help" in
   let _task =
@@ -298,7 +290,11 @@ let prepare_work (fixture : string) : string =
     (* one clean build so every scenario starts from a complete artifact set *)
     let old_cwd = Sys.getcwd () in
     Unix.chdir work_dir ;
-    let _code = capture (clean_env_prefix ^ "dune clean && dune build") in
+    let _code =
+      capture
+        ( clean_env_prefix
+        ^ "DUNE_CACHE=disabled dune clean && DUNE_CACHE=disabled dune build" )
+    in
     Unix.chdir old_cwd ;
     work_prepared := true ) ;
   work_dir
@@ -348,7 +344,10 @@ let run_scenario (exe : string) (fixture : string) (s : scenario) : string =
 
 (* ── driver ───────────────────────────────────────────────────────── *)
 
-let () = at_exit (fun () -> remove_tree temp_root)
+let () =
+  if Sys.getenv_opt "SZANIEC_KEEP" = Some "1"
+  then ()
+  else at_exit (fun () -> remove_tree temp_root)
 
 let () =
   match Sys.argv with

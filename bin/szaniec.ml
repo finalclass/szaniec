@@ -6,7 +6,7 @@ let usage =
   "usage:\n\
   \ szaniec approve --policy <path> [--approval <path>]\n\
   \ szaniec check --policy <path> [--approval <path>] [--project-root <dir>]\n\
-  \               [--rebuild] [--json]"
+  \               [--rebuild] [--json] [--out <path>] [--no-callgraph]"
 
 type args =
   { command: string
@@ -14,7 +14,9 @@ type args =
   ; approval: string option
   ; project_root: string
   ; rebuild: bool
-  ; json: bool }
+  ; json: bool
+  ; out: string option
+  ; no_callgraph: bool }
 
 let rec parse (argv : string list) (acc : args) : args =
   match argv with
@@ -24,6 +26,8 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--project-root" :: p :: rest -> parse rest {acc with project_root= p}
   | "--rebuild" :: rest -> parse rest {acc with rebuild= true}
   | "--json" :: rest -> parse rest {acc with json= true}
+  | "--out" :: p :: rest -> parse rest {acc with out= Some p}
+  | "--no-callgraph" :: rest -> parse rest {acc with no_callgraph= true}
   | cmd :: rest when acc.command = "" && (cmd = "check" || cmd = "approve") ->
       parse rest {acc with command= cmd}
   | bad :: _ ->
@@ -37,7 +41,9 @@ let default_args =
   ; approval= Some "szaniec/approval.json"
   ; project_root= Sys.getcwd ()
   ; rebuild= false
-  ; json= false }
+  ; json= false
+  ; out= None
+  ; no_callgraph= false }
 
 (* ── rendering ────────────────────────────────────────────────────── *)
 
@@ -190,6 +196,99 @@ let json_report (r : Finding.report) : string =
   in
   Yojson.Safe.to_string json ^ "\n"
 
+let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
+  let jsite (s : Observation.site) =
+    `Assoc
+      [ ("path", `String s.Observation.site_path)
+      ; ("line", `Int s.Observation.line)
+      ; ("col", `Int s.Observation.col) ]
+  in
+  let jtarget (t : Callgraph.target) =
+    match t with
+    | Callgraph.Service_method (svc, method_name) ->
+        `Assoc [("service", `String svc); ("method", `String method_name)]
+    | Callgraph.Resource_target n ->
+        `Assoc [("kind", `String "resource"); ("name", `String n)]
+    | Callgraph.External_target api ->
+        `Assoc [("kind", `String "external"); ("api", `String api)]
+    | Callgraph.Unresolved_target detail ->
+        `Assoc [("kind", `String "unresolved"); ("detail", `String detail)]
+  in
+  let jedge (e : Callgraph.edge) =
+    `Assoc
+      [ ("to", jtarget e.Callgraph.target)
+      ; ("sites", `List (List.map jsite e.Callgraph.sites)) ]
+  in
+  let jmethod (m : Callgraph.method_info) =
+    `Assoc
+      [ ("name", `String m.Callgraph.mi_name)
+      ; ("request", `String m.Callgraph.mi_request)
+      ; ("response", `String m.Callgraph.mi_response)
+      ; ("calls", `List (List.map jedge m.Callgraph.mi_calls))
+      ; ( "calledBy"
+        , `List
+            (List.map
+               (fun (svc, method_name) ->
+                 `Assoc
+                   [("service", `String svc); ("method", `String method_name)] )
+               m.Callgraph.mi_called_by ) ) ]
+  in
+  let jservice (s : Callgraph.service_info) =
+    `Assoc
+      [ ("name", `String s.Callgraph.si_name)
+      ; ("role", `String s.Callgraph.si_role)
+      ; ("methods", `List (List.map jmethod s.Callgraph.si_methods)) ]
+  in
+  let junresolved (unit_name, caller, site) =
+    `Assoc
+      [ ("unit", `String unit_name)
+      ; ("caller", `String caller)
+      ; ("site", jsite site) ]
+  in
+  let json =
+    `Assoc
+      [ ("format", `String Version.callgraph_format)
+      ; ( "inputs"
+        , `Assoc
+            [ ("policyName", `String inputs.Finding.policy.Finding.policy_name)
+            ; ( "policyDigest"
+              , `String inputs.Finding.policy.Finding.policy_digest )
+            ; ("snapshotDigest", `String inputs.Finding.snapshot_digest)
+            ; ("programAccess", `String Version.adapter_ocaml)
+            ; ("interpretation", `String Version.adapter_well)
+            ; ("rules", `String Version.rules) ] )
+      ; ("services", `List (List.map jservice cg.Callgraph.services))
+      ; ("unresolved", `List (List.map junresolved cg.Callgraph.unresolved))
+      ; ( "unclassifiedUnits"
+        , `List (List.map (fun u -> `String u) cg.Callgraph.unclassified_units)
+        ) ]
+  in
+  Yojson.Safe.to_string json ^ "\n"
+
+let write_callgraph (r : Finding.report) (out : string option) (root : string) :
+    unit =
+  match r.Finding.callgraph with
+  | None -> ()
+  | Some cg -> (
+      let path =
+        match out with
+        | Some p -> p
+        | None -> Filename.concat root "szaniec.json"
+      in
+      match cg.Callgraph.services with
+      | []
+        when cg.Callgraph.unresolved = []
+             && cg.Callgraph.unclassified_units = [] ->
+          ()
+      | _ -> (
+        try
+          let oc = open_out path in
+          output_string oc (callgraph_json cg r.Finding.inputs) ;
+          close_out oc
+        with
+        | Sys_error e ->
+            prerr_endline ("szaniec: cannot write " ^ path ^ ": " ^ e) ) )
+
 let exit_code (r : Finding.report) : int =
   match r.Finding.status with
   | Ok -> 0
@@ -254,6 +353,8 @@ let () =
             ; approval_path
             ; rebuild= args.rebuild }
         in
+        if not args.no_callgraph
+        then write_callgraph report args.out args.project_root ;
         print_string
           (if args.json then json_report report else text_report report) ;
         exit (exit_code report)

@@ -126,9 +126,30 @@ let compiler_series_of_args (args : string array) : string =
         | major :: minor :: _ -> major ^ "." ^ minor
         | _ -> "unknown" )
 
-let md5_hex (path : string) : string =
-  try Digest.to_hex (Digest.file path) with
-  | Sys_error _ -> ""
+(* [true] when the source file is not older than the artifact. The typed
+   tree records the preprocessed source (pp.ml), so content digests cannot
+   verify freshness against the original source; dune's dependency tracking
+   plus an mtime comparison give the safe direction: an artifact older than
+   its source is stale, a touch without content change reports stale too
+   (rebuild clears it) and stale evidence is never used as current. *)
+let fresher_or_equal (source : string) (artifact : string) : bool =
+  try
+    (Unix.stat source).Unix.st_mtime <= (Unix.stat artifact).Unix.st_mtime
+  with
+  | Unix.Unix_error _ ->
+      false (* disappeared mid-scan (e.g. concurrent build) *)
+
+(* Map the source file recorded in the artifact back to the project source:
+   dune pp targets are [x.pp.ml] (from [x.ml]) and [x.mlx.pp.ml] (from
+   [x.mlx]). Returns [Some path] for a plain-ML source and [None] for units
+   derived from another file type (e.g. .mlx view files, a declared profile
+   exclusion). *)
+let real_source (sourcefile : string) : string option =
+  if Filename.check_suffix sourcefile ".mlx.pp.ml"
+  then None
+  else if Filename.check_suffix sourcefile ".pp.ml"
+  then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
+  else Some sourcefile
 
 let sha256_hex (s : string) : string =
   Digestif.SHA256.to_hex (Digestif.SHA256.digest_string s)
@@ -372,11 +393,19 @@ let rec record_call
         ; site= site_of_loc ~project_root:c.project_root loc }
         :: facts.calls
   | _ ->
+      (* Keep the reason the walker already decided. A local variable is
+         not a canonical path, but it is not an arbitrary dynamic
+         expression either. *)
+      let resolution =
+        if resolution = Observation.Resolved
+        then Observation.Unresolved_dynamic
+        else resolution
+      in
       facts.calls <-
         { Observation.call_unit= c.unit_canonical
         ; caller
         ; callee= ""
-        ; resolution= Observation.Unresolved_dynamic
+        ; resolution
         ; site= site_of_loc ~project_root:c.project_root loc }
         :: facts.calls
 
@@ -718,8 +747,14 @@ let in_scope (roots : string list) (path : string) : bool =
          && String.sub path 0 (String.length root + 1) = root // "" )
     roots
 
-let observe ~(project_root : string) ~(program_roots : string list) () :
-    Observation.t =
+(* [assume_fresh] marks every existing artifact as current: the caller
+   performed a successful rebuild, and dune guarantees content freshness of
+   its outputs. Without it, freshness is verified by comparing mtimes. *)
+let observe
+    ~(project_root : string)
+    ~(program_roots : string list)
+    ~(assume_fresh : bool)
+    () : Observation.t =
   let sources = scan_sources project_root program_roots in
   let artifacts = scan_artifacts project_root in
   let gaps = ref [] in
@@ -762,98 +797,98 @@ let observe ~(project_root : string) ~(program_roots : string list) () :
   let compiler_series = ref "unknown" in
   List.iter
     (fun (lib, modname, artifact, cmt) ->
-      let source_path =
+      let recorded =
         match cmt.Cmt_format.cmt_sourcefile with
         | Some f -> f
         | None -> ""
       in
-      if
-        source_path = ""
-        || Filename.check_suffix source_path ".ml-gen"
-        || not (in_scope program_roots source_path)
-      then ()
-      else if
-        Hashtbl.find_opt units_tbl modname
-        |> Option.map (fun a -> not (String.equal a artifact))
-        |> Option.value ~default:false
-      then ()
-      else if not (Sys.file_exists (project_root // source_path))
-      then ()
-      else
-        let series = compiler_series_of_args cmt.Cmt_format.cmt_args in
-        if !compiler_series = "unknown" then compiler_series := series ;
-        if series <> Version.supported_compiler_series
-        then
-          gaps :=
-            { Observation.gap_code= "GAP-UNSUPPORTED-COMPILER"
-            ; gap_path= source_path
-            ; gap_detail=
-                Printf.sprintf
-                  "artifact built with compiler series %s, adapter supports %s"
-                  series
-                  Version.supported_compiler_series }
-            :: !gaps
-        else
-          let file_digest = md5_hex (project_root // source_path) in
-          let cmt_digest =
-            match cmt.Cmt_format.cmt_source_digest with
-            | Some d -> Digest.to_hex d
-            | None -> ""
-          in
-          let fresh =
-            file_digest <> "" && String.equal file_digest cmt_digest
-          in
-          let unit_canonical =
-            Canonical.of_unit_name ~library:lib ~unit_name:modname
-          in
-          if not fresh
-          then (
-            let detail =
-              if file_digest = ""
-              then "source file missing"
-              else "source changed after the artifact was built"
-            in
-            gaps :=
-              { Observation.gap_code= "GAP-STALE-ARTIFACT"
-              ; gap_path= source_path
-              ; gap_detail= detail }
-              :: !gaps ;
-            units :=
-              { Observation.unit_id= modname
-              ; canonical= unit_canonical
-              ; source_path
-              ; source_digest= cmt_digest
-              ; artifact_path= artifact
-              ; fresh= false }
-              :: !units )
+      match real_source recorded with
+      | None -> () (* .mlx-derived unit: declared profile exclusion *)
+      | Some source_path ->
+          if
+            source_path = ""
+            || Filename.check_suffix source_path ".ml-gen"
+            || not (in_scope program_roots source_path)
+          then ()
+          else if
+            Hashtbl.find_opt units_tbl modname
+            |> Option.map (fun a -> not (String.equal a artifact))
+            |> Option.value ~default:false
+          then ()
           else
-            let facts =
-              {calls= []; vrefs= []; trefs= []; symbols= []; unsupported= []}
-            in
-            walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
-            gaps :=
-              List.map
-                (fun site ->
-                  { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
-                  ; gap_path= site.Observation.site_path
-                  ; gap_detail=
-                      Printf.sprintf
-                        "construct at line %d cannot be followed by this \
-                         adapter"
-                        site.Observation.line } )
-                (List.sort_uniq compare facts.unsupported)
-              @ !gaps ;
-            calls := List.rev_append facts.calls !calls ;
-            vrefs := List.rev_append facts.vrefs !vrefs ;
-            trefs := List.rev_append facts.trefs !trefs ;
-            units :=
-              { Observation.unit_id= modname
-              ; canonical= unit_canonical
-              ; source_path
-              ; source_digest= cmt_digest
-              ; artifact_path= artifact
-              ; fresh= true }
-              :: !units )
+            let series = compiler_series_of_args cmt.Cmt_format.cmt_args in
+            if !compiler_series = "unknown" then compiler_series := series ;
+            if series <> Version.supported_compiler_series
+            then
+              gaps :=
+                { Observation.gap_code= "GAP-UNSUPPORTED-COMPILER"
+                ; gap_path= source_path
+                ; gap_detail=
+                    Printf.sprintf
+                      "artifact built with compiler series %s, adapter \
+                       supports %s"
+                      series
+                      Version.supported_compiler_series }
+                :: !gaps
+            else
+              let source_abs = project_root // source_path in
+              let source_exists = Sys.file_exists source_abs in
+              let fresh =
+                source_exists
+                && ( assume_fresh
+                   || fresher_or_equal source_abs (project_root // artifact) )
+              in
+              let unit_canonical =
+                Canonical.of_unit_name ~library:lib ~unit_name:modname
+              in
+              if not fresh
+              then (
+                let detail =
+                  if source_exists
+                  then "source changed after the artifact was built"
+                  else "source file missing"
+                in
+                gaps :=
+                  { Observation.gap_code= "GAP-STALE-ARTIFACT"
+                  ; gap_path= source_path
+                  ; gap_detail= detail }
+                  :: !gaps ;
+                units :=
+                  { Observation.unit_id= modname
+                  ; canonical= unit_canonical
+                  ; source_path
+                  ; source_digest= ""
+                  ; artifact_path= artifact
+                  ; fresh= false }
+                  :: !units )
+              else
+                let facts =
+                  {calls= []; vrefs= []; trefs= []; symbols= []; unsupported= []}
+                in
+                walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+                gaps :=
+                  List.map
+                    (fun site ->
+                      { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
+                      ; gap_path= site.Observation.site_path
+                      ; gap_detail=
+                          Printf.sprintf
+                            "construct at line %d cannot be followed by this \
+                             adapter"
+                            site.Observation.line } )
+                    (List.sort_uniq compare facts.unsupported)
+                  @ !gaps ;
+                calls := List.rev_append facts.calls !calls ;
+                vrefs := List.rev_append facts.vrefs !vrefs ;
+                trefs := List.rev_append facts.trefs !trefs ;
+                units :=
+                  { Observation.unit_id= modname
+                  ; canonical= unit_canonical
+                  ; source_path
+                  ; source_digest= ""
+                  ; artifact_path= artifact
+                  ; fresh= true }
+                  :: !units )
     read_infos ;
   (* sources without artifacts *)
   List.iter

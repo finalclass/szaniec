@@ -118,9 +118,14 @@ allowed interactions, resources, and library usage. If the architecture already 
 an authoritative specification, use a deterministic projection rather than another
 independently maintained list. The projection format remains to be designed.
 
-Do not infer roles from suffixes. A file named `utility` is not automatically approved
-infrastructure. New in-scope code without ownership produces a diagnostic.
+If the architecture has contract files (`.cyrograf`), services are read
+from them: a contract declaring `rpc` methods is a service, and its
+declared methods are its public surface. Roles are inferred from the
+service name suffix (`manager`, `client`, `engine`, `access`; any other
+name is a Utility) — see
+[the decision record](docs/decisions/donts-based-rules.md).
 
+New in-scope code without ownership produces a diagnostic.
 Distinguish:
 
 1. A private helper within one service: inside its boundary.
@@ -176,12 +181,13 @@ skipping files is not an acceptable coverage strategy.
 
 Implementation-level contracts resolved under this architecture:
 
-- [Policy format](docs/contracts/policy-format.md) — `szaniec-policy/1`, approved-policy selection, ownership matching.
+- [Policy format](docs/contracts/policy-format.md) — `szaniec-policy/2`, approved-policy selection, ownership matching.
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
-- [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, determinism and exit statuses.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/1.0.0`.
+- [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
+- [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
 
 ## Basis
 
