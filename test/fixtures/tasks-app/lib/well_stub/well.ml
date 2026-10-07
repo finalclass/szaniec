@@ -47,3 +47,60 @@ let form req key =
   ""
 
 let run () = ()
+
+(* Verified messaging surface. Well.request is a queued command: it
+   publishes internally and is not a publication. Topic identity for
+   these typed helpers is the value passed in, not the channel string. *)
+
+type topic = {channel: string}
+
+let topic channel _serialize _deserialize =
+  ignore channel ;
+  {channel}
+
+let publish ?ephemeral topic value =
+  ignore ephemeral ;
+  ignore topic ;
+  ignore value
+
+let publish_keyed ?ephemeral topic ~key value =
+  ignore ephemeral ;
+  ignore topic ;
+  ignore key ;
+  ignore value
+
+let subscribe ?live_only topic callback =
+  ignore live_only ;
+  ignore topic ;
+  ignore callback ;
+  0
+
+let subscribe_keyed ?live_only topic callback =
+  ignore live_only ;
+  ignore topic ;
+  ignore callback ;
+  0
+
+let request ~cmd ~reply ~key ?(timeout = 5.0) value =
+  ignore cmd ;
+  ignore reply ;
+  ignore key ;
+  ignore timeout ;
+  value
+
+module MessageBus = struct
+  let publish channel payload =
+    ignore channel ;
+    ignore payload ;
+    0
+
+  let subscribe pattern callback =
+    ignore pattern ;
+    ignore callback ;
+    0
+
+  let once channel callback =
+    ignore channel ;
+    ignore callback ;
+    0
+end

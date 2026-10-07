@@ -189,7 +189,108 @@ type facts =
   ; mutable vrefs: Observation.value_ref list
   ; mutable trefs: Observation.type_ref list
   ; mutable symbols: (string * string) list
-  ; mutable unsupported: Observation.site list }
+  ; mutable unsupported: Observation.site list
+  ; mutable flows: Observation.exec_paths list }
+
+(* Executable alternatives of one expression. Above [max_path_alts] the
+   function is ambiguous: use-case and queue fan-out rules then gap
+   instead of guessing. *)
+let max_path_alts = 48
+
+type flow =
+  { alts: Observation.path_step list list
+  ; ambiguous: bool }
+
+let flow_empty = {alts= [[]]; ambiguous= false}
+
+let flow_ambiguous = {alts= []; ambiguous= true}
+
+let flow_one (step : Observation.path_step) = {alts= [[step]]; ambiguous= false}
+
+let flow_has_call (f : flow) : bool = List.exists (fun alt -> alt <> []) f.alts
+
+let flow_union (a : flow) (b : flow) : flow =
+  if a.ambiguous || b.ambiguous
+  then flow_ambiguous
+  else
+    let alts = a.alts @ b.alts in
+    if List.length alts > max_path_alts
+    then flow_ambiguous
+    else {alts; ambiguous= false}
+
+let flow_seq (a : flow) (b : flow) : flow =
+  if a.ambiguous || b.ambiguous
+  then flow_ambiguous
+  else
+    let n = List.length a.alts * List.length b.alts in
+    if n > max_path_alts
+    then flow_ambiguous
+    else
+      { alts=
+          List.concat_map
+            (fun left -> List.map (fun right -> left @ right) b.alts)
+            a.alts
+      ; ambiguous= false }
+
+let flow_seqs (fs : flow list) : flow = List.fold_left flow_seq flow_empty fs
+
+let union_all (fs : flow list) : flow =
+  match fs with
+  | [] -> flow_empty
+  | f :: rest -> List.fold_left flow_union f rest
+
+let step_key (s : Observation.path_step) =
+  ( s.Observation.step_callee
+  , s.Observation.step_resolution
+  , s.Observation.step_site.Observation.site_path
+  , s.Observation.step_site.Observation.line
+  , s.Observation.step_site.Observation.col )
+
+let normalize_flow (f : flow) : flow =
+  if f.ambiguous
+  then flow_ambiguous
+  else
+    let alts =
+      List.map
+        (fun alt -> List.sort (fun a b -> compare (step_key a) (step_key b)) alt)
+        f.alts
+      |> List.sort (fun a b ->
+          compare (List.map step_key a) (List.map step_key b) )
+    in
+    {alts; ambiguous= false}
+
+let same_flow (a : Observation.exec_paths) (b : Observation.exec_paths) : bool =
+  String.equal a.Observation.paths_unit b.Observation.paths_unit
+  && String.equal a.Observation.paths_caller b.Observation.paths_caller
+
+let add_flow
+    (unit_canonical : string)
+    (facts : facts)
+    (caller : string)
+    (f : flow) =
+  let f = normalize_flow f in
+  let fresh =
+    { Observation.paths_unit= unit_canonical
+    ; paths_caller= caller
+    ; alternatives= f.alts
+    ; ambiguous= f.ambiguous }
+  in
+  match List.find_opt (same_flow fresh) facts.flows with
+  | None -> facts.flows <- fresh :: facts.flows
+  | Some prev ->
+      let merged =
+        if prev.Observation.ambiguous || fresh.Observation.ambiguous
+        then {prev with Observation.alternatives= []; ambiguous= true}
+        else
+          let alts =
+            prev.Observation.alternatives @ fresh.Observation.alternatives
+          in
+          if List.length alts > max_path_alts
+          then {prev with Observation.alternatives= []; ambiguous= true}
+          else {prev with Observation.alternatives= alts}
+      in
+      facts.flows <-
+        merged :: List.filter (fun p -> not (same_flow fresh p)) facts.flows
 
 type ctx =
   { project_root: string
@@ -382,7 +483,9 @@ let rec record_call
     (caller : string)
     (callee : Path.t)
     (resolution : Observation.resolution)
-    (loc : Location.t) =
+    (loc : Location.t)
+    (args : Observation.call_arg list) : Observation.path_step =
+  let site = site_of_loc ~project_root:c.project_root loc in
   match canonicalize c callee with
   | `Canonical target ->
       facts.calls <-
@@ -390,8 +493,13 @@ let rec record_call
         ; caller
         ; callee= target
         ; resolution
-        ; site= site_of_loc ~project_root:c.project_root loc }
-        :: facts.calls
+        ; site
+        ; args }
+        :: facts.calls ;
+      { step_callee= target
+      ; step_resolution= resolution
+      ; step_site= site
+      ; step_args= args }
   | _ ->
       (* Keep the reason the walker already decided. A local variable is
          not a canonical path, but it is not an arbitrary dynamic
@@ -406,8 +514,13 @@ let rec record_call
         ; caller
         ; callee= ""
         ; resolution
-        ; site= site_of_loc ~project_root:c.project_root loc }
-        :: facts.calls
+        ; site
+        ; args }
+        :: facts.calls ;
+      { step_callee= ""
+      ; step_resolution= resolution
+      ; step_site= site
+      ; step_args= args }
 
 and record_ref
     (c : ctx)
@@ -429,181 +542,301 @@ and walk_expr
     (c : ctx)
     (facts : facts)
     (caller : string)
-    (e : Typedtree.expression) =
+    (e : Typedtree.expression) : flow =
+  let push_unresolved resolution loc args =
+    let site =
+      site_of_loc ~project_root:c.project_root (fallback_loc c e loc)
+    in
+    facts.calls <-
+      { Observation.call_unit= c.unit_canonical
+      ; caller
+      ; callee= ""
+      ; resolution
+      ; site
+      ; args }
+      :: facts.calls ;
+    { Observation.step_callee= ""
+    ; step_resolution= resolution
+    ; step_site= site
+    ; step_args= args }
+  in
   match e.Typedtree.exp_desc with
-  | Texp_apply (tfun0, args) ->
-      let rec spine t =
+  | Texp_apply (tfun0, outer_args) ->
+      let rec collapse t acc =
         match t.Typedtree.exp_desc with
-        | Texp_apply (tfun, _a) -> spine tfun
-        | _ -> t
+        | Texp_apply (tfun, inner) -> collapse tfun (inner @ acc)
+        | _ -> (t, acc)
       in
-      let tfun = spine tfun0 in
-      ( match tfun.Typedtree.exp_desc with
-      | Texp_ident (p, loc, _d) -> (
-        match canonicalize c p with
-        | `Canonical _ ->
-            record_call c facts caller p Observation.Resolved loc.loc
-        | `LocalVar ->
-            record_call
-              c
-              facts
-              caller
-              p
-              Observation.Unresolved_local
-              (fallback_loc c e loc.loc)
-        | `Dynamic ->
-            record_call
-              c
-              facts
-              caller
-              p
-              Observation.Unresolved_dynamic
-              (fallback_loc c e loc.loc) )
-      | Texp_field _ ->
-          facts.calls <-
-            { Observation.call_unit= c.unit_canonical
-            ; caller
-            ; callee= ""
-            ; resolution= Observation.Unresolved_field
-            ; site=
-                site_of_loc
-                  ~project_root:c.project_root
-                  (fallback_loc c e tfun.exp_loc) }
-            :: facts.calls
-      | _ ->
-          facts.calls <-
-            { Observation.call_unit= c.unit_canonical
-            ; caller
-            ; callee= ""
-            ; resolution= Observation.Unresolved_dynamic
-            ; site=
-                site_of_loc
-                  ~project_root:c.project_root
-                  (fallback_loc c e tfun.exp_loc) }
-            :: facts.calls ) ;
+      let tfun, args = collapse tfun0 outer_args in
+      let label_of = function
+        | Asttypes.Nolabel -> ""
+        | Asttypes.Labelled name
+         |Asttypes.Optional name ->
+            name
+      in
+      let arg_flows = ref [] in
+      let metas = ref [] in
       List.iter
-        (fun (_lbl, arg) ->
+        (fun (lbl, arg) ->
+          let label = label_of lbl in
           match arg with
+          | Typedtree.Omitted _ -> ()
           | Typedtree.Arg a -> (
             match a.Typedtree.exp_desc with
             | Texp_ident (p, loc, _d) -> (
               match canonicalize c p with
-              | `Canonical _ -> record_ref c facts caller p loc.loc
+              | `Canonical target ->
+                  record_ref c facts caller p loc.loc ;
+                  metas :=
+                    { Observation.arg_label= label
+                    ; arg_target= target
+                    ; arg_literal= "" }
+                    :: !metas
               | `LocalVar
                |`Dynamic ->
-                  () )
-            | _ -> walk_expr c facts caller a )
-          | Typedtree.Omitted _ -> () )
-        args
+                  metas :=
+                    { Observation.arg_label= label
+                    ; arg_target= ""
+                    ; arg_literal= "" }
+                    :: !metas )
+            | Texp_constant (Const_string (literal, _, _)) ->
+                metas :=
+                  { Observation.arg_label= label
+                  ; arg_target= ""
+                  ; arg_literal= literal }
+                  :: !metas
+            | _ -> arg_flows := walk_expr c facts caller a :: !arg_flows ) )
+        args ;
+      let args_meta = List.rev !metas in
+      let nested = flow_seqs (List.rev !arg_flows) in
+      let call_flow =
+        match tfun.Typedtree.exp_desc with
+        | Texp_ident (p, loc, _d) -> (
+          match canonicalize c p with
+          | `Canonical _ ->
+              flow_one
+                (record_call
+                   c
+                   facts
+                   caller
+                   p
+                   Observation.Resolved
+                   loc.loc
+                   args_meta )
+          | `LocalVar ->
+              flow_one
+                (record_call
+                   c
+                   facts
+                   caller
+                   p
+                   Observation.Unresolved_local
+                   (fallback_loc c e loc.loc)
+                   args_meta )
+          | `Dynamic ->
+              flow_one
+                (record_call
+                   c
+                   facts
+                   caller
+                   p
+                   Observation.Unresolved_dynamic
+                   (fallback_loc c e loc.loc)
+                   args_meta ) )
+        | Texp_field _ ->
+            flow_one
+              (push_unresolved
+                 Observation.Unresolved_field
+                 tfun.Typedtree.exp_loc
+                 args_meta )
+        | _ ->
+            let inner = walk_expr c facts caller tfun in
+            flow_seq
+              inner
+              (flow_one
+                 (push_unresolved
+                    Observation.Unresolved_dynamic
+                    tfun.Typedtree.exp_loc
+                    args_meta ) )
+      in
+      flow_seq nested call_flow
   | Texp_ident (p, loc, _d) -> (
     match canonicalize c p with
-    | `Canonical _ -> record_ref c facts caller p loc.loc
+    | `Canonical _ ->
+        record_ref c facts caller p loc.loc ;
+        flow_empty
     | `LocalVar
      |`Dynamic ->
-        () )
-  | Texp_pack m -> walk_module_expr c facts caller m
-  | Texp_function (params, body) -> (
+        flow_empty )
+  | Texp_pack m ->
+      walk_module_expr c facts caller m ;
+      flow_empty
+  | Texp_function (params, body) ->
       List.iter
         (fun fp ->
           match fp.Typedtree.fp_kind with
           | Tparam_pat p -> walk_pat c facts caller p
           | _ -> () )
         params ;
-      match body with
-      | Tfunction_body b -> walk_expr c facts caller b
+      ( match body with
+      | Tfunction_body b -> ignore (walk_expr c facts caller b)
       | Tfunction_cases {cases; _} ->
           List.iter
             (fun k ->
               walk_pat c facts caller k.Typedtree.c_lhs ;
-              walk_expr c facts caller k.Typedtree.c_rhs )
-            cases )
-  | Texp_construct (_, _, args) -> List.iter (walk_expr c facts caller) args
-  | Texp_constant _ -> ()
+              ignore (walk_expr c facts caller k.Typedtree.c_rhs) )
+            cases ) ;
+      flow_empty
+  | Texp_construct (_, _, args) ->
+      flow_seqs (List.map (walk_expr c facts caller) args)
+  | Texp_constant _ -> flow_empty
   | Texp_let (_, vbs, body) ->
-      List.iter
-        (fun vb ->
-          walk_pat c facts caller vb.Typedtree.vb_pat ;
-          walk_expr c facts caller vb.Typedtree.vb_expr )
-        vbs ;
-      walk_expr c facts caller body
+      let bindings =
+        List.map
+          (fun vb ->
+            walk_pat c facts caller vb.Typedtree.vb_pat ;
+            walk_expr c facts caller vb.Typedtree.vb_expr )
+          vbs
+      in
+      flow_seq (flow_seqs bindings) (walk_expr c facts caller body)
   | Texp_match (scrut, comp_cases, val_cases, _) ->
-      walk_expr c facts caller scrut ;
-      List.iter
-        (fun (k : Typedtree.computation Typedtree.case) ->
-          walk_pat c facts caller k.Typedtree.c_lhs ;
-          walk_expr c facts caller k.Typedtree.c_rhs )
-        comp_cases ;
-      List.iter
-        (fun (k : Typedtree.value Typedtree.case) ->
-          walk_pat c facts caller k.Typedtree.c_lhs ;
-          walk_expr c facts caller k.Typedtree.c_rhs )
-        val_cases
-  | Texp_try (e, cases, eff_cases) ->
-      walk_expr c facts caller e ;
-      List.iter (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) cases ;
-      List.iter (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) eff_cases
-  | Texp_ifthenelse (a, b, f) -> (
-      walk_expr c facts caller a ;
-      walk_expr c facts caller b ;
-      match f with
-      | Some f -> walk_expr c facts caller f
-      | None -> () )
+      let case_flow (type k) (kase : k Typedtree.case) =
+        walk_pat c facts caller kase.Typedtree.c_lhs ;
+        let guard =
+          match kase.Typedtree.c_guard with
+          | None -> flow_empty
+          | Some guard -> walk_expr c facts caller guard
+        in
+        flow_seq guard (walk_expr c facts caller kase.Typedtree.c_rhs)
+      in
+      flow_seq
+        (walk_expr c facts caller scrut)
+        (union_all
+           (List.map case_flow comp_cases @ List.map case_flow val_cases) )
+  | Texp_try (body, cases, eff_cases) ->
+      let body_flow = walk_expr c facts caller body in
+      let handlers =
+        union_all
+          ( List.map (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) cases
+          @ List.map
+              (fun k -> walk_expr c facts caller k.Typedtree.c_rhs)
+              eff_cases )
+      in
+      if flow_has_call body_flow && flow_has_call handlers
+      then flow_ambiguous
+      else if flow_has_call handlers
+      then handlers
+      else body_flow
+  | Texp_ifthenelse (cond, yes, no) ->
+      let no_flow =
+        match no with
+        | Some no -> walk_expr c facts caller no
+        | None -> flow_empty
+      in
+      flow_seq
+        (walk_expr c facts caller cond)
+        (flow_union (walk_expr c facts caller yes) no_flow)
   | Texp_sequence (a, b) ->
-      walk_expr c facts caller a ;
-      walk_expr c facts caller b
-  | Texp_record {fields; extended_expression= rest; _} -> (
-      Array.iter
-        (fun (_lbl, d) ->
-          match d with
-          | Typedtree.Overridden (_li, e) -> walk_expr c facts caller e
-          | Typedtree.Kept _ -> () )
-        fields ;
-      match rest with
-      | Some r -> walk_expr c facts caller r
-      | None -> () )
-  | Texp_field (e, _, _) -> walk_expr c facts caller e
-  | Texp_setfield (e, _, _, v) ->
-      walk_expr c facts caller e ;
-      walk_expr c facts caller v
-  | Texp_atomic_loc (e, _, _) -> walk_expr c facts caller e
-  | Texp_array (_, el) -> List.iter (walk_expr c facts caller) el
-  | Texp_tuple el -> List.iter (fun (_l, e) -> walk_expr c facts caller e) el
+      flow_seq (walk_expr c facts caller a) (walk_expr c facts caller b)
+  | Texp_record {fields; extended_expression= rest; _} ->
+      let field_flows =
+        Array.to_list fields
+        |> List.filter_map (fun (_lbl, d) ->
+            match d with
+            | Typedtree.Overridden (_li, expr) ->
+                Some (walk_expr c facts caller expr)
+            | Typedtree.Kept _ -> None )
+      in
+      let rest_flow =
+        match rest with
+        | Some expr -> walk_expr c facts caller expr
+        | None -> flow_empty
+      in
+      flow_seq (flow_seqs field_flows) rest_flow
+  | Texp_field (expr, _, _) -> walk_expr c facts caller expr
+  | Texp_setfield (expr, _, _, value) ->
+      flow_seq (walk_expr c facts caller expr) (walk_expr c facts caller value)
+  | Texp_atomic_loc (expr, _, _) -> walk_expr c facts caller expr
+  | Texp_array (_, elements) ->
+      flow_seqs (List.map (walk_expr c facts caller) elements)
+  | Texp_tuple elements ->
+      flow_seqs
+        (List.map (fun (_lbl, expr) -> walk_expr c facts caller expr) elements)
   | Texp_open (od, body) ->
       walk_module_expr c facts caller od.open_expr ;
       walk_expr c facts caller body
-  | Texp_letmodule (_, _, _, m, b) ->
+  | Texp_letmodule (_, _, _, m, body) ->
       walk_module_expr c facts caller m ;
-      walk_expr c facts caller b
-  | Texp_letexception (_, b) -> walk_expr c facts caller b
+      walk_expr c facts caller body
+  | Texp_letexception (_, body) -> walk_expr c facts caller body
   | Texp_letop {let_; ands; body; _} ->
-      walk_expr c facts caller let_.Typedtree.bop_exp ;
-      List.iter (fun b -> walk_expr c facts caller b.Typedtree.bop_exp) ands ;
-      walk_expr c facts caller body.Typedtree.c_rhs
-  | Texp_variant (_, eo) -> (
-    match eo with
-    | Some e -> walk_expr c facts caller e
-    | None -> () )
-  | Texp_lazy e -> walk_expr c facts caller e
+      flow_seq
+        (flow_seqs
+           ( walk_expr c facts caller let_.Typedtree.bop_exp
+           :: List.map
+                (fun b -> walk_expr c facts caller b.Typedtree.bop_exp)
+                ands ) )
+        (walk_expr c facts caller body.Typedtree.c_rhs)
+  | Texp_variant (_, payload) -> (
+    match payload with
+    | Some expr -> walk_expr c facts caller expr
+    | None -> flow_empty )
+  | Texp_lazy expr -> walk_expr c facts caller expr
   | Texp_send _
    |Texp_object _ ->
       facts.unsupported <-
-        site_of_loc ~project_root:c.project_root e.exp_loc :: facts.unsupported
-  | Texp_while (a, b) ->
-      walk_expr c facts caller a ;
-      walk_expr c facts caller b
-  | Texp_for (_i, _p, a, b, _d, body) ->
-      walk_expr c facts caller a ;
-      walk_expr c facts caller b ;
-      walk_expr c facts caller body
-  | Texp_assert (e, _) -> walk_expr c facts caller e
+        site_of_loc ~project_root:c.project_root e.exp_loc :: facts.unsupported ;
+      flow_ambiguous
+  | Texp_while (cond, body) ->
+      flow_seq (walk_expr c facts caller cond) (walk_expr c facts caller body)
+  | Texp_for (_i, _p, start, stop, _dir, body) ->
+      flow_seqs
+        [ walk_expr c facts caller start
+        ; walk_expr c facts caller stop
+        ; walk_expr c facts caller body ]
+  | Texp_assert (expr, _) -> walk_expr c facts caller expr
   | Texp_extension_constructor _
    |Texp_unreachable ->
-      ()
-  | Texp_new _ -> ()
+      flow_empty
+  | Texp_new _ -> flow_empty
   | Texp_instvar _
    |Texp_setinstvar _
    |Texp_override _ ->
-      ()
+      flow_empty
+
+and walk_as_binding
+    (c : ctx)
+    (facts : facts)
+    (caller : string)
+    (e : Typedtree.expression) : flow =
+  match e.Typedtree.exp_desc with
+  | Texp_function (params, Tfunction_body body) ->
+      List.iter
+        (fun fp ->
+          match fp.Typedtree.fp_kind with
+          | Tparam_pat p -> walk_pat c facts caller p
+          | _ -> () )
+        params ;
+      walk_expr c facts caller body
+  | Texp_function (params, Tfunction_cases {cases; _}) ->
+      List.iter
+        (fun fp ->
+          match fp.Typedtree.fp_kind with
+          | Tparam_pat p -> walk_pat c facts caller p
+          | _ -> () )
+        params ;
+      union_all
+        (List.map
+           (fun k ->
+             walk_pat c facts caller k.Typedtree.c_lhs ;
+             let guard =
+               match k.Typedtree.c_guard with
+               | None -> flow_empty
+               | Some guard -> walk_expr c facts caller guard
+             in
+             flow_seq guard (walk_expr c facts caller k.Typedtree.c_rhs) )
+           cases )
+  | _ -> walk_expr c facts caller e
 
 and walk_module_expr
     (c : ctx)
@@ -623,7 +856,7 @@ and walk_module_expr
       walk_module_expr c facts caller f ;
       walk_module_expr c facts caller a
   | Tmod_apply_unit m -> walk_module_expr c facts caller m
-  | Tmod_unpack (e, _) -> walk_expr c facts caller e
+  | Tmod_unpack (e, _) -> ignore (walk_expr c facts caller e)
   | Tmod_constraint (m, _, _, _) -> walk_module_expr c facts caller m
 
 and walk_structure
@@ -647,7 +880,8 @@ and walk_structure
               let old_def = c.def_loc in
               c.def_loc <- vb.Typedtree.vb_loc ;
               walk_pat c facts caller vb.Typedtree.vb_pat ;
-              walk_expr c facts caller vb.Typedtree.vb_expr ;
+              let flow = walk_as_binding c facts caller vb.Typedtree.vb_expr in
+              add_flow c.unit_canonical facts caller flow ;
               c.def_loc <- old_def )
             vbs
       | Tstr_module mb ->
@@ -673,7 +907,9 @@ and walk_structure
             mbs
       | Tstr_include inc -> walk_module_expr c facts outer inc.incl_mod
       | Tstr_eval (e, _) ->
-          walk_expr c facts (if outer = "" then "<toplevel>" else outer) e
+          let caller = if outer = "" then "<toplevel>" else outer in
+          let flow = walk_expr c facts caller e in
+          add_flow c.unit_canonical facts caller flow
       | Tstr_modtype mtd -> (
         match mtd.Typedtree.mtd_type with
         | Some mty -> walk_module_type c facts outer mty
@@ -794,6 +1030,7 @@ let observe
   let calls = ref [] in
   let vrefs = ref [] in
   let trefs = ref [] in
+  let flows = ref [] in
   let compiler_series = ref "unknown" in
   List.iter
     (fun (lib, modname, artifact, cmt) ->
@@ -863,7 +1100,12 @@ let observe
                   :: !units )
               else
                 let facts =
-                  {calls= []; vrefs= []; trefs= []; symbols= []; unsupported= []}
+                  { calls= []
+                  ; vrefs= []
+                  ; trefs= []
+                  ; symbols= []
+                  ; unsupported= []
+                  ; flows= [] }
                 in
                 walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
                 gaps :=
@@ -881,6 +1123,7 @@ let observe
                 calls := List.rev_append facts.calls !calls ;
                 vrefs := List.rev_append facts.vrefs !vrefs ;
                 trefs := List.rev_append facts.trefs !trefs ;
+                flows := List.rev_append facts.flows !flows ;
                 units :=
                   { Observation.unit_id= modname
                   ; canonical= unit_canonical
@@ -962,6 +1205,13 @@ let observe
         (fun a b -> compare a.Observation.canonical b.Observation.canonical)
         !units
   ; calls= List.sort by_unit !calls
+  ; exec_paths=
+      List.sort
+        (fun a b ->
+          compare
+            (a.Observation.paths_unit, a.Observation.paths_caller)
+            (b.Observation.paths_unit, b.Observation.paths_caller) )
+        !flows
   ; value_refs= List.sort by_ref !vrefs
   ; type_refs= List.sort by_tref !trefs
   ; source_files

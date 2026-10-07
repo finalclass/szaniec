@@ -57,8 +57,11 @@ The initial profile must cover:
 - Cross-service implementation access and unapproved shared executable modules.
 - Explicit unresolved-call, unsupported-adapter and unclassified-code diagnostics.
 
-Queued-command, event and use-case rules require additional adapter capabilities.
-Do not claim them as supported until extraction and evaluation are both verified.
+Queued-command, event and use-case rules are part of `szaniec-rules/3.0.0`.
+The acceptance suite is the check that extraction and evaluation agree,
+including separate handlers, mutually exclusive branches, and a gap when
+a path cannot be built. Do not claim a wider messaging surface than the
+interpretation contract lists.
 Encountering an unsupported construct relevant to required analysis must not yield
 a silent pass. Report declared exclusions and unmet requirements distinctly.
 
@@ -101,5 +104,6 @@ Do not present a manually supplied graph test as proof of language support.
 - Add CI using the same documented verification entry points.
 - Keep fixtures minimal and redistributable, with dependencies pinned or reproducible.
 - Update README status only as capabilities become executable and verified.
-- Leave queue/event expansion, editor integration, incremental caches, a plugin
-  marketplace, servers and databases outside the initial delivery.
+- Leave editor integration, incremental caches, a plugin marketplace,
+  servers and databases outside this delivery. Contract-size heuristics,
+  cyclomatic complexity, coverage and CRAP are separate work.

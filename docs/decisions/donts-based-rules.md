@@ -57,3 +57,50 @@ first rule catalog).
   finding names the direct caller; the helper path stays in the evidence
   chain. Attributing resource access along the whole call path is future
   work.
+
+## Closed architecture, use cases, queues and events
+
+Status: accepted. This section supersedes the earlier permission for
+ordinary Manager → Manager calls. The rest of the suffix-role and
+cyrograf-discovery decisions above stay in force.
+
+1. **Every service-to-service direction is an explicit matrix entry.**
+   A Client, Manager, Engine or Access calling a Client is a
+   closed-architecture violation (`ID-MANAGER-CLIENT`,
+   `ID-ENGINE-CLIENT`, `ID-ACCESS-CLIENT`), including a call that
+   reaches the Client through a same-boundary helper or a supported
+   proxy. Client → Client stays allowed. Utility → anyone stays
+   allowed. No forbidden pair is left to a silent default match.
+2. **Synchronous Manager → Manager calls are prohibited**
+   (`ID-MANAGER-MANAGER`). A Manager delegates to another Manager only
+   by a queued command. The previous catalog permitted the synchronous
+   call; implementations must not keep that reading.
+3. **One Client use-case path calls at most one Manager**
+   (`UC-CLIENT-MULTI-MANAGER`). A path is one executable alternative
+   from a boundary entry (a value with no same-boundary caller),
+   following resolved helpers inside that boundary and stopping at the
+   next service boundary. Separate handlers, and separate branches of
+   `if` / `match`, are different paths. A call after a branch is on
+   every path that reaches it.
+4. **Queue and event kinds come only from the verified Well surface**
+   named in the interpretation contract (`Well.publish`,
+   `Well.publish_keyed`, `Well.MessageBus.publish`, `Well.subscribe`,
+   `Well.subscribe_keyed`, `Well.MessageBus.subscribe`,
+   `Well.MessageBus.once`, `Well.request`). A call merely being
+   "messaging" establishes none of these kinds. `Well.request` is a
+   queued command and is not a publication. Publish and subscribe are
+   not service requests, and a publication is not an edge from the
+   publisher to each subscriber.
+5. **Queued-command targets are the services that subscribe to the
+   same topic.** The topic is the canonical value passed to `~cmd`, or
+   the string literal passed to `Well.MessageBus`. A missing topic or
+   a topic with no observed subscriber is `GAP-UNRESOLVED-TARGET`, not
+   a pass. On one executable path, queued commands may target only one
+   Manager (`Q-MULTI-MANAGER`). A queued command must not target an
+   Engine or an Access service (`Q-TARGET-ROLE`).
+6. **Events.** Only a Manager publishes (`EVT-PUBLISH-ROLE`). Only a
+   Client or a Manager subscribes (`EVT-SUBSCRIBE-ROLE`). Engines,
+   Access services (the resource layer), Utilities and every other
+   owner do neither. External resource APIs are not application
+   publishers; the rule judges the application unit that calls the
+   messaging API.
