@@ -12,3 +12,14 @@
   (glob_files expected/*.txt))
  (action
   (run sh "%{workspace_root}/test/acceptance/run.sh")))
+
+(rule
+ (alias runtest)
+ (package szaniec)
+ (deps
+  (file %{workspace_root}/test/acceptance/suggestions.sh)
+  %{workspace_root}/bin/szaniec.exe
+  (source_tree %{workspace_root}/test/fixtures/suggestions-corpus)
+  (glob_files expected/suggestions-corpus*.json))
+ (action
+  (run sh "%{workspace_root}/test/acceptance/suggestions.sh")))

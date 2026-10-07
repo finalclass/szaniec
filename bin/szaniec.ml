@@ -6,17 +6,54 @@ let usage =
   "usage:\n\
   \ szaniec approve --policy <path> [--approval <path>]\n\
   \ szaniec check --policy <path> [--approval <path>] [--project-root <dir>]\n\
-  \               [--rebuild] [--json] [--out <path>] [--no-callgraph]"
+  \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
+  \ szaniec suggestions [--policy <path>] [--project-root <dir>] [--rebuild]\n\
+  \               [--json] [--experimental] [--model <id>] [--cache <path>]\n\
+  \               [--no-cache] [--refresh] [--timeout <seconds>]\n\
+  \               [--budget-names <n>] [--budget-pairs <n>]\n\
+  \               [--budget-responsibility <n>] [--budget-complexity <n>]\n\
+  \               [--provider-fixture <path>] [--decisions <path>]\n\
+  \               [--api-candidates <path>]\n\
+  \ szaniec suggestions decide --id <id> --decision apply|reject|defer\n\
+  \               --rationale <text> [--decisions <path>] [--project-root \
+   <dir>]"
 
 type args =
   { command: string
+  ; subcommand: string
   ; policy: string
   ; approval: string option
   ; project_root: string
   ; rebuild: bool
   ; json: bool
   ; out: string option
-  ; no_callgraph: bool }
+  ; no_callgraph: bool
+  ; experimental: bool
+  ; model: string
+  ; cache: string option
+  ; no_cache: bool
+  ; refresh: bool
+  ; timeout_s: int
+  ; budget_names: int
+  ; budget_pairs: int
+  ; budget_responsibility: int
+  ; budget_complexity: int
+  ; provider_fixture: string option
+  ; decisions: string option
+  ; api_candidates: string option
+  ; suggestion_id: string
+  ; decision: string
+  ; rationale: string }
+
+let int_arg (flag : string) (raw : string) : int =
+  match int_of_string raw with
+  | n when n >= 0 -> n
+  | _ ->
+      prerr_endline ("szaniec: " ^ flag ^ " expects a non-negative integer") ;
+      exit 2
+  | exception Failure _ ->
+      prerr_endline ("szaniec: " ^ flag ^ " expects a non-negative integer") ;
+      exit 2
 
 let rec parse (argv : string list) (acc : args) : args =
   match argv with
@@ -28,8 +65,37 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--json" :: rest -> parse rest {acc with json= true}
   | "--out" :: p :: rest -> parse rest {acc with out= Some p}
   | "--no-callgraph" :: rest -> parse rest {acc with no_callgraph= true}
-  | cmd :: rest when acc.command = "" && (cmd = "check" || cmd = "approve") ->
+  | "--experimental" :: rest -> parse rest {acc with experimental= true}
+  | "--model" :: p :: rest -> parse rest {acc with model= p}
+  | "--cache" :: p :: rest -> parse rest {acc with cache= Some p}
+  | "--no-cache" :: rest -> parse rest {acc with no_cache= true}
+  | "--refresh" :: rest -> parse rest {acc with refresh= true}
+  | "--timeout" :: p :: rest ->
+      parse rest {acc with timeout_s= int_arg "--timeout" p}
+  | "--budget-names" :: p :: rest ->
+      parse rest {acc with budget_names= int_arg "--budget-names" p}
+  | "--budget-pairs" :: p :: rest ->
+      parse rest {acc with budget_pairs= int_arg "--budget-pairs" p}
+  | "--budget-responsibility" :: p :: rest ->
+      parse
+        rest
+        {acc with budget_responsibility= int_arg "--budget-responsibility" p}
+  | "--budget-complexity" :: p :: rest ->
+      parse rest {acc with budget_complexity= int_arg "--budget-complexity" p}
+  | "--provider-fixture" :: p :: rest ->
+      parse rest {acc with provider_fixture= Some p}
+  | "--decisions" :: p :: rest -> parse rest {acc with decisions= Some p}
+  | "--api-candidates" :: p :: rest ->
+      parse rest {acc with api_candidates= Some p}
+  | "--id" :: p :: rest -> parse rest {acc with suggestion_id= p}
+  | "--decision" :: p :: rest -> parse rest {acc with decision= p}
+  | "--rationale" :: p :: rest -> parse rest {acc with rationale= p}
+  | cmd :: rest
+    when acc.command = ""
+         && (cmd = "check" || cmd = "approve" || cmd = "suggestions") ->
       parse rest {acc with command= cmd}
+  | "decide" :: rest when acc.command = "suggestions" && acc.subcommand = "" ->
+      parse rest {acc with subcommand= "decide"}
   | bad :: _ ->
       prerr_endline ("szaniec: unknown argument: " ^ bad) ;
       prerr_endline usage ;
@@ -37,13 +103,30 @@ let rec parse (argv : string list) (acc : args) : args =
 
 let default_args =
   { command= ""
+  ; subcommand= ""
   ; policy= "szaniec/policy.json"
   ; approval= Some "szaniec/approval.json"
   ; project_root= Sys.getcwd ()
   ; rebuild= false
   ; json= false
   ; out= None
-  ; no_callgraph= false }
+  ; no_callgraph= false
+  ; experimental= false
+  ; model= Szaniec_model.Version.suggestion_model
+  ; cache= None
+  ; no_cache= false
+  ; refresh= false
+  ; timeout_s= 30
+  ; budget_names= 12
+  ; budget_pairs= 6
+  ; budget_responsibility= 6
+  ; budget_complexity= 6
+  ; provider_fixture= None
+  ; decisions= None
+  ; api_candidates= None
+  ; suggestion_id= ""
+  ; decision= ""
+  ; rationale= "" }
 
 (* ── rendering ────────────────────────────────────────────────────── *)
 
@@ -330,7 +413,135 @@ let () =
       | Error e ->
           prerr_endline ("szaniec: " ^ e) ;
           exit 2 )
-  | _ -> (
+  | "suggestions" when args.subcommand = "decide" -> (
+      let path =
+        let raw =
+          Option.value
+            ~default:"szaniec/suggestion-decisions.json"
+            args.decisions
+        in
+        if Filename.is_relative raw
+        then Filename.concat args.project_root raw
+        else raw
+      in
+      match
+        Szaniec_suggestion_manager.Suggestion_manager.record_decision
+          ~path
+          ~id:args.suggestion_id
+          ~decision:args.decision
+          ~rationale:args.rationale
+      with
+      | Ok () ->
+          Printf.printf "recorded %s for %s\n" args.decision args.suggestion_id ;
+          exit 0
+      | Error e ->
+          prerr_endline ("szaniec: " ^ e) ;
+          exit 2 )
+  | "suggestions" -> (
+      let module S = Szaniec_suggestion_manager.Suggestion_manager in
+      let resolve p =
+        if Filename.is_relative p && not (Sys.file_exists p)
+        then Filename.concat args.project_root p
+        else p
+      in
+      let policy_path = resolve args.policy in
+      let program_roots =
+        match
+          Szaniec_architecture_access.Architecture_access.parse_policy
+            policy_path
+        with
+        | Error e ->
+            prerr_endline ("szaniec: " ^ e) ;
+            exit 2
+        | Ok policy -> policy.Szaniec_model.Policy.program_roots
+      in
+      let decisions_path =
+        let raw =
+          Option.value
+            ~default:"szaniec/suggestion-decisions.json"
+            args.decisions
+        in
+        if Filename.is_relative raw
+        then Filename.concat args.project_root raw
+        else raw
+      in
+      let decisions =
+        match S.read_decisions decisions_path with
+        | Ok items -> items
+        | Error e ->
+            prerr_endline ("szaniec: " ^ e) ;
+            exit 2
+      in
+      let provider =
+        match args.provider_fixture with
+        | None -> None
+        | Some path -> (
+          match
+            Szaniec_model_access.Jev_provider.fixture_of_file (resolve path)
+          with
+          | Ok provider -> Some provider
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      in
+      let api_candidates =
+        match args.api_candidates with
+        | None -> []
+        | Some path -> (
+          match S.load_api_candidates (resolve path) with
+          | Ok items -> items
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      in
+      let cache_path =
+        if args.no_cache
+        then None
+        else
+          Some
+            ( match args.cache with
+            | Some p ->
+                if Filename.is_relative p
+                then Filename.concat args.project_root p
+                else p
+            | None ->
+                Filename.concat
+                  args.project_root
+                  "szaniec/suggestion-cache.json" )
+      in
+      let budgets : Szaniec_suggestion_manager.Retrieve.budgets =
+        { Szaniec_suggestion_manager.Retrieve.names= args.budget_names
+        ; pairs= args.budget_pairs
+        ; responsibility= args.budget_responsibility
+        ; complexity= args.budget_complexity
+        ; experimental= 6
+        ; body_chars= 1200 }
+      in
+      match
+        S.run
+          { S.project_root= args.project_root
+          ; program_roots
+          ; rebuild= args.rebuild
+          ; experimental= args.experimental
+          ; budgets
+          ; model= args.model
+          ; timeout_s= args.timeout_s
+          ; cache_path
+          ; refresh= args.refresh
+          ; provider
+          ; decisions
+          ; api_candidates }
+      with
+      | Error e ->
+          prerr_endline ("szaniec: " ^ e) ;
+          exit 2
+      | Ok report ->
+          print_string
+            ( if args.json
+              then S.json_of_report report
+              else S.text_of_report report ) ;
+          exit (S.exit_code report) )
+  | "check" -> (
       let policy_path =
         if Filename.is_relative args.policy && not (Sys.file_exists args.policy)
         then Filename.concat args.project_root args.policy
@@ -362,3 +573,6 @@ let () =
       | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
           prerr_endline ("szaniec: " ^ e) ;
           exit 2 )
+  | _ ->
+      prerr_endline usage ;
+      exit 2

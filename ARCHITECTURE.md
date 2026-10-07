@@ -44,7 +44,7 @@ Who
 - [CheckClient]
 
 What
-- [InspectionManager]
+- [InspectionManager] [SuggestionManager]
 
 How
 - [InterpretationEngine] [ConformanceEngine]
@@ -52,22 +52,29 @@ How
 How-to-access -> Where
 - [ProgramAccess]->(AnalyzedProgram)
 - [ArchitectureAccess]->(ApprovedArchitecture)
+- [ModelAccess]->(JudgmentProvider)
 ```
 
 | Component | Responsibility | Conceptual operation |
 |---|---|---|
-| CheckClient | Accept a request, render text/JSON, map the result to an exit status | Run the check |
+| CheckClient | Accept a request, render text/JSON, map the result to an exit status | Run the check or the suggestion review |
 | InspectionManager | Coordinate policy resolution, observation, interpretation and evaluation | Check |
-| ProgramAccess | Supply program facts while hiding compiler, build and artifact access | Observe |
-| ArchitectureAccess | Supply a consistent policy with its approved identity | Resolve |
+| SuggestionManager | Select local candidates, apply judgment templates, compose the suggestion report | Suggest |
+| ProgramAccess | Supply program facts and the function catalog while hiding compiler, build and artifact access | Observe, Catalog |
+| ArchitectureAccess | Supply a consistent policy with its approved identity, and service ownership | Resolve |
+| ModelAccess | Submit bounded typed questions and return typed answers | Judge |
 | InterpretationEngine | Bind code to architectural boundaries and interpret interactions | Interpret |
 | ConformanceEngine | Evaluate the model and policy, preserving evidence and analysis gaps | Evaluate |
 
-CheckClient calls InspectionManager for inspection behavior. InspectionManager calls
-both Access components and both Engines. The Engines do not call each other; the
-Manager passes interpretation results to evaluation. Access components do not call
-each other. Rendering belongs to the Client; diagnostic meaning belongs to the
-inspection contract.
+CheckClient calls InspectionManager for a check and SuggestionManager for
+suggestions. InspectionManager calls ProgramAccess, ArchitectureAccess, and both
+Engines. SuggestionManager calls ProgramAccess, ArchitectureAccess, and
+ModelAccess. It does not call either Engine. InspectionManager does not call
+ModelAccess or SuggestionManager. The Engines do not call each other. Access
+components do not call each other. Rendering belongs to the Client. Conformance
+diagnostics stay in the inspection contract; suggestion text stays in the
+suggestion contract. A suggestion run does not change check findings or the
+check exit status.
 
 ## Adapters
 
@@ -177,6 +184,28 @@ Retain both violations and gaps when both occur. A successful result claims only
 coverage of its declared profile. Tests and build tools have explicit scope; silently
 skipping files is not an acceptable coverage strategy.
 
+## Suggestions
+
+`szaniec suggestions` is a separate review for narrow code-quality
+judgments. The deterministic checker stays authoritative: a suggestion is
+not a violation, a complexity gate, or an input to `szaniec check`.
+
+SuggestionManager reads the function catalog and service ownership, selects
+a bounded candidate set, and asks ModelAccess for one typed judgment per
+selected criterion. Exact duplicate bodies are recognized locally and are
+not sent to the provider. ModelAccess talks to the configured judgment
+provider only for this command. Missing credentials, timeouts, and error
+responses are an unavailable review, not an empty successful one. Reports
+cache by snapshot, rubric, model id, budgets, and question state. The
+coding agent records `apply`, `reject`, or `defer` with a rationale; the
+tool does not edit the program.
+
+The rubric, retrieval rules, experimental pilot criteria, and report shape
+are the [suggestion contract](docs/contracts/suggestion-contract.md). Every
+category stays experimental until a live evaluation records cost and
+latency. Similar code in different service families is not a license to
+introduce a shared business library.
+
 ## Contracts
 
 Implementation-level contracts resolved under this architecture:
@@ -186,6 +215,7 @@ Implementation-level contracts resolved under this architecture:
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
 - [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
+- [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
 

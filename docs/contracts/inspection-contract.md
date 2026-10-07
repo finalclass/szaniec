@@ -27,6 +27,9 @@ szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
 - Exit status: `0` no violations and no gaps; `1` violations with
   complete required analysis; `2` incomplete analysis, execution failure,
   or unapproved policy — including when violations were also found.
+- `szaniec suggestions` is specified separately in the
+  [suggestion contract](suggestion-contract.md). It does not change this
+  exit status and does not add findings to the check report.
 
 ## Profile
 
