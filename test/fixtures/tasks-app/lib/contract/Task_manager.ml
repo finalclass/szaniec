@@ -31,3 +31,7 @@ let add ~ctx ~title =
   match !_service_ref with
   | Some f -> Task_access.Task.of_wire (f "add" ctx req)
   | None -> failwith "TaskManager: service not registered"
+
+let cmd_topic = Well.topic "task.cmd" (fun s -> `String s) (fun _ -> Ok "")
+
+let reply_topic = Well.topic "task.reply" (fun s -> `String s) (fun _ -> Ok "")

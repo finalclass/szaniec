@@ -1,11 +1,13 @@
 {
-  "format": "szaniec-functions/1",
-  "metric": "szaniec-complexity/1",
+  "format": "szaniec-complexity/1",
+  "metric": "szaniec-cc/1",
   "functions": [
     {
-      "path": "test/fixtures/coverage-app/lib/core/core.ml",
       "name": "unused",
-      "line": 3,
+      "location": {
+        "path": "test/fixtures/coverage-app/lib/core/core.ml",
+        "line": 3
+      },
       "complexity": 1
     }
   ]

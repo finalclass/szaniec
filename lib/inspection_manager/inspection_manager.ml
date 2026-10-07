@@ -222,7 +222,9 @@ let build_callgraph
         | Interpretation.ImplementationAccess ->
             Some (Callgraph.External_target i.Interpretation.target_module)
         | Interpretation.Registration
-         |Interpretation.MessagingEvidence ->
+         |Interpretation.QueuedCommand
+         |Interpretation.Publication
+         |Interpretation.Subscription ->
             None
       in
       match
@@ -344,6 +346,8 @@ let check (req : request) : Finding.report =
   (* 4. evaluate *)
   let violations =
     Szaniec_conformance_engine.Conformance_engine.evaluate
+      ~approved:
+        resolution.Szaniec_architecture_access.Architecture_access.approved
       ~policy
       ~cy
       ~observation
@@ -428,3 +432,159 @@ let check (req : request) : Finding.report =
       ; units= List.length observation.Observation.units
       ; calls= List.length observation.Observation.calls
       ; type_refs= List.length observation.Observation.type_refs } }
+
+(* Evidence gaps that mean a file was not measured. Interpretation gaps
+   (unresolved calls, ownership) do not hide a measured function. *)
+let evidence_gap (g : Observation.gap) : bool =
+  match g.Observation.gap_code with
+  | "GAP-STALE-ARTIFACT"
+   |"GAP-UNOBSERVED-SOURCE"
+   |"GAP-ARTIFACT-READ"
+   |"GAP-UNSUPPORTED-COMPILER"
+   |"GAP-UNSUPPORTED-CONSTRUCT" ->
+      true
+  | _ -> false
+
+let prepare (req : request) :
+    Policy.t
+    * Szaniec_architecture_access.Architecture_access.resolution
+    * Szaniec_architecture_access.Cyrograf.t
+    * Observation.t
+    * Interpretation.t =
+  let resolution, _approval_gap =
+    match
+      Szaniec_architecture_access.Architecture_access.resolve
+        ~policy_path:req.policy_path
+        ~approval_path:req.approval_path
+    with
+    | Error e -> raise (Policy_error e)
+    | Ok (r, gap) -> (r, gap)
+  in
+  let policy =
+    resolution.Szaniec_architecture_access.Architecture_access.policy
+  in
+  let cy =
+    match
+      Szaniec_architecture_access.Cyrograf.load
+        ~project_root:req.project_root
+        ~program_roots:policy.Policy.program_roots
+    with
+    | Ok cy -> cy
+    | Error e -> raise (Policy_error e)
+  in
+  let assume_fresh =
+    if req.rebuild
+    then
+      let code = run_dune_build req.project_root in
+      code = 0
+    else false
+  in
+  let observation =
+    Szaniec_program_access.Ocaml_adapter.observe
+      ~project_root:req.project_root
+      ~program_roots:policy.Policy.program_roots
+      ~assume_fresh
+      ()
+  in
+  let interpretation =
+    Szaniec_interpretation_engine.Well_adapter.interpret ~policy ~cy observation
+  in
+  (policy, resolution, cy, observation, interpretation)
+
+let complexity (req : request) ~(sort : string) : Complexity.t =
+  let policy, resolution, cy, observation, interpretation = prepare req in
+  let owner_of (unit_name : string) : Interpretation.ownership option =
+    List.find_opt
+      (fun (o : Interpretation.ownership) ->
+        String.equal o.Interpretation.owner_module unit_name )
+      interpretation.Interpretation.ownerships
+  in
+  let rpc_name (service : string) (name : string) : bool =
+    service <> ""
+    && List.exists
+         (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+           String.equal s.Szaniec_architecture_access.Cyrograf.svc_name service
+           && List.exists
+                (fun (m : Szaniec_architecture_access.Cyrograf.method_decl) ->
+                  String.equal
+                    m.Szaniec_architecture_access.Cyrograf.m_name
+                    name )
+                s.Szaniec_architecture_access.Cyrograf.svc_methods )
+         cy.Szaniec_architecture_access.Cyrograf.services
+  in
+  let entries =
+    List.map
+      (fun (f : Observation.function_def) ->
+        let service, ownership =
+          match owner_of f.Observation.fn_unit with
+          | Some o ->
+              ( o.Interpretation.owner_service
+              , Interpretation.class_name o.Interpretation.owner_class )
+          | None ->
+              ( ""
+              , match f.Observation.fn_provenance with
+                | Observation.Prov_generated -> "generated"
+                | _ -> "unclassified" )
+        in
+        let binding =
+          if
+            (not f.Observation.fn_nested)
+            && f.Observation.fn_kind = Observation.Fn_named
+            && rpc_name service f.Observation.fn_name
+          then "rpc"
+          else "function"
+        in
+        { Complexity.id= f.Observation.fn_id
+        ; name= f.Observation.fn_name
+        ; qualname= f.Observation.fn_qualname
+        ; kind= Complexity.kind_name f.Observation.fn_kind
+        ; binding
+        ; nested= f.Observation.fn_nested
+        ; provenance= Complexity.provenance_name f.Observation.fn_provenance
+        ; module_path= f.Observation.fn_unit
+        ; service
+        ; ownership
+        ; path= f.Observation.fn_path
+        ; line= f.Observation.fn_line
+        ; col= f.Observation.fn_col
+        ; end_line= f.Observation.fn_end_line
+        ; end_col= f.Observation.fn_end_col
+        ; complexity= Complexity.complexity_of f.Observation.fn_measure
+        ; status= Complexity.status_name f.Observation.fn_measure } )
+      observation.Observation.functions
+  in
+  let gaps =
+    List.sort_uniq
+      (fun a b ->
+        compare
+          ( a.Observation.gap_code
+          , a.Observation.gap_path
+          , a.Observation.gap_detail )
+          ( b.Observation.gap_code
+          , b.Observation.gap_path
+          , b.Observation.gap_detail ) )
+      ( List.filter evidence_gap observation.Observation.gaps
+      @ observation.Observation.measure_gaps )
+  in
+  let functions = Complexity.sort_entries sort entries in
+  let incomplete = gaps <> [] || Complexity.unmeasurable_count functions > 0 in
+  let compiler =
+    if String.equal observation.Observation.compiler_series "unknown"
+    then "unknown"
+    else observation.Observation.compiler_series
+  in
+  { Complexity.status= (if incomplete then "incomplete" else "ok")
+  ; policy_name= policy.Policy.name
+  ; policy_digest=
+      resolution.Szaniec_architecture_access.Architecture_access.policy_digest
+  ; approved=
+      resolution.Szaniec_architecture_access.Architecture_access.approved
+  ; snapshot_digest= observation.Observation.snapshot_digest
+  ; compiler
+  ; profile= Version.default_profile
+  ; program_roots= policy.Policy.program_roots
+  ; sort
+  ; functions
+  ; coverage= observation.Observation.coverage
+  ; gaps
+  ; exclusions= Complexity.exclusions }

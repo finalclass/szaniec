@@ -74,21 +74,526 @@ let tasks_handler req =
           , {|Task_access_impl.Impl.list ctx req|} ) ]
   ; sc
       "shared-unapproved"
+      ~add_files:
+        [ ( "lib/kit/dune"
+          , {|(include_subdirs no)
+
+(library
+ (name kit)
+ (wrapped false)
+ (flags
+  (:standard -bin-annot)))
+|}
+          )
+        ; ( "lib/kit/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "lib/task_manager/dune"
+          , "(libraries contract well task_access_lib)"
+          , "(libraries contract well task_access_lib kit)" )
+        ; ( "lib/formatting_engine/dune"
+          , "(libraries contract well)"
+          , "(libraries contract well kit)" )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    let _h = Hash.sha req.title in
+    Task_access.create ~ctx ~title:req.title|}
+          )
+        ; ( "lib/formatting_engine/formatting_engine_impl.ml"
+          , {|  let render _ctx text = String.uppercase_ascii text|}
+          , {|  let render _ctx text = String.uppercase_ascii (Hash.sha text)|}
+          ) ]
+  ; sc
+      "shared-by-callback"
+      ~add_files:
+        [ ( "lib/util/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|  let _s = Shared.render_title "help" in|}
+          , {|  let _s = Shared.render_title "help" in
+  let _mapped = List.map Util.Hash.sha ["help"] in|}
+          )
+        ; ( "lib/report_client/page.ml"
+          , {|let show () = Clock.now ()|}
+          , {|let show () =
+  let _mapped = List.map Util.Hash.sha ["report"] in
+  Clock.now ()|}
+          ) ]
+  ; sc
+      "family-outside-layout"
+      ~add_files:[("lib/loose.ml", {|let ping () = 1
+|})]
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore (Loose.ping ()) ;|}
+          ) ]
+  ; sc
+      "family-foreign-alias"
       ~mutations:
         [ ( "lib/task_manager/task_manager_impl.ml"
-          , {|    Task_access.create ~ctx ~title:req.title|}
-          , {|    let _h = Json_util.sha_hex req.title in
-    Task_access.create ~ctx ~title:req.title|}
+          , {|module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    (Task_manager.list ~ctx ~limit:req.limit).tasks|}
+          , {|module Priv = Task_access_impl
+
+let through ctx req = Priv.Impl.list ctx req
+
+module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    through ctx req|}
           ) ]
-    (* Manager -> Manager is allowed by the don'ts, so the absence of
-     an edge list is not a violation. *)
+  ; sc
+      "type-only-no-sharing"
+      ~add_files:[("lib/shapes/shape.ml", {|type t = {n: int}
+|})]
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|  let _s = Shared.render_title "help" in|}
+          , {|  let _s = Shared.render_title "help" in
+  let _kind : Shapes.Shape.t = {n= 1} in|}
+          )
+        ; ( "lib/report_client/page.ml"
+          , {|let show () = Clock.now ()|}
+          , {|let show () =
+  let _kind : Shapes.Shape.t = {n= 2} in
+  Clock.now ()|}
+          ) ]
+  ; sc
+      "unapproved-whitelist"
+      ~reapprove:true
+      ~add_files:
+        [ ( "lib/kit/dune"
+          , {|(include_subdirs no)
+
+(library
+ (name kit)
+ (wrapped false)
+ (flags
+  (:standard -bin-annot)))
+|}
+          )
+        ; ( "lib/kit/hash.ml"
+          , {|let sha (s : string) : string = String.length s |> string_of_int
+|}
+          ) ]
+      ~mutations:
+        [ ( "szaniec/policy.json"
+          , {|  "approvedSharedModules": ["App.Clock"],|}
+          , {|  "approvedSharedModules": ["App.Clock", "Hash"],|} )
+        ; ( "lib/task_manager/dune"
+          , "(libraries contract well task_access_lib)"
+          , "(libraries contract well task_access_lib kit)" )
+        ; ( "lib/formatting_engine/dune"
+          , "(libraries contract well)"
+          , "(libraries contract well kit)" )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    let _h = Hash.sha req.title in
+    Task_access.create ~ctx ~title:req.title|}
+          )
+        ; ( "lib/formatting_engine/formatting_engine_impl.ml"
+          , {|  let render _ctx text = String.uppercase_ascii text|}
+          , {|  let render _ctx text = String.uppercase_ascii (Hash.sha text)|}
+          ) ]
+  ; sc
+      "ambiguous-family"
+      ~add_files:
+        [ ( "lib/task_manager/foreign_bind.ml"
+          , {|module I : Task_access.IMPL = struct
+  let list _ctx _req = []
+
+  let create _ctx title = {Task_access.Task.id= 0; title}
+end
+
+let spec = Task_access.make_spec (module I)
+|}
+          ) ]
+  ; sc
+      "unsupported-indirection"
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|let help_handler req =
+  ignore req ;
+  let _s = Shared.render_title "help" in
+  ignore (Clock.now ()) ;
+  ignore _s ;
+  0|}
+          , {|module type S = sig
+  val ping : unit -> int
+end
+
+let help_handler req =
+  ignore req ;
+  let _s = Shared.render_title "help" in
+  ignore (Clock.now ()) ;
+  let m = (module struct let ping () = 1 end : S) in
+  let module M = (val m : S) in
+  let _n = M.ping () in
+  ignore _s ;
+  ignore _n ;
+  0|}
+          ) ]
+    (* Manager -> Engine is allowed. A synchronous Manager -> Manager
+       call is not; that case is manager-manager-sync. *)
   ; sc
       "layer-correct-unapproved"
       ~mutations:
         [ ( "lib/task_manager/task_manager_impl.ml"
           , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    ignore (Formatting_engine.render ~ctx ~text:req.title);
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "manager-to-client"
+      ~mutations:
+        [ ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    ignore (Audit_client.record ~ctx ~text:req.title);
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "manager-to-client-via-helper"
+      ~mutations:
+        [ ( "lib/task_manager/task_manager_impl.ml"
+          , {|module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    (Task_manager.list ~ctx ~limit:req.limit).tasks
+
+  let add ctx (req : Task_manager.AddReq.t) =
+    Task_access.create ~ctx ~title:req.title
+end|}
+          , {|let remember ctx text =
+  ignore (Audit_client.record ~ctx ~text)
+
+module Impl : Task_manager.IMPL = struct
+  let list ctx (req : Task_access.ListReq.t) =
+    (Task_manager.list ~ctx ~limit:req.limit).tasks
+
+  let add ctx (req : Task_manager.AddReq.t) =
+    remember ctx req.title ;
+    Task_access.create ~ctx ~title:req.title
+end|}
+          ) ]
+  ; sc
+      "engine-to-client"
+      ~mutations:
+        [ ( "lib/formatting_engine/formatting_engine_impl.ml"
+          , {|let render _ctx text = String.uppercase_ascii text|}
+          , {|let render ctx text =
+  ignore (Audit_client.record ~ctx ~text) ;
+  String.uppercase_ascii text|}
+          ) ]
+  ; sc
+      "access-to-client"
+      ~mutations:
+        [ ( "lib/task_access/task_access_impl.ml"
+          , {|  let create _ctx title =
+    Well.Db.with_conn (Lazy.force pool) @@ fun _db ->|}
+          , {|  let create ctx title =
+    ignore (Audit_client.record ~ctx ~text:title) ;
+    Well.Db.with_conn (Lazy.force pool) @@ fun _db ->|}
+          ) ]
+  ; sc
+      "client-multi-manager"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;|}
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  let _ok = Notification_manager.publish ~ctx:ctx_w ~text:req.title in
+  ignore _task ;
+  ignore _ok ;|}
+          ) ]
+  ; sc
+      "client-multi-manager-branches"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|let tasks_handler req =
+  ignore req ;
+  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;
+  0|}
+          , {|let tasks_handler (req : Well.request) =
+  if req.meth = "POST" then (
+    let _task = Task_manager.add ~ctx:ctx_w ~title:"new" in
+    ignore _task )
+  else (
+    let _ok = Notification_manager.publish ~ctx:ctx_w ~text:"new" in
+    ignore _ok ) ;
+  0|}
+          ) ]
+  ; sc
+      "client-multi-manager-handlers"
+      ~mutations:
+        [ ( "lib/web_client/help_page.ml"
+          , {|  let _s = Shared.render_title "help" in|}
+          , {|  let _s = Shared.render_title "help" in
+  let _ok =
+    Notification_manager.publish
+      ~ctx:Well.{session_id= "s"; user_id= None}
+      ~text:"help"
+  in
+  ignore _ok ;|}
+          ) ]
+  ; sc
+      "client-multi-manager-helper"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|let tasks_handler req =
+  ignore req ;
+  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;
+  0|}
+          , {|let notify text =
+  let _ok = Notification_manager.publish ~ctx:ctx_w ~text in
+  ignore _ok
+
+let tasks_handler req =
+  ignore req ;
+  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  notify req.title ;
+  ignore _task ;
+  0|}
+          ) ]
+  ; sc
+      "client-multi-manager-and-gap"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;|}
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  let _ok = Notification_manager.publish ~ctx:ctx_w ~text:req.title in
+  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
+  let _hidden = dispatcher "x" in
+  ignore _task ;
+  ignore _ok ;
+  ignore _hidden ;|}
+          ) ]
+  ; sc
+      "ambiguous-try"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|let tasks_handler req =
+  ignore req ;
+  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;
+  0|}
+          , {|let tasks_handler req =
+  ignore req ;
+  ( try
+      let _task = Task_manager.add ~ctx:ctx_w ~title:"new" in
+      ignore _task
+    with _ ->
+      let _ok = Notification_manager.publish ~ctx:ctx_w ~text:"new" in
+      ignore _ok ) ;
+  0|}
+          ) ]
+  ; sc
+      "manager-manager-sync"
+      ~mutations:
+        [ ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
           , {|    ignore (Notification_manager.publish ~ctx ~text:req.title);
     Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "manager-manager-queued"
+      ~mutations:
+        [ ( "lib/notification_manager/notification_manager_impl.ml"
+          , {|let spec = Notification_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Notification_manager.cmd_topic (fun _msg -> ()))
+
+let spec = Notification_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    ignore
+      (Well.request
+         ~cmd:Notification_manager.cmd_topic
+         ~reply:Notification_manager.reply_topic
+         ~key:"k"
+         req.title) ;
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "queue-fanout"
+      ~mutations:
+        [ ( "lib/notification_manager/notification_manager_impl.ml"
+          , {|let spec = Notification_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Notification_manager.cmd_topic (fun _msg -> ()))
+
+let spec = Notification_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|let spec = Task_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Notification_manager.cmd_topic (fun _msg -> ()))
+
+let spec = Task_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          , {|  ignore
+    (Well.request
+       ~cmd:Notification_manager.cmd_topic
+       ~reply:Notification_manager.reply_topic
+       ~key:"k"
+       req.title) ;
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          ) ]
+  ; sc
+      "queue-fanout-branches"
+      ~mutations:
+        [ ( "lib/notification_manager/notification_manager_impl.ml"
+          , {|let spec = Notification_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Notification_manager.cmd_topic (fun _msg -> ()))
+
+let spec = Notification_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|let spec = Task_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Task_manager.cmd_topic (fun _msg -> ()))
+
+let spec = Task_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/web_client/tasks_page.ml"
+          , {|let tasks_handler req =
+  ignore req ;
+  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
+  ignore _task ;
+  0|}
+          , {|let tasks_handler (req : Well.request) =
+  if req.meth = "POST" then
+    ignore
+      (Well.request
+         ~cmd:Notification_manager.cmd_topic
+         ~reply:Notification_manager.reply_topic
+         ~key:"k"
+         "new")
+  else
+    ignore
+      (Well.request
+         ~cmd:Task_manager.cmd_topic
+         ~reply:Task_manager.reply_topic
+         ~key:"k"
+         "new") ;
+  ignore req ;
+  0|}
+          ) ]
+  ; sc
+      "queue-target-engine"
+      ~mutations:
+        [ ( "lib/template_engine/template_engine_impl.ml"
+          , {|let spec = Template_engine.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Template_engine.cmd_topic (fun _msg -> ()))
+
+let spec = Template_engine.make_spec (module Impl)|}
+          )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    ignore
+      (Well.request
+         ~cmd:Template_engine.cmd_topic
+         ~reply:Template_engine.reply_topic
+         ~key:"k"
+         req.title) ;
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "queue-target-access"
+      ~mutations:
+        [ ( "lib/task_access/task_access_impl.ml"
+          , {|let spec = Task_access.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.subscribe Task_access.cmd_topic (fun _msg -> ()))
+
+let spec = Task_access.make_spec (module Impl)|}
+          )
+        ; ( "lib/task_manager/task_manager_impl.ml"
+          , {|    Task_access.create ~ctx ~title:req.title|}
+          , {|    ignore
+      (Well.request
+         ~cmd:Task_access.cmd_topic
+         ~reply:Task_access.reply_topic
+         ~key:"k"
+         req.title) ;
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "queue-unresolved-topic"
+      ~mutations:
+        [ ( "lib/task_manager/task_manager_impl.ml"
+          , {|  let add ctx (req : Task_manager.AddReq.t) =
+    Task_access.create ~ctx ~title:req.title|}
+          , {|  let add ctx (req : Task_manager.AddReq.t) =
+    let topic = Notification_manager.cmd_topic in
+    ignore
+      (Well.request
+         ~cmd:topic
+         ~reply:Notification_manager.reply_topic
+         ~key:"k"
+         req.title) ;
+    Task_access.create ~ctx ~title:req.title|}
+          ) ]
+  ; sc
+      "event-publish-client"
+      ~mutations:
+        [ ( "lib/web_client/tasks_page.ml"
+          , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          , {|  Well.publish Notification_manager.event_topic req.title ;
+  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
+          ) ]
+  ; sc
+      "event-subscribe-engine"
+      ~mutations:
+        [ ( "lib/template_engine/template_engine_impl.ml"
+          , {|let spec = Template_engine.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.MessageBus.once "template" (fun _event -> ()))
+
+let spec = Template_engine.make_spec (module Impl)|}
+          ) ]
+  ; sc
+      "event-publish-access"
+      ~mutations:
+        [ ( "lib/task_access/task_access_impl.ml"
+          , {|  let create _ctx title =|}
+          , {|  let create _ctx title =
+    ignore (Well.MessageBus.publish "tasks" title) ;|}
+          ) ]
+  ; sc
+      "event-roles-allowed"
+      ~mutations:
+        [ ( "lib/notification_manager/notification_manager_impl.ml"
+          , {|let spec = Notification_manager.make_spec (module Impl)|}
+          , {|let () =
+  ignore (Well.publish Notification_manager.event_topic "ready")
+
+let spec = Notification_manager.make_spec (module Impl)|}
+          )
+        ; ( "lib/web_client/tasks_page.ml"
+          , {|let ctx_w = Well.{session_id= "s"; user_id= None}|}
+          , {|let () =
+  ignore (Well.subscribe Notification_manager.event_topic (fun _msg -> ()))
+
+let ctx_w = Well.{session_id= "s"; user_id= None}|}
           ) ]
   ; sc
       "resource-boundary"

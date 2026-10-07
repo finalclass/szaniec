@@ -759,9 +759,10 @@ let attribute
       spans
   in
   let inventory_of path name line =
+    let names = if name = "anonymous" then [name; "anon"] else [name] in
     List.find_opt
       (fun (e : inventory_entry) ->
-        e.path = path && e.name = name && e.line = line )
+        e.path = path && e.line = line && List.mem e.name names )
       inventory
   in
   let funcs = ref [] in
@@ -898,12 +899,24 @@ let load_inventory (path : string) : (inventory_entry list, Coverage.gap) result
         | Some (`String s) -> s
         | _ -> ""
       in
-      if format <> Version.functions_format
+      let metric =
+        match List.assoc_opt "metric" fields with
+        | Some (`String s) -> s
+        | _ -> ""
+      in
+      if format <> Version.complexity_format
       then
         Error
           { Coverage.code= "COVERAGE-INVENTORY-INVALID"
           ; message=
-              "Function inventory format must be " ^ Version.functions_format
+              "Function inventory format must be " ^ Version.complexity_format
+          ; path }
+      else if metric <> "" && metric <> Version.complexity_metric
+      then
+        Error
+          { Coverage.code= "COVERAGE-INVENTORY-INVALID"
+          ; message=
+              "Function inventory metric must be " ^ Version.complexity_metric
           ; path }
       else
         match List.assoc_opt "functions" fields with
@@ -912,22 +925,31 @@ let load_inventory (path : string) : (inventory_entry list, Coverage.gap) result
               List.filter_map
                 (function
                   | `Assoc f -> (
-                      let str k =
-                        match List.assoc_opt k f with
+                      let str fields k =
+                        match List.assoc_opt k fields with
                         | Some (`String s) -> Some s
                         | _ -> None
                       in
-                      let line =
-                        match List.assoc_opt "line" f with
-                        | Some (`Int n) -> n
-                        | _ -> 0
-                      in
-                      let complexity =
-                        match List.assoc_opt "complexity" f with
+                      let int_field fields k =
+                        match List.assoc_opt k fields with
                         | Some (`Int n) -> Some n
                         | _ -> None
                       in
-                      match (str "path", str "name") with
+                      let path, line =
+                        match str f "path" with
+                        | Some p ->
+                            ( Some p
+                            , Option.value ~default:0 (int_field f "line") )
+                        | None -> (
+                          match List.assoc_opt "location" f with
+                          | Some (`Assoc loc) ->
+                              ( str loc "path"
+                              , Option.value ~default:0 (int_field loc "line")
+                              )
+                          | _ -> (None, 0) )
+                      in
+                      let complexity = int_field f "complexity" in
+                      match (path, str f "name") with
                       | Some p, Some name ->
                           Some {path= p; name; line; complexity}
                       | _ -> None )

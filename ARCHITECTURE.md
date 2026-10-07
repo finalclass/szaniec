@@ -132,6 +132,13 @@ service name suffix (`manager`, `client`, `engine`, `access`; any other
 name is a Utility) — see
 [the decision record](docs/decisions/donts-based-rules.md).
 
+A private helper belongs to a service family only when its source path
+lies in that family's directory tree (nested directories and nested
+modules included) or compiler evidence binds the unit to the service.
+One observed caller does not move an outside module into the family.
+A name such as `Shared`, `Common` or `Utils` does not create a boundary
+and does not approve infrastructure.
+
 New in-scope code without ownership produces a diagnostic.
 Distinguish:
 
@@ -192,8 +199,9 @@ Implementation-level contracts resolved under this architecture:
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.1.0`, don'ts-based.
+- [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cc/1`, local function inventory.
 - [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/2.0.0`, don'ts-based.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
 

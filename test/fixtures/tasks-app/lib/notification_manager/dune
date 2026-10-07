@@ -3,6 +3,6 @@
 (library
  (name notification_manager_lib)
  (wrapped false)
- (libraries contract well common)
+ (libraries contract well)
  (flags
   (:standard -bin-annot)))

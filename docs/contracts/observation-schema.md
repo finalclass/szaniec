@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/1`.
+Format identifier (conceptual): `szaniec-observation/2`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -58,17 +58,58 @@ ownership or findings. `.mli` interfaces are not analyzed in this profile.
     `unresolved-dynamic` (anything else).
   - `site` — source path, line, column of the application's callee
     location.
+  - `args` — labeled arguments that are resolved module paths or string
+    literals, in spine order (inner application first). The label is
+    empty for a positional argument. Local and computed arguments are
+    kept with an empty path and empty literal so a missing topic is
+    visible. Nested calls inside an argument stay ordinary calls.
   - Call spines are resolved through curried applications (`f a @@ b`
     resolves to `f`), never by name pattern matching.
+- `execPaths` — per `(unit, caller)`, the executable alternatives of
+  that value when it runs. Each alternative is the list of direct
+  calls that co-occur on it. `if` and `match` arms are different
+  alternatives; a sequence concatenates alternatives (bounded at 48,
+  above which the function is `ambiguous` and its alternatives are
+  dropped). A `try`/`with` with calls both in the body and in a
+  handler is `ambiguous`. Evaluating a function value does not execute
+  its body; the body's alternatives belong to that function. These
+  paths are the evidence for use-case and queue fan-out rules. They
+  do not replace `calls`.
 - `valueRefs` — non-call identifier references to module members
-  (`M.value` reads), with site; used for registration evidence and
-  implementation-access by reference.
+  (`M.value` reads and function values passed as callbacks), with site.
+  These are executable dependencies: registration evidence,
+  implementation access and sharing all see them. A structure-level
+  `module Alias = Path` is resolved to `Path` in the recorded callee or
+  target. First-class module unpacks and functor applications are not
+  resolved; they are `GAP-UNSUPPORTED-CONSTRUCT`.
 - `typeRefs` — type-constructor references with site (`Task_access.ListReq.t`).
-  Type-only references are contract usage; they do not count as
-  executable sharing or calls in this profile.
+  Type-only references are contract or data usage. They do not count as
+  executable sharing, implementation access or calls.
 
 Calls, valueRefs and typeRefs are sorted by `(unit, caller, callee, site)`
 before the observation is consumed, so downstream stages are deterministic.
+
+## Functions
+
+`functions` is the syntactic-function inventory measured by
+[szaniec-cc/1](complexity-metric.md). Each entry has a deterministic id,
+a source span, provenance (`authored`, `generated`, or `test`), and
+either a complexity or an unmeasurable status. Nested bodies are
+separate entries. Aliases and partial applications are absent.
+
+`coverage` lists every scanned source file and every generated file the
+adapter opened, with a status of `measured`, `stale`, `unobserved`,
+`unreadable`, `unsupported-compiler`, or `unmeasurable`.
+`unmeasurable` means the artifact's typedtree is not a complete
+implementation, or the complexity walk failed; the file contributes no
+function rows. A measured file may still contain individual functions
+whose complexity is null. `measureGaps` records complexity gaps
+(`GAP-UNMEASURABLE`, and staleness of generated wrappers). Those gaps
+are not conformance findings: `szaniec check` does not read `functions`,
+`coverage`, or `measureGaps`.
+
+Dune `.ml-gen` wrappers are measured for the inventory and still excluded
+from the conformance unit list.
 
 ## Completeness
 

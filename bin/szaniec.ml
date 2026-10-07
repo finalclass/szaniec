@@ -7,6 +7,9 @@ let usage =
   \ szaniec approve --policy <path> [--approval <path>]\n\
   \ szaniec check --policy <path> [--approval <path>] [--project-root <dir>]\n\
   \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
+  \ szaniec complexity --policy <path> [--approval <path>] [--project-root \
+   <dir>]\n\
+  \                    [--rebuild] [--json] [--sort location|complexity]\n\
   \ szaniec coverage [--project-root <dir>] [--config <path>] [--json]\n\
   \                  [--out <path>] [--keep-work] [--function-inventory <path>]\n\
   \ szaniec coverage supervise --port <int> [--pass-env <name>]... -- \
@@ -20,7 +23,8 @@ type args =
   ; rebuild: bool
   ; json: bool
   ; out: string option
-  ; no_callgraph: bool }
+  ; no_callgraph: bool
+  ; sort: string }
 
 let rec parse (argv : string list) (acc : args) : args =
   match argv with
@@ -32,7 +36,10 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--json" :: rest -> parse rest {acc with json= true}
   | "--out" :: p :: rest -> parse rest {acc with out= Some p}
   | "--no-callgraph" :: rest -> parse rest {acc with no_callgraph= true}
-  | cmd :: rest when acc.command = "" && (cmd = "check" || cmd = "approve") ->
+  | "--sort" :: s :: rest -> parse rest {acc with sort= s}
+  | cmd :: rest
+    when acc.command = ""
+         && (cmd = "check" || cmd = "approve" || cmd = "complexity") ->
       parse rest {acc with command= cmd}
   | bad :: _ ->
       prerr_endline ("szaniec: unknown argument: " ^ bad) ;
@@ -47,7 +54,8 @@ let default_args =
   ; rebuild= false
   ; json= false
   ; out= None
-  ; no_callgraph= false }
+  ; no_callgraph= false
+  ; sort= "" }
 
 (* ── rendering ────────────────────────────────────────────────────── *)
 
@@ -292,6 +300,182 @@ let write_callgraph (r : Finding.report) (out : string option) (root : string) :
         with
         | Sys_error e ->
             prerr_endline ("szaniec: cannot write " ^ path ^ ": " ^ e) ) )
+
+let complexity_text (r : Complexity.t) : string =
+  let buf = Buffer.create 1024 in
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "szaniec complexity %s (%s)\n"
+       r.Complexity.status
+       Version.complexity_metric ) ;
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "  policy %s (%s)%s\n"
+       r.Complexity.policy_name
+       r.Complexity.policy_digest
+       (if r.Complexity.approved then "" else " [NOT APPROVED]") ) ;
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "  profile: %s; compiler: %s; snapshot: %s; sort: %s\n"
+       r.Complexity.profile
+       r.Complexity.compiler
+       r.Complexity.snapshot_digest
+       r.Complexity.sort ) ;
+  Buffer.add_string buf "  exclusions:\n" ;
+  List.iter
+    (fun e -> Buffer.add_string buf (Printf.sprintf "    - %s\n" e))
+    r.Complexity.exclusions ;
+  Buffer.add_string buf "  coverage:\n" ;
+  List.iter
+    (fun (c : Observation.file_coverage) ->
+      Buffer.add_string
+        buf
+        (Printf.sprintf
+           "    %s %s %s %d\n"
+           c.Observation.cov_path
+           (Complexity.provenance_name c.Observation.cov_provenance)
+           c.Observation.cov_status
+           c.Observation.cov_functions ) )
+    r.Complexity.coverage ;
+  if r.Complexity.gaps = []
+  then Buffer.add_string buf "  gaps: none\n"
+  else (
+    Buffer.add_string buf "  gaps:\n" ;
+    List.iter
+      (fun (g : Observation.gap) ->
+        Buffer.add_string
+          buf
+          (Printf.sprintf
+             "    %s %s (%s)\n"
+             g.Observation.gap_code
+             g.Observation.gap_path
+             g.Observation.gap_detail ) )
+      r.Complexity.gaps ) ;
+  List.iter
+    (fun (e : Complexity.entry) ->
+      let cc =
+        match e.Complexity.complexity with
+        | Some n -> string_of_int n
+        | None -> "-"
+      in
+      let service =
+        if e.Complexity.service = "" then "-" else e.Complexity.service
+      in
+      Buffer.add_string
+        buf
+        (Printf.sprintf
+           "%s  %s  %s  %s  %s  %s  %s:%d:%d\n"
+           e.Complexity.id
+           cc
+           e.Complexity.binding
+           e.Complexity.provenance
+           e.Complexity.ownership
+           service
+           e.Complexity.path
+           e.Complexity.line
+           e.Complexity.col ) )
+    r.Complexity.functions ;
+  let max_cc =
+    match Complexity.max_complexity r.Complexity.functions with
+    | Some n -> string_of_int n
+    | None -> "-"
+  in
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "summary: %d function(s), %d measured, %d unmeasurable, max %s, %d gap(s)\n"
+       (List.length r.Complexity.functions)
+       (Complexity.measured_count r.Complexity.functions)
+       (Complexity.unmeasurable_count r.Complexity.functions)
+       max_cc
+       (List.length r.Complexity.gaps) ) ;
+  Buffer.contents buf
+
+let complexity_json (r : Complexity.t) : string =
+  let opt_int = function
+    | Some n -> `Int n
+    | None -> `Null
+  in
+  let jentry (e : Complexity.entry) =
+    `Assoc
+      [ ("id", `String e.Complexity.id)
+      ; ("name", `String e.Complexity.name)
+      ; ("qualname", `String e.Complexity.qualname)
+      ; ("kind", `String e.Complexity.kind)
+      ; ("binding", `String e.Complexity.binding)
+      ; ("nested", `Bool e.Complexity.nested)
+      ; ("provenance", `String e.Complexity.provenance)
+      ; ("module", `String e.Complexity.module_path)
+      ; ( "service"
+        , if e.Complexity.service = ""
+          then `Null
+          else `String e.Complexity.service )
+      ; ("ownership", `String e.Complexity.ownership)
+      ; ( "location"
+        , `Assoc
+            [ ("path", `String e.Complexity.path)
+            ; ("line", `Int e.Complexity.line)
+            ; ("col", `Int e.Complexity.col) ] )
+      ; ( "end"
+        , `Assoc
+            [ ("line", `Int e.Complexity.end_line)
+            ; ("col", `Int e.Complexity.end_col) ] )
+      ; ("complexity", opt_int e.Complexity.complexity)
+      ; ("status", `String e.Complexity.status)
+      ; ("metric", `String Version.complexity_metric) ]
+  in
+  let jcov (c : Observation.file_coverage) =
+    `Assoc
+      [ ("path", `String c.Observation.cov_path)
+      ; ( "provenance"
+        , `String (Complexity.provenance_name c.Observation.cov_provenance) )
+      ; ("status", `String c.Observation.cov_status)
+      ; ("functions", `Int c.Observation.cov_functions) ]
+  in
+  let jgap (g : Observation.gap) =
+    `Assoc
+      [ ("code", `String g.Observation.gap_code)
+      ; ("path", `String g.Observation.gap_path)
+      ; ("detail", `String g.Observation.gap_detail) ]
+  in
+  let max_cc = Complexity.max_complexity r.Complexity.functions in
+  let json =
+    `Assoc
+      [ ("format", `String Version.complexity_format)
+      ; ("metric", `String Version.complexity_metric)
+      ; ("status", `String r.Complexity.status)
+      ; ("sort", `String r.Complexity.sort)
+      ; ( "inputs"
+        , `Assoc
+            [ ("policyName", `String r.Complexity.policy_name)
+            ; ("policyDigest", `String r.Complexity.policy_digest)
+            ; ("approved", `Bool r.Complexity.approved)
+            ; ("profile", `String r.Complexity.profile)
+            ; ( "programRoots"
+              , `List (List.map (fun p -> `String p) r.Complexity.program_roots)
+              )
+            ; ("snapshotDigest", `String r.Complexity.snapshot_digest)
+            ; ("compiler", `String r.Complexity.compiler)
+            ; ("programAccess", `String Version.adapter_ocaml) ] )
+      ; ("functions", `List (List.map jentry r.Complexity.functions))
+      ; ("coverage", `List (List.map jcov r.Complexity.coverage))
+      ; ("gaps", `List (List.map jgap r.Complexity.gaps))
+      ; ( "exclusions"
+        , `List (List.map (fun e -> `String e) r.Complexity.exclusions) )
+      ; ( "summary"
+        , `Assoc
+            [ ("functions", `Int (List.length r.Complexity.functions))
+            ; ( "measured"
+              , `Int (Complexity.measured_count r.Complexity.functions) )
+            ; ( "unmeasurable"
+              , `Int (Complexity.unmeasurable_count r.Complexity.functions) )
+            ; ("maxComplexity", opt_int max_cc)
+            ; ("gaps", `Int (List.length r.Complexity.gaps)) ] ) ]
+  in
+  Yojson.Safe.to_string json ^ "\n"
 
 let exit_code (r : Finding.report) : int =
   match r.Finding.status with
@@ -603,7 +787,52 @@ let () =
           | Error e ->
               prerr_endline ("szaniec: " ^ e) ;
               exit 2 )
+      | "complexity" -> (
+          let sort = if args.sort = "" then "location" else args.sort in
+          if sort <> "location" && sort <> "complexity"
+          then (
+            prerr_endline
+              ("szaniec: --sort must be location or complexity, not " ^ sort) ;
+            exit 2 ) ;
+          let policy_path =
+            if
+              Filename.is_relative args.policy
+              && not (Sys.file_exists args.policy)
+            then Filename.concat args.project_root args.policy
+            else args.policy
+          in
+          let approval_path =
+            match args.approval with
+            | Some ap ->
+                if Filename.is_relative ap && not (Sys.file_exists ap)
+                then Some (Filename.concat args.project_root ap)
+                else Some ap
+            | None -> None
+          in
+          try
+            let report =
+              Szaniec_inspection_manager.Inspection_manager.complexity
+                ~sort
+                { Szaniec_inspection_manager.Inspection_manager.project_root=
+                    args.project_root
+                ; policy_path
+                ; approval_path
+                ; rebuild= args.rebuild }
+            in
+            print_string
+              ( if args.json
+                then complexity_json report
+                else complexity_text report ) ;
+            exit (if report.Complexity.status = "ok" then 0 else 2)
+          with
+          | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
       | _ -> (
+          if args.sort <> ""
+          then (
+            prerr_endline "szaniec: --sort is only valid with complexity" ;
+            exit 2 ) ;
           let policy_path =
             if
               Filename.is_relative args.policy

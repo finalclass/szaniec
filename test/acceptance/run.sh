@@ -16,10 +16,16 @@ while [ ! -f "$repo/test/fixtures/tasks-app/dune-project" ]; do
 done
 
 if [ ! -x "$repo/_build/default/bin/szaniec.exe" ] ||
-   [ ! -x "$repo/_build/default/test/acceptance/runner.exe" ]; then
-  cd "$repo" && dune build bin/szaniec.exe test/acceptance/runner.exe
+   [ ! -x "$repo/_build/default/test/acceptance/runner.exe" ] ||
+   [ ! -x "$repo/_build/default/test/acceptance/complexity_runner.exe" ]; then
+  cd "$repo" && dune build bin/szaniec.exe test/acceptance/runner.exe \
+    test/acceptance/complexity_runner.exe
 fi
 
-exec "$repo/_build/default/test/acceptance/runner.exe" \
+"$repo/_build/default/test/acceptance/runner.exe" \
+  "$repo/_build/default/bin/szaniec.exe" "$repo/test/fixtures/tasks-app" \
+  "$repo/test/acceptance/expected"
+
+exec "$repo/_build/default/test/acceptance/complexity_runner.exe" \
   "$repo/_build/default/bin/szaniec.exe" "$repo/test/fixtures/tasks-app" \
   "$repo/test/acceptance/expected"

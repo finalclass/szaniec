@@ -5,27 +5,27 @@ let report_format = "szaniec-report/1"
 
 let callgraph_format = "szaniec-callgraph/1"
 
+let complexity_format = "szaniec-complexity/1"
+
+let complexity_metric = "szaniec-cc/1"
+
 let policy_format = "szaniec-policy/2"
 
 let approval_format = "szaniec-approval/1"
 
-let observation_format = "szaniec-observation/1"
+let observation_format = "szaniec-observation/2"
 
-let interpretation_format = "szaniec-interpretation/1"
+let interpretation_format = "szaniec-interpretation/2"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.0.0"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.2.0"
 
-let adapter_well = "szaniec-well-adapter/2.0.0"
+let adapter_well = "szaniec-well-adapter/3.1.0"
 
-let rules = "szaniec-rules/2.0.0"
+let rules = "szaniec-rules/3.1.0"
 
 let coverage_format = "szaniec-coverage/1"
 
 let coverage_config_format = "szaniec-coverage-config/1"
-
-let functions_format = "szaniec-functions/1"
-
-let complexity_metric = "szaniec-complexity/1"
 
 let instrumentation_facade = "szaniec-instrumentation/1"
 

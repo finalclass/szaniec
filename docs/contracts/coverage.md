@@ -4,7 +4,7 @@ Format identifiers:
 
 - configuration `szaniec-coverage-config/1`
 - machine-readable report `szaniec-coverage/1`
-- function-inventory input `szaniec-functions/1` (complexity is optional input)
+- function-inventory input `szaniec-complexity/1` (the `szaniec complexity` report; complexity is optional input)
 - instrumentation facade `szaniec-instrumentation/1`
 
 Coverage is a measurement workflow. It does not change conformance rules and
@@ -199,20 +199,30 @@ then `message`, nodes by `id`, exclusions alphabetically.
 
 Per-function coverage for CRAP is `covered / total` over the points
 attributed to that function. When `total` is 0 the score is unavailable
-(`coverage-missing`). Complexity comes only from a `szaniec-functions/1`
-inventory passed with `--function-inventory`:
+(`coverage-missing`). Complexity comes only from a `szaniec-complexity/1`
+report passed with `--function-inventory`. That report is the output of
+`szaniec complexity --json`; its metric is `szaniec-cc/1`. This command
+does not compute complexity.
 
 ```json
 {
-  "format": "szaniec-functions/1",
-  "metric": "szaniec-complexity/1",
+  "format": "szaniec-complexity/1",
+  "metric": "szaniec-cc/1",
   "functions": [
-    { "path": "lib/core.ml", "name": "unused", "line": 3, "complexity": 1 }
+    {
+      "name": "unused",
+      "location": { "path": "lib/core.ml", "line": 3 },
+      "complexity": 1
+    }
   ]
 }
 ```
 
-The join key is path, name, and line. A missing inventory, a missing
+The join key is path, name, and line. Path and line come from
+`location` (a flat `path` and `line` on the function is also accepted).
+`name` is the inventory's local name. A coverage span named
+`anonymous` also matches an inventory name `anon` on the same line.
+A missing inventory, a missing
 function, or a missing `complexity` field yields
 `crap.status = unavailable` and `reason = complexity-missing`. An unreadable
 inventory is gap `COVERAGE-INVENTORY-INVALID`. The score, when both inputs
@@ -241,7 +251,7 @@ is not run; this command does not compute complexity itself.
 | `COVERAGE-UNSUPPORTED-PREPROCESS` | A stanza uses `(preprocess (action ...))`, which Dune does not instrument |
 | `COVERAGE-UNSUPPORTED-CONSTRUCT` | A class or object method is present; methods are not in the function index |
 | `COVERAGE-SOURCE-UNPARSED` | An in-scope `.ml` file could not be parsed |
-| `COVERAGE-INVENTORY-INVALID` | The function inventory is not `szaniec-functions/1` |
+| `COVERAGE-INVENTORY-INVALID` | The function inventory is not a `szaniec-complexity/1` report, or its metric is not `szaniec-cc/1` |
 | `COVERAGE-UNMAPPED-FILE` | A point file names a project source that is not in the snapshot |
 
 Scenario failure is `scenario.status = failed` and is independent of these
