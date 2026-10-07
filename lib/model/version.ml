@@ -5,6 +5,10 @@ let report_format = "szaniec-report/1"
 
 let callgraph_format = "szaniec-callgraph/1"
 
+let complexity_format = "szaniec-complexity/1"
+
+let complexity_metric = "szaniec-cc/1"
+
 let policy_format = "szaniec-policy/2"
 
 let approval_format = "szaniec-approval/1"

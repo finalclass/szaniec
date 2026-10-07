@@ -20,8 +20,11 @@ service mechanics (contracts, proxies, registrations, database access),
 evaluates the rule catalog, and reports deterministic text/JSON findings.
 
 Supported profile: `well-ocaml-core` — OCaml **5.4.x** artifacts produced
-by dune. See [ARCHITECTURE.md](ARCHITECTURE.md), the contract documents
-under [docs/contracts](docs/contracts) and the stack decision in
+by dune. `szaniec complexity` inventories every function in the declared
+program roots and reports local cyclomatic complexity (`szaniec-cc/1`).
+It does not apply a threshold and it does not write `szaniec.json`. See
+[ARCHITECTURE.md](ARCHITECTURE.md), the contract documents under
+[docs/contracts](docs/contracts) and the stack decision in
 [docs/decisions/stack.md](docs/decisions/stack.md).
 
 ## Intended use
@@ -32,6 +35,9 @@ In a configured project:
 szaniec approve --policy szaniec/policy.json --approval szaniec/approval.json
 szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
                 --project-root . [--rebuild] [--json]
+szaniec complexity --policy szaniec/policy.json \
+                   [--approval szaniec/approval.json] [--project-root .] \
+                   [--rebuild] [--json] [--sort location|complexity]
 ```
 
 - `approve` records the approved policy identity (name + SHA-256) in the
@@ -40,8 +46,15 @@ szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
   the input identities (policy digest, snapshot digest, adapter and rule
   versions). Unresolved calls and stale or missing artifacts never
   produce a passing result.
-- Exit status: `0` no violations and no gaps; `1` violations with
-  complete analysis; `2` incomplete analysis or execution failure.
+- Exit status of `check`: `0` no violations and no gaps; `1` violations
+  with complete analysis; `2` incomplete analysis or execution failure.
+- `complexity` lists every syntactic function with its `szaniec-cc/1`
+  complexity, source span, provenance, and ownership when interpretation
+  has one. `--sort location` (the default) is source order; `--sort
+  complexity` is descending complexity, then `id`, with unmeasurable
+  definitions last. Exit status: `0` when coverage is complete, `2` when
+  a file or construct could not be measured. The command never exits
+  `1`. A recorded policy approval does not by itself change that status.
 
 Findings examples: a Client calling an Access service (also through
 helpers or supported proxies), a Client calling an Engine, an Engine
@@ -82,7 +95,7 @@ package lock through `dune pkg`; first run needs network access):
 dune pkg lock                       # resolve/verify dune.lock
 dune build @all                     # build everything
 dune exec ocamlformat -- --check $(git ls-files '*.ml')   # formatter check
-dune build @runtest                 # unit gate test + acceptance suite
+dune build @runtest                 # unit gate, check scenarios, complexity suite
 test/acceptance/run.sh              # same suite, standalone entry point
 ```
 
@@ -90,9 +103,14 @@ The acceptance suite copies `test/fixtures/tasks-app` (a minimal
 Well-shaped application), applies controlled source mutations per
 scenario, rebuilds the fixture inside the scenario work directory, runs
 `szaniec check --json` and compares the report with golden files in
-`test/acceptance/expected/`. The fixture uses a documented stub of the
-Well API surface (`lib/well_stub/`) instead of the real framework
-dependency; see the fixture README.
+`test/acceptance/expected/`. The same entry point then runs `szaniec
+complexity` against the `metric/` and `test/` specimens (straight-line
+code, matches, loops, recursion, exceptions, nested and anonymous
+functions, an rpc method, a test-provenance definition, a stale
+artifact, a source that does not type-check, and object constructs).
+Expected complexities are listed in the fixture README. The fixture
+uses a documented stub of the Well API surface (`lib/well_stub/`)
+instead of the real framework dependency; see the fixture README.
 
 CI (`.github/workflows/ci.yml`) runs the same commands.
 
@@ -113,7 +131,8 @@ executable paths cannot be built, is an analysis gap (exit 2), not a pass.
 - [Implementation brief](IMPLEMENTATION.md): first delivery, acceptance scenarios,
   unresolved implementation decisions, and verification expectations.
 - [Contract documents](docs/contracts): policy format, observation schema,
-  interpretation schema, inspection contract, rule catalog.
+  interpretation schema, inspection contract, rule catalog, and the
+  [complexity metric](docs/contracts/complexity-metric.md).
 - [Agent instructions](AGENTS.md): repository rules for an implementing agent.
 
 The checker is a local command-line program. It needs no server or

@@ -9,6 +9,8 @@ Format identifiers: request is CLI-only; machine-readable report is
 szaniec approve --policy <path> [--approval <path>]
 szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
                 [--rebuild] [--json] [--out <path>] [--no-callgraph]
+szaniec complexity --policy <path> [--approval <path>] [--project-root <dir>]
+                   [--rebuild] [--json] [--sort location|complexity]
 ```
 
 - `approve` writes the approval file recording the policy name and
@@ -24,9 +26,17 @@ szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
   Without it, stale or missing artifacts are reported as gaps, never used
   as current evidence.
 - `--json` emits the machine-readable report instead of the text report.
-- Exit status: `0` no violations and no gaps; `1` violations with
-  complete required analysis; `2` incomplete analysis, execution failure,
-  or unapproved policy — including when violations were also found.
+- Exit status for `check`: `0` no violations and no gaps; `1` violations
+  with complete required analysis; `2` incomplete analysis, execution
+  failure, or unapproved policy — including when violations were also found.
+- `complexity` inventories every syntactic function and reports
+  [szaniec-cc/1](complexity-metric.md). It does not write `szaniec.json`
+  and it does not judge thresholds. `--sort location` (the default) lists
+  definitions in source order; `--sort complexity` lists them by
+  descending complexity with `id` as the tie-break. Exit status: `0` when
+  coverage is complete, `2` when a file or construct could not be
+  measured. Policy approval is recorded and does not by itself change
+  that status.
 
 ## Profile
 

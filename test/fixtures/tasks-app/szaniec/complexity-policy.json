@@ -1,0 +1,7 @@
+{
+  "format": "szaniec-policy/2",
+  "policyName": "complexity-app",
+  "program": { "roots": ["metric", "test"] },
+  "approvedSharedModules": [],
+  "resources": []
+}

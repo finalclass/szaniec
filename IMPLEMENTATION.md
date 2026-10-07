@@ -106,4 +106,6 @@ Do not present a manually supplied graph test as proof of language support.
 - Update README status only as capabilities become executable and verified.
 - Leave editor integration, incremental caches, a plugin marketplace,
   servers and databases outside this delivery. Contract-size heuristics,
-  cyclomatic complexity, coverage and CRAP are separate work.
+  coverage targets and CRAP remain separate work. Local cyclomatic
+  complexity is the `szaniec complexity` inventory (`szaniec-cc/1`); it
+  is not a conformance gate.

@@ -242,6 +242,8 @@ it is not used to guess a queue or event kind.
 
 - Any role or ownership inference beyond the accepted name-suffix rule.
 - Volatility/decomposition quality judgments.
+- Cyclomatic-complexity thresholds. The inventory itself is
+  [szaniec-cc/1](complexity-metric.md); it is not a conformance finding.
 - Treating `Well.Service.cast`, `Well.replay` or a shared transport
   library as a queued command, a publication or a subscription. Those
   calls stay external calls.
