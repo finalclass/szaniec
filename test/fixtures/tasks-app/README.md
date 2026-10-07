@@ -11,11 +11,15 @@ fixture. Each service is its own library, as in a Well application:
   implementations. `TaskAccess` uses the private `Json_util` helper in
   `lib/common`.
 - `lib/web_client/*` — client layer pages sharing a private `Shared`
-  helper.
+  helper, plus the `Audit_client` implementation. That service is a
+  Client reached only from scenarios that mutate a caller; the base
+  tree registers it and does not call it.
 - `lib/app.ml` — composition root (registration + routes).
 - `lib/well_stub/` — a documented stub of the Well framework's public API
   surface so the fixture type-checks without the real framework
-  dependency. It plays the role of the external `well` library.
+  dependency. It plays the role of the external `well` library. Typed
+  topics (`Well.topic`) live on the contract modules. The base tree does
+  not publish, subscribe, or call `Well.request`.
 - `szaniec/policy.json` — the approved policy for this application
   (program roots, approved shared modules, protected resources). Services
   and roles are not listed there.

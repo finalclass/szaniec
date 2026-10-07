@@ -15,13 +15,13 @@ let approval_format = "szaniec-approval/1"
 
 let observation_format = "szaniec-observation/2"
 
-let interpretation_format = "szaniec-interpretation/1"
+let interpretation_format = "szaniec-interpretation/2"
 
 let adapter_ocaml = "szaniec-ocaml-adapter/1.1.0"
 
-let adapter_well = "szaniec-well-adapter/2.0.0"
+let adapter_well = "szaniec-well-adapter/3.0.0"
 
-let rules = "szaniec-rules/2.0.0"
+let rules = "szaniec-rules/3.0.0"
 
 let default_profile = "well-ocaml-core"
 

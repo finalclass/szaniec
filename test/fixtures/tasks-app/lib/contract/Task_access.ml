@@ -62,3 +62,7 @@ let create ~ctx ~title =
   | None -> failwith "TaskAccess: service not registered"
 
 let debug_dump () = "task-access-debug"
+
+let cmd_topic = Well.topic "access.cmd" (fun s -> `String s) (fun _ -> Ok "")
+
+let reply_topic = Well.topic "access.reply" (fun s -> `String s) (fun _ -> Ok "")

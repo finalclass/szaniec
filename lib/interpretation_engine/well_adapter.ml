@@ -9,8 +9,6 @@ let exclusions =
   [ ".mlx view files (MLX preprocessor not in this profile)"
   ; ".mli interfaces (implementation facts only)"
   ; "dune wrapper units (.ml-gen)"
-  ; "queued-command, publish/subscribe and use-case rules (messaging recorded \
-     as evidence only)"
   ; "resource access beyond framework-known APIs (recorded as external calls)"
   ]
 
@@ -21,8 +19,40 @@ let registration_apis =
 
 let route_apis = ["Well.get"; "Well.post"; "Well.live"]
 
-let messaging_apis =
-  ["Well.subscribe_keyed"; "Well.publish_keyed"; "Well.request"]
+(* Verified Well surface (fixture revision
+   5c573753367f10d7226f5eaedf1adbeacab2c09d). Nothing else is a queue or
+   an event. *)
+let publish_apis =
+  ["Well.publish"; "Well.publish_keyed"; "Well.MessageBus.publish"]
+
+let subscribe_apis =
+  [ "Well.subscribe"
+  ; "Well.subscribe_keyed"
+  ; "Well.MessageBus.subscribe"
+  ; "Well.MessageBus.once" ]
+
+let request_apis = ["Well.request"]
+
+let messaging_apis = publish_apis @ subscribe_apis @ request_apis
+
+let topic_key (args : Observation.call_arg list) ~(labeled : string) :
+    string option =
+  let matching =
+    List.filter
+      (fun (a : Observation.call_arg) ->
+        if labeled = ""
+        then a.Observation.arg_label = ""
+        else String.equal a.Observation.arg_label labeled )
+      args
+  in
+  match matching with
+  | [] -> None
+  | a :: _ ->
+      if a.Observation.arg_target <> ""
+      then Some ("path:" ^ a.Observation.arg_target)
+      else if a.Observation.arg_literal <> ""
+      then Some ("lit:" ^ a.Observation.arg_literal)
+      else None
 
 (* Resource APIs are framework knowledge, not project policy. *)
 let framework_resources : (string * string) list =
@@ -652,25 +682,22 @@ let interpret
             | None -> (
               match target_of_callee callee with
               | None ->
-                  (* not observed in the build tree: external package *)
-                  let kind =
-                    if
-                      List.exists
-                        (fun a -> String.equal a callee)
-                        messaging_apis
-                    then Interpretation.MessagingEvidence
-                    else Interpretation.ExternalCall
-                  in
-                  record_interaction
-                    kind
-                    (from_name c.Observation.call_unit)
-                    ""
-                    ""
-                    callee
-                    ""
-                    callee
-                    (path @ [callee])
-                    site
+                  (* Messaging APIs are classified in a later pass so a
+                     request is never also a publication, and a
+                     publication is never a service request. *)
+                  if List.exists (fun a -> String.equal a callee) messaging_apis
+                  then ()
+                  else
+                    record_interaction
+                      Interpretation.ExternalCall
+                      (from_name c.Observation.call_unit)
+                      ""
+                      ""
+                      callee
+                      ""
+                      callee
+                      (path @ [callee])
+                      site
               | Some target -> (
                   let to_owner = owner_of_path target.n_unit in
                   let self_call =
@@ -856,24 +883,173 @@ let interpret
             | _ -> () )
       | None -> () )
     obs.Observation.value_refs ;
-  let sort_interactions
-      (a : Interpretation.interaction)
-      (b : Interpretation.interaction) =
-    compare
-      ( Interpretation.kind_name a.kind
-      , a.from_owner
-      , a.to_service
-      , a.to_method
-      , a.target_module
-      , a.api
-      , String.concat ">" a.evidence_path )
-      ( Interpretation.kind_name b.kind
-      , b.from_owner
-      , b.to_service
-      , b.to_method
-      , b.target_module
-      , b.api
-      , String.concat ">" b.evidence_path )
+  (* Queue and event calls. Subscriptions are collected first so a
+     request can name the services that handle its topic. *)
+  let messaging_calls =
+    List.filter
+      (fun (c : Observation.call) ->
+        c.Observation.resolution = Observation.Resolved
+        && List.exists
+             (fun a -> String.equal a c.Observation.callee)
+             messaging_apis
+        &&
+        match unit_owner_class c.Observation.call_unit with
+        | Interpretation.Contract_of _
+         |Interpretation.ExternalLibrary _ ->
+            false
+        | _ -> true )
+      obs.Observation.calls
+  in
+  let subscribers : (string * string) list ref = ref [] in
+  List.iter
+    (fun (c : Observation.call) ->
+      if
+        List.exists
+          (fun a -> String.equal a c.Observation.callee)
+          subscribe_apis
+      then
+        match topic_key c.Observation.args ~labeled:"" with
+        | Some topic ->
+            let owner = from_name c.Observation.call_unit in
+            if
+              not
+                (List.exists
+                   (fun (t, o) -> t = topic && o = owner)
+                   !subscribers )
+            then subscribers := (topic, owner) :: !subscribers
+        | None -> () )
+    messaging_calls ;
+  List.iter
+    (fun (c : Observation.call) ->
+      let from_owner = from_name c.Observation.call_unit in
+      let site = c.Observation.site in
+      let evidence =
+        [ c.Observation.call_unit ^ "." ^ c.Observation.caller
+        ; c.Observation.callee ]
+      in
+      let publish =
+        List.exists (fun a -> String.equal a c.Observation.callee) publish_apis
+      in
+      let subscribe =
+        List.exists
+          (fun a -> String.equal a c.Observation.callee)
+          subscribe_apis
+      in
+      if publish
+      then
+        let topic =
+          Option.value (topic_key c.Observation.args ~labeled:"") ~default:""
+        in
+        record_interaction
+          Interpretation.Publication
+          from_owner
+          ""
+          ""
+          c.Observation.callee
+          ""
+          topic
+          evidence
+          site
+      else if subscribe
+      then
+        let topic =
+          Option.value (topic_key c.Observation.args ~labeled:"") ~default:""
+        in
+        record_interaction
+          Interpretation.Subscription
+          from_owner
+          ""
+          ""
+          c.Observation.callee
+          ""
+          topic
+          evidence
+          site
+      else if
+        List.exists (fun a -> String.equal a c.Observation.callee) request_apis
+      then
+        let unresolved detail =
+          gaps :=
+            { gap_code= "GAP-UNRESOLVED-TARGET"
+            ; gap_path= site.Observation.site_path
+            ; gap_detail= detail }
+            :: !gaps ;
+          record_interaction
+            Interpretation.QueuedCommand
+            from_owner
+            ""
+            ""
+            c.Observation.callee
+            ""
+            ""
+            evidence
+            site
+        in
+        match topic_key c.Observation.args ~labeled:"cmd" with
+        | None ->
+            unresolved
+              (Printf.sprintf
+                 "queued command topic cannot be resolved in %s.%s at %s:%d"
+                 c.Observation.call_unit
+                 c.Observation.caller
+                 site.Observation.site_path
+                 site.Observation.line )
+        | Some topic -> (
+          match
+            List.filter (fun (t, _) -> String.equal t topic) !subscribers
+            |> List.map snd
+            |> List.sort_uniq compare
+          with
+          | [] ->
+              unresolved
+                (Printf.sprintf
+                   "queued command topic %s has no subscriber (%s.%s at %s:%d)"
+                   topic
+                   c.Observation.call_unit
+                   c.Observation.caller
+                   site.Observation.site_path
+                   site.Observation.line )
+          | targets ->
+              List.iter
+                (fun target ->
+                  record_interaction
+                    Interpretation.QueuedCommand
+                    from_owner
+                    target
+                    ""
+                    c.Observation.callee
+                    ""
+                    topic
+                    evidence
+                    site )
+                targets ) )
+    messaging_calls ;
+  let interaction_key (i : Interpretation.interaction) =
+    ( Interpretation.kind_name i.kind
+    , i.from_owner
+    , i.to_service
+    , i.to_method
+    , i.target_module
+    , i.api
+    , String.concat ">" i.evidence_path )
+  in
+  let sort_interactions a b = compare (interaction_key a) (interaction_key b) in
+  (* Same request reached from one origin is one interaction, but every
+     call site is kept. Dropping a site hides that call from path rules
+     when another copy of the call sits in a function value. *)
+  let merge_sites
+      (acc : Interpretation.interaction list)
+      (i : Interpretation.interaction) =
+    match
+      List.find_opt (fun prev -> interaction_key prev = interaction_key i) acc
+    with
+    | None -> i :: acc
+    | Some prev ->
+        let sites = List.sort_uniq compare (prev.sites @ i.sites) in
+        {prev with Interpretation.sites}
+        :: List.filter
+             (fun prev -> interaction_key prev <> interaction_key i)
+             acc
   in
   let ownerships =
     Hashtbl.fold (fun _ o acc -> o :: acc) ownership_map []
@@ -893,7 +1069,8 @@ let interpret
             , b.Interpretation.binding_kind ) )
         bindings
   ; interactions=
-      List.sort_uniq sort_interactions !interactions
+      List.fold_left merge_sites [] !interactions
+      |> List.sort sort_interactions
       |> List.map (fun i ->
           {i with Interpretation.sites= List.sort compare i.Interpretation.sites} )
   ; gaps= List.sort_uniq compare !gaps }

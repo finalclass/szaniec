@@ -49,11 +49,14 @@ Declared exclusions of the profile (reported in the report, never gaps):
 - `.mlx` view files (MLX preprocessor not in profile),
 - `.mli` interfaces (implementation facts only),
 - dune wrapper units (`.ml-gen`),
-- queued-command, publish/subscribe and use-case rules (messaging APIs
-  are recorded as evidence only),
 - resource access beyond policy-declared `apiPrefixes` (e.g. direct
   `Sqlite3.*` calls) — recorded as external calls, not resource
   interactions.
+
+Queued commands, publications, subscriptions and Client use-case paths
+are in the profile. Their evidence requirements and gaps are the rule
+catalog and the interpretation contract. A publication is not reported
+as a request edge in `szaniec.json`.
 
 ## Report JSON
 
@@ -70,8 +73,8 @@ Declared exclusions of the profile (reported in the report, never gaps):
     "compiler": "5.4.1",
     "adapters": {
       "programAccess": "szaniec-ocaml-adapter/1.1.0",
-      "interpretation": "szaniec-well-adapter/2.0.0",
-      "rules": "szaniec-rules/2.0.0"
+      "interpretation": "szaniec-well-adapter/3.0.0",
+      "rules": "szaniec-rules/3.0.0"
     },
     "exclusions": ["...", "..."]
   },

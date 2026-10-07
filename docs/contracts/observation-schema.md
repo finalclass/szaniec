@@ -58,8 +58,23 @@ ownership or findings. `.mli` interfaces are not analyzed in this profile.
     `unresolved-dynamic` (anything else).
   - `site` — source path, line, column of the application's callee
     location.
+  - `args` — labeled arguments that are resolved module paths or string
+    literals, in spine order (inner application first). The label is
+    empty for a positional argument. Local and computed arguments are
+    kept with an empty path and empty literal so a missing topic is
+    visible. Nested calls inside an argument stay ordinary calls.
   - Call spines are resolved through curried applications (`f a @@ b`
     resolves to `f`), never by name pattern matching.
+- `execPaths` — per `(unit, caller)`, the executable alternatives of
+  that value when it runs. Each alternative is the list of direct
+  calls that co-occur on it. `if` and `match` arms are different
+  alternatives; a sequence concatenates alternatives (bounded at 48,
+  above which the function is `ambiguous` and its alternatives are
+  dropped). A `try`/`with` with calls both in the body and in a
+  handler is `ambiguous`. Evaluating a function value does not execute
+  its body; the body's alternatives belong to that function. These
+  paths are the evidence for use-case and queue fan-out rules. They
+  do not replace `calls`.
 - `valueRefs` — non-call identifier references to module members
   (`M.value` reads), with site; used for registration evidence and
   implementation-access by reference.

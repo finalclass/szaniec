@@ -27,9 +27,10 @@ declares the compiler series it can read and refuses others with an
 explicit gap (`GAP-UNSUPPORTED-COMPILER`), never a guessed interpretation.
 
 Adapter `szaniec-ocaml-adapter/1.1.0`, supporting artifacts compiled
-with **OCaml 5.4.x**. The 1.1.0 bump adds the `szaniec-cc/1` function
-inventory; call extraction is unchanged. Szaniec itself is built with the
-same series (the dune-managed toolchain resolves this).
+with **OCaml 5.4.x**. That adapter records path alternatives,
+call-argument identities, and the `szaniec-cc/1` function inventory.
+Szaniec itself is built with the same series (the dune-managed toolchain
+resolves this).
 
 ## Investigation evidence
 

@@ -20,3 +20,8 @@ let expand ~ctx ~text =
     | `String s -> s
     | _ -> failwith "TemplateEngine: bad wire" )
   | None -> failwith "TemplateEngine: service not registered"
+
+let cmd_topic = Well.topic "template.cmd" (fun s -> `String s) (fun _ -> Ok "")
+
+let reply_topic =
+  Well.topic "template.reply" (fun s -> `String s) (fun _ -> Ok "")

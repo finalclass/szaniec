@@ -20,3 +20,12 @@ let publish ~ctx ~text =
     | `Bool b -> b
     | _ -> failwith "NotificationManager: bad wire" )
   | None -> failwith "NotificationManager: service not registered"
+
+let cmd_topic =
+  Well.topic "notification.cmd" (fun s -> `String s) (fun _ -> Ok "")
+
+let reply_topic =
+  Well.topic "notification.reply" (fun b -> `Bool b) (fun _ -> Ok true)
+
+let event_topic =
+  Well.topic "notification.event" (fun s -> `String s) (fun _ -> Ok "")
