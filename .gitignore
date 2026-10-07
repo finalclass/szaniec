@@ -6,3 +6,6 @@
 # build and scratch
 tmp/
 _build/
+
+# local agent skill bindings
+.agents/

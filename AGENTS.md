@@ -27,6 +27,14 @@ corpus, machine-specific skill path or external conversation is required.
   Ask only when a missing decision materially changes scope, boundaries or required behavior.
 - Do not publish private source material, credentials, personal paths, or unrelated project data.
 
+## Agent workflow
+
+- Ask questions in ordinary conversation text; never use popup dialogs or request-user-input tools in Codex or T3.
+- Number answer options; mark recommendations with "rekomenduję" and provide an example answer.
+- Before ending a turn, commit and push all pending repository changes, including instruction edits; leave the worktree clean.
+- Use a separate Git worktree for each independent parent issue.
+- Keep evidence files and recordings only temporarily; upload them as GitHub issue/PR attachments, then delete local copies; never commit them.
+
 ## Completing implementation work
 
 Implement the requested scope fully, verify the applicable acceptance scenarios, and
