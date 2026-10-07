@@ -61,11 +61,15 @@ ownership or findings. `.mli` interfaces are not analyzed in this profile.
   - Call spines are resolved through curried applications (`f a @@ b`
     resolves to `f`), never by name pattern matching.
 - `valueRefs` — non-call identifier references to module members
-  (`M.value` reads), with site; used for registration evidence and
-  implementation-access by reference.
+  (`M.value` reads and function values passed as callbacks), with site.
+  These are executable dependencies: registration evidence,
+  implementation access and sharing all see them. A structure-level
+  `module Alias = Path` is resolved to `Path` in the recorded callee or
+  target. First-class module unpacks and functor applications are not
+  resolved; they are `GAP-UNSUPPORTED-CONSTRUCT`.
 - `typeRefs` — type-constructor references with site (`Task_access.ListReq.t`).
-  Type-only references are contract usage; they do not count as
-  executable sharing or calls in this profile.
+  Type-only references are contract or data usage. They do not count as
+  executable sharing, implementation access or calls.
 
 Calls, valueRefs and typeRefs are sorted by `(unit, caller, callee, site)`
 before the observation is consumed, so downstream stages are deterministic.

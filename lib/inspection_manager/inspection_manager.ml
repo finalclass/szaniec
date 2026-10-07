@@ -344,6 +344,8 @@ let check (req : request) : Finding.report =
   (* 4. evaluate *)
   let violations =
     Szaniec_conformance_engine.Conformance_engine.evaluate
+      ~approved:
+        resolution.Szaniec_architecture_access.Architecture_access.approved
       ~policy
       ~cy
       ~observation

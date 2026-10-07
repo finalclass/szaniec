@@ -70,6 +70,55 @@ let family_segment_matches (segs : string list) (svc : string) : bool =
         seg )
     segs
 
+let dir_segments (source_path : string) : string list =
+  match List.rev (String.split_on_char '/' source_path) with
+  | [] -> []
+  | _file :: rev_dirs -> List.rev rev_dirs
+
+let module_ident_of_dir (seg : string) : string = String.capitalize_ascii seg
+
+let services_matching_segment
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (seg : string) =
+  List.filter
+    (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+      Szaniec_architecture_access.Cyrograf.segment_matches_service
+        ~service:s.Szaniec_architecture_access.Cyrograf.svc_name
+        seg )
+    cy.Szaniec_architecture_access.Cyrograf.services
+
+(* Nearest directory to the file. [`Conflict] when that directory names
+   more than one service. A `client` directory that names no service is
+   an implicit client family. *)
+let source_layout_family
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (source_path : string) =
+  let ends_client (seg : string) : bool =
+    let l = String.lowercase_ascii seg in
+    let n = String.length l in
+    n >= 6 && String.sub l (n - 6) 6 = "client"
+  in
+  let rec walk = function
+    | [] -> None
+    | seg :: rest -> (
+      match services_matching_segment cy seg with
+      | _ :: _ :: _ -> Some (`Conflict seg)
+      | [s] -> Some (`Family s.Szaniec_architecture_access.Cyrograf.svc_name)
+      | [] ->
+          if ends_client seg
+          then Some (`Family (module_ident_of_dir seg))
+          else walk rest )
+  in
+  walk (List.rev (dir_segments source_path))
+
+let impl_suffix_matches (segs : string list) (svc : string) : bool =
+  List.exists
+    (fun seg ->
+      String.equal
+        (Szaniec_architecture_access.Cyrograf.normalize_stem seg)
+        (Szaniec_architecture_access.Cyrograf.normalize_stem svc ^ "impl") )
+    segs
+
 (* Implicit client boundary: any segment ending with "client". *)
 let client_segment (segs : string list) : string option =
   List.find_opt
@@ -78,6 +127,30 @@ let client_segment (segs : string list) : string option =
       let n = String.length l in
       n >= 6 && String.sub l (n - 6) 6 = "client" )
     segs
+
+let canonical_family
+    (cy : Szaniec_architecture_access.Cyrograf.t)
+    (segs : string list) : string option =
+  match
+    List.find_opt
+      (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+        family_segment_matches
+          segs
+          s.Szaniec_architecture_access.Cyrograf.svc_name )
+      cy.Szaniec_architecture_access.Cyrograf.services
+  with
+  | Some s -> Some s.Szaniec_architecture_access.Cyrograf.svc_name
+  | None -> (
+    match
+      List.find_opt
+        (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+          impl_suffix_matches
+            segs
+            s.Szaniec_architecture_access.Cyrograf.svc_name )
+        cy.Szaniec_architecture_access.Cyrograf.services
+    with
+    | Some s -> Some s.Szaniec_architecture_access.Cyrograf.svc_name
+    | None -> client_segment segs )
 
 let classify_ownership
     (cy : Szaniec_architecture_access.Cyrograf.t)
@@ -168,81 +241,93 @@ let classify_ownership
           | None -> () )
       | _ -> () )
     obs.Observation.value_refs ;
+  let push_name (acc : string list) (name : string option) : string list =
+    match name with
+    | None -> acc
+    | Some n -> if List.mem n acc then acc else n :: acc
+  in
+  let owner_of_family canonical segs source_name family =
+    let on_contract_surface =
+      family_segment_matches segs family
+      && (not (app_prefixed canonical))
+      &&
+      match source_name with
+      | Some n -> not (String.equal n family)
+      | None -> true
+    in
+    let cls =
+      if on_contract_surface
+      then Interpretation.Contract_of family
+      else Interpretation.Implementation_of family
+    in
+    { Interpretation.owner_module= canonical
+    ; owner_class= cls
+    ; owner_service= family }
+  in
   List.iter
     (fun (u : Observation.unit_info) ->
       let canonical = u.Observation.canonical in
       let segs = Canonical.split_dots canonical in
+      let is_framework =
+        List.exists
+          (fun seg ->
+            String.equal (String.lowercase_ascii seg) "well"
+            || String.equal (String.lowercase_ascii seg) "well_stub" )
+          segs
+      in
       let owner =
-        match
-          List.find_opt
-            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-              family_segment_matches
-                segs
-                s.Szaniec_architecture_access.Cyrograf.svc_name )
-            cy.Szaniec_architecture_access.Cyrograf.services
-        with
-        | Some s ->
-            let cls =
-              if app_prefixed canonical
-              then
-                Interpretation.Implementation_of
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-              else
-                Interpretation.Contract_of
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-            in
-            { Interpretation.owner_module= canonical
-            ; owner_class= cls
-            ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name }
-        | None -> (
-          match Hashtbl.find_opt impl_of canonical with
-          | Some svc_name ->
+        if is_framework
+        then
+          { Interpretation.owner_module= canonical
+          ; owner_class= Interpretation.ExternalLibrary "well"
+          ; owner_service= "" }
+        else
+          let source = source_layout_family cy u.Observation.source_path in
+          match source with
+          | Some (`Conflict seg) ->
+              gaps :=
+                { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                ; gap_path= u.Observation.source_path
+                ; gap_detail=
+                    Printf.sprintf
+                      "directory %s matches more than one service family"
+                      seg }
+                :: !gaps ;
               { Interpretation.owner_module= canonical
-              ; owner_class= Interpretation.Implementation_of svc_name
-              ; owner_service= svc_name }
-          | None -> (
-            match
-              List.find_opt
-                (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-                  List.exists
-                    (fun seg ->
-                      String.equal
-                        (Szaniec_architecture_access.Cyrograf.normalize_stem
-                           seg )
-                        ( Szaniec_architecture_access.Cyrograf.normalize_stem
-                            s.Szaniec_architecture_access.Cyrograf.svc_name
-                        ^ "impl" ) )
-                    segs )
-                cy.Szaniec_architecture_access.Cyrograf.services
-            with
-            | Some s ->
-                { Interpretation.owner_module= canonical
-                ; owner_class=
-                    Interpretation.Implementation_of
-                      s.Szaniec_architecture_access.Cyrograf.svc_name
-                ; owner_service= s.Szaniec_architecture_access.Cyrograf.svc_name
-                }
-            | None -> (
-              match client_segment segs with
-              | Some seg ->
+              ; owner_class= Interpretation.Unclassified
+              ; owner_service= "" }
+          | _ -> (
+              let source_name =
+                match source with
+                | Some (`Family n) -> Some n
+                | _ -> None
+              in
+              let names =
+                [] |> fun acc ->
+                push_name acc source_name |> fun acc ->
+                push_name acc (canonical_family cy segs) |> fun acc ->
+                push_name acc (Hashtbl.find_opt impl_of canonical)
+                |> List.sort_uniq compare
+              in
+              match names with
+              | [] ->
                   { Interpretation.owner_module= canonical
-                  ; owner_class= Interpretation.Implementation_of seg
-                  ; owner_service= seg }
-              | None ->
-                  if
-                    List.exists
-                      (fun seg ->
-                        String.equal (String.lowercase_ascii seg) "well"
-                        || String.equal (String.lowercase_ascii seg) "well_stub" )
-                      segs
-                  then
-                    { Interpretation.owner_module= canonical
-                    ; owner_class= Interpretation.ExternalLibrary "well"
-                    ; owner_service= "" }
-                  else
-                    { Interpretation.owner_module= canonical
-                    ; owner_class= Interpretation.Unclassified
-                    ; owner_service= "" } ) ) )
+                  ; owner_class= Interpretation.Unclassified
+                  ; owner_service= "" }
+              | [family] -> owner_of_family canonical segs source_name family
+              | many ->
+                  gaps :=
+                    { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                    ; gap_path= u.Observation.source_path
+                    ; gap_detail=
+                        Printf.sprintf
+                          "unit %s matches families %s"
+                          canonical
+                          (String.concat " and " many) }
+                    :: !gaps ;
+                  { Interpretation.owner_module= canonical
+                  ; owner_class= Interpretation.Unclassified
+                  ; owner_service= "" } )
       in
       Hashtbl.replace map canonical owner )
     obs.Observation.units ;
@@ -267,72 +352,6 @@ let classify_ownership
               ; owner_service= "" }
         | None -> () )
     obs.Observation.calls ;
-  (* helper refinement: a unit without ownership consumed by exactly one
-     boundary belongs to that boundary (private helper); consumed by two
-     or more it stays unclassified — sharing without approval *)
-  let consumer_boundaries : (string, string list) Hashtbl.t =
-    Hashtbl.create 32
-  in
-  List.iter
-    (fun (c : Observation.call) ->
-      if String.length c.Observation.callee > 0
-      then
-        match
-          ( Canonical.unit_prefix
-              (List.map
-                 (fun (u : Observation.unit_info) -> u.Observation.canonical)
-                 obs.Observation.units )
-              c.Observation.callee
-          , Hashtbl.find_opt map c.Observation.call_unit )
-        with
-        | Some target_unit, Some caller -> (
-          match Hashtbl.find_opt map target_unit with
-          | Some {owner_class= Interpretation.Unclassified; _} -> (
-              let consumer =
-                if String.equal caller.Interpretation.owner_service ""
-                then caller.Interpretation.owner_module
-                else caller.Interpretation.owner_service
-              in
-              match Hashtbl.find_opt consumer_boundaries target_unit with
-              | Some l ->
-                  if not (List.mem consumer l)
-                  then
-                    Hashtbl.replace
-                      consumer_boundaries
-                      target_unit
-                      (consumer :: l)
-              | None ->
-                  Hashtbl.replace consumer_boundaries target_unit [consumer] )
-          | Some _ -> () (* owned already *)
-          | None -> () )
-        | _ -> () )
-    obs.Observation.calls ;
-  Hashtbl.iter
-    (fun target consumers ->
-      match consumers with
-      | [single] ->
-          let svc =
-            List.find_opt
-              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-                String.equal
-                  s.Szaniec_architecture_access.Cyrograf.svc_name
-                  single )
-              cy.Szaniec_architecture_access.Cyrograf.services
-          in
-          let owner_service, owner_class =
-            match svc with
-            | Some s ->
-                ( s.Szaniec_architecture_access.Cyrograf.svc_name
-                , Interpretation.Helper_of
-                    s.Szaniec_architecture_access.Cyrograf.svc_name )
-            | None -> (single, Interpretation.Helper_of single)
-          in
-          Hashtbl.replace
-            map
-            target
-            {Interpretation.owner_module= target; owner_class; owner_service}
-      | _ -> () )
-    consumer_boundaries ;
   (map, List.sort_uniq compare !gaps, impl_of)
 
 type node =
@@ -725,11 +744,25 @@ let interpret
                         callee
                         (path @ [callee])
                         site
+                  | Interpretation.Unclassified
+                    when from_owner.Interpretation.owner_service <> ""
+                         && not
+                              (String.equal
+                                 from_owner.Interpretation.owner_module
+                                 target.n_unit ) ->
+                      record_interaction
+                        Interpretation.ImplementationAccess
+                        (from_name c.Observation.call_unit)
+                        ""
+                        ""
+                        target.n_unit
+                        ""
+                        callee
+                        (path @ [callee])
+                        site
                   | Interpretation.CompositionRoot
                    |Interpretation.Unclassified
                    |Interpretation.ExternalLibrary _ ->
-                      (* no rule crosses into these; unclassified units
-                             report their own interactions as origins *)
                       () ) ) )
       in
       List.iter handle (out_edges_of n)
@@ -853,6 +886,22 @@ let interpret
                   v.Observation.ref_target
                   [v.Observation.ref_target]
                   v.Observation.ref_site
+            | Interpretation.Unclassified
+              when caller_owner.Interpretation.owner_service <> ""
+                   && not
+                        (String.equal
+                           caller_owner.Interpretation.owner_module
+                           target_unit ) ->
+                record_interaction
+                  Interpretation.ImplementationAccess
+                  (from_name v.Observation.ref_unit)
+                  ""
+                  ""
+                  target_unit
+                  ""
+                  v.Observation.ref_target
+                  [v.Observation.ref_target]
+                  v.Observation.ref_site
             | _ -> () )
       | None -> () )
     obs.Observation.value_refs ;
@@ -880,6 +929,36 @@ let interpret
     |> List.sort (fun a b ->
         compare a.Interpretation.owner_module b.Interpretation.owner_module )
   in
+  let interaction_key (i : Interpretation.interaction) =
+    ( Interpretation.kind_name i.kind
+    , i.from_owner
+    , i.to_service
+    , i.to_method
+    , i.target_module
+    , i.api
+    , String.concat ">" i.evidence_path )
+  in
+  let merged = Hashtbl.create 64 in
+  List.iter
+    (fun (i : Interpretation.interaction) ->
+      let key = interaction_key i in
+      match Hashtbl.find_opt merged key with
+      | None -> Hashtbl.add merged key i
+      | Some prev ->
+          Hashtbl.replace
+            merged
+            key
+            { prev with
+              Interpretation.sites=
+                prev.Interpretation.sites @ i.Interpretation.sites } )
+    !interactions ;
+  let interactions =
+    Hashtbl.fold (fun _ i acc -> i :: acc) merged []
+    |> List.map (fun i ->
+        { i with
+          Interpretation.sites= List.sort_uniq compare i.Interpretation.sites } )
+    |> List.sort sort_interactions
+  in
   { Interpretation.ownerships
   ; bindings=
       List.sort_uniq
@@ -892,8 +971,5 @@ let interpret
             , b.Interpretation.binding_service
             , b.Interpretation.binding_kind ) )
         bindings
-  ; interactions=
-      List.sort_uniq sort_interactions !interactions
-      |> List.map (fun i ->
-          {i with Interpretation.sites= List.sort compare i.Interpretation.sites} )
+  ; interactions
   ; gaps= List.sort_uniq compare !gaps }

@@ -15,9 +15,9 @@ let interpretation_format = "szaniec-interpretation/1"
 
 let adapter_ocaml = "szaniec-ocaml-adapter/1.0.0"
 
-let adapter_well = "szaniec-well-adapter/2.0.0"
+let adapter_well = "szaniec-well-adapter/2.1.0"
 
-let rules = "szaniec-rules/2.0.0"
+let rules = "szaniec-rules/2.1.0"
 
 let default_profile = "well-ocaml-core"
 

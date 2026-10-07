@@ -31,8 +31,18 @@ from compiler-resolved evidence (see
   program, relative to the project root. Only files under these roots are
   in scope. Directories `test`, `static`, `data`, `_build` and hidden
   directories are never in scope, even if listed.
-- `approvedSharedModules` — module name suffixes that may be consumed
-  (called) by multiple boundaries.
+- `approvedSharedModules` — canonical module paths (matched as a full
+  path or as a trailing `.name`) that the approved architecture allows
+  several families to execute. They are infrastructure exceptions, not
+  a second ownership inference. A repository-local module is not on
+  this list because its directory is `common`, `shared` or `utils`, or
+  because its Dune library was renamed. These entries are honored only
+  when the policy digest equals the approved digest. An edited policy
+  keeps being checked, but its whitelist does not suppress
+  `SHARED-UNAPPROVED`, `IMPL-ACCESS-CROSS-SERVICE`,
+  `POLICY-UNCLASSIFIED` or `RESOURCE-BOUNDARY`. Listing a module here
+  does not let a Client or any other disallowed role reach a protected
+  resource; the rule catalog still decides who may perform that access.
 - `resources[]` — protected resources; `apiPrefixes` are resolved-call
   path prefixes that count as access to the resource. Which roles may
   perform access is fixed by the rule catalog (Access-role services and
@@ -52,17 +62,16 @@ from compiler-resolved evidence (see
 
 ## Module path matching
 
-Module names in the policy are matched against canonical module paths
-from the observation: a declared name matches when it equals the
-canonical path or the canonical path ends with `.` + declared name. If
-more than one observed unit matches, ownership is ambiguous and produces
-`GAP-AMBIGUOUS-OWNERSHIP` instead of a guess.
+`approvedSharedModules` entries match canonical module paths: a declared
+name matches when it equals the path or the path ends with `.` plus the
+declared name. If more than one observed unit matches one entry, that
+entry approves nothing and produces `GAP-AMBIGUOUS-OWNERSHIP`.
 
-Service-family matching (implementation/contract units of a service) is
-case-insensitive on the service stem and tolerates the wire-module
-spelling generated around it: a unit belongs to service `S` when one of
-its canonical path segments equals the stem of `S`, or ends with
-`_` + stem lowercased.
+Service-family membership is not a policy list. The interpretation
+contract binds it from the source layout, compiler evidence and the
+canonical path. Stem matching is case-insensitive and ignores
+underscores. A private file under the service directory belongs to that
+family even when the compiled module name does not repeat the stem.
 
 ## Approved-policy selection
 

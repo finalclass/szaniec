@@ -60,8 +60,8 @@ Declared exclusions of the profile (reported in the report, never gaps):
     "compiler": "5.4.1",
     "adapters": {
       "programAccess": "szaniec-ocaml-adapter/1.0.0",
-      "interpretation": "szaniec-well-adapter/2.0.0",
-      "rules": "szaniec-rules/2.0.0"
+      "interpretation": "szaniec-well-adapter/2.1.0",
+      "rules": "szaniec-rules/2.1.0"
     },
     "exclusions": ["...", "..."]
   },

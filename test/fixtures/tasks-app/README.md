@@ -8,10 +8,14 @@ fixture. Each service is its own library, as in a Well application:
   functions). A `.cyrograf` file that declares `rpc` methods is a service.
 - `lib/task_access`, `lib/task_manager`, `lib/template_engine`,
   `lib/formatting_engine`, `lib/notification_manager` — service
-  implementations. `TaskAccess` uses the private `Json_util` helper in
-  `lib/common`.
-- `lib/web_client/*` — client layer pages sharing a private `Shared`
-  helper.
+  implementations. `Task_access` keeps `Json_util` and `codec/Rows` in
+  its own directory tree; those helpers are the family, not a shared
+  library.
+- `lib/web_client/*` — client layer pages. `Shared` and
+  `format/Titles` are private to that directory.
+- `lib/report_client/page.ml` — a second client family.
+- `lib/clock.ml` — approved infrastructure (`App.Clock` in the policy).
+  Web_client and Report_client both call it.
 - `lib/app.ml` — composition root (registration + routes).
 - `lib/well_stub/` — a documented stub of the Well framework's public API
   surface so the fixture type-checks without the real framework
