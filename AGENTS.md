@@ -33,6 +33,15 @@ corpus, machine-specific skill path or external conversation is required.
 - Number answer options; mark recommendations with "rekomenduję" and provide an example answer.
 - Before ending a turn, commit and push all pending repository changes, including instruction edits; leave the worktree clean.
 - Use a separate Git worktree for each independent parent issue.
+- When a PR fully resolves an issue, include `Closes #<number>` in the PR description
+  so GitHub closes it when the PR is merged into the default branch. Use a separate
+  closing reference for each issue resolved.
+- For partial work, including an issue delivered across multiple PRs, use
+  `Refs #<number>` and leave the issue open. Add the closing reference only to the
+  PR that completes its scope, unless the user requests a different workflow.
+- Before handing off a PR intended to close issues, verify that GitHub's
+  `closingIssuesReferences` includes the intended issues. A plain issue reference
+  or wording such as `Completes #<number>` does not trigger automatic closure.
 - Keep evidence files and recordings only temporarily; upload them as GitHub issue/PR attachments, then delete local copies; never commit them.
 
 ## Completing implementation work
