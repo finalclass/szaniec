@@ -25,6 +25,44 @@ let sites_locations (sites : Observation.site list) : Finding.location list =
 (* Role of a boundary name: suffix rule (decision record). *)
 let role_of_name = Szaniec_architecture_access.Cyrograf.role_of_suffix
 
+let site_key (site : Observation.site) = (site.site_path, site.line, site.col)
+
+let index_interaction_sites (interactions : Interpretation.interaction list) =
+  let index = Hashtbl.create 128 in
+  List.iteri
+    (fun ordinal (i : Interpretation.interaction) ->
+      List.iter
+        (fun site ->
+          let key = site_key site in
+          let previous =
+            match Hashtbl.find_opt index key with
+            | None -> []
+            | Some entries -> entries
+          in
+          Hashtbl.replace index key ((ordinal, i) :: previous) )
+        i.sites )
+    interactions ;
+  index
+
+(* Preserve observation order and include each interaction once even when
+   several of its sites occur on the path. Ordinals distinguish separate
+   interactions that happen to have identical record values. *)
+let interactions_on index (steps : Observation.path_step list) :
+    Interpretation.interaction list =
+  let matching = Hashtbl.create 16 in
+  List.iter
+    (fun (step : Observation.path_step) ->
+      match Hashtbl.find_opt index (site_key step.step_site) with
+      | None -> ()
+      | Some entries ->
+          List.iter
+            (fun (ordinal, i) -> Hashtbl.replace matching ordinal i)
+            entries )
+    steps ;
+  Hashtbl.fold (fun ordinal i acc -> (ordinal, i) :: acc) matching []
+  |> List.sort (fun (a, _) (b, _) -> compare a b)
+  |> List.map snd
+
 let evaluate
     ~(approved : bool)
     ~(policy : Policy.t)
@@ -706,24 +744,9 @@ let evaluate
     | Some u -> u.Observation.source_path
     | None -> unit
   in
-  let interactions_on (steps : Observation.path_step list) :
-      Interpretation.interaction list =
-    List.filter
-      (fun (i : Interpretation.interaction) ->
-        List.exists
-          (fun (step : Observation.path_step) ->
-            List.exists
-              (fun (site : Observation.site) ->
-                String.equal
-                  site.Observation.site_path
-                  step.Observation.step_site.Observation.site_path
-                && site.Observation.line
-                   = step.Observation.step_site.Observation.line
-                && site.Observation.col
-                   = step.Observation.step_site.Observation.col )
-              i.Interpretation.sites )
-          steps )
-      interpretation.Interpretation.interactions
+  let interactions_on =
+    interactions_on
+      (index_interaction_sites interpretation.Interpretation.interactions)
   in
   let gap_path unit caller =
     add

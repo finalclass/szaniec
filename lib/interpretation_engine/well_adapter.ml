@@ -435,6 +435,37 @@ let same_boundary (a : Interpretation.ownership) (b : Interpretation.ownership)
   && String.equal a.Interpretation.owner_service b.Interpretation.owner_service
   || String.equal a.Interpretation.owner_module b.Interpretation.owner_module
 
+let interaction_key (i : Interpretation.interaction) =
+  ( Interpretation.kind_name i.kind
+  , i.from_owner
+  , i.to_service
+  , i.to_method
+  , i.target_module
+  , i.api
+  , String.concat ">" i.evidence_path )
+
+(* Group once by identity, retaining every call site for path rules. Sorting
+   only the completed groups keeps large observations out of a quadratic
+   scan and makes the result independent of hash-table iteration order. *)
+let merge_interactions (interactions : Interpretation.interaction list) :
+    Interpretation.interaction list =
+  let groups = Hashtbl.create 128 in
+  List.iter
+    (fun (i : Interpretation.interaction) ->
+      let key = interaction_key i in
+      match Hashtbl.find_opt groups key with
+      | None -> Hashtbl.add groups key i
+      | Some prev ->
+          Hashtbl.replace
+            groups
+            key
+            {prev with Interpretation.sites= List.rev_append i.sites prev.sites} )
+    interactions ;
+  Hashtbl.fold (fun key i acc -> (key, i) :: acc) groups []
+  |> List.sort (fun (a, _) (b, _) -> compare a b)
+  |> List.map (fun (_, (i : Interpretation.interaction)) ->
+      {i with Interpretation.sites= List.sort_uniq compare i.sites} )
+
 let interpret
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
@@ -1112,33 +1143,6 @@ let interpret
                     site )
                 targets ) )
     messaging_calls ;
-  let interaction_key (i : Interpretation.interaction) =
-    ( Interpretation.kind_name i.kind
-    , i.from_owner
-    , i.to_service
-    , i.to_method
-    , i.target_module
-    , i.api
-    , String.concat ">" i.evidence_path )
-  in
-  let sort_interactions a b = compare (interaction_key a) (interaction_key b) in
-  (* Same request reached from one origin is one interaction, but every
-     call site is kept. Dropping a site hides that call from path rules
-     when another copy of the call sits in a function value. *)
-  let merge_sites
-      (acc : Interpretation.interaction list)
-      (i : Interpretation.interaction) =
-    match
-      List.find_opt (fun prev -> interaction_key prev = interaction_key i) acc
-    with
-    | None -> i :: acc
-    | Some prev ->
-        let sites = List.sort_uniq compare (prev.sites @ i.sites) in
-        {prev with Interpretation.sites}
-        :: List.filter
-             (fun prev -> interaction_key prev <> interaction_key i)
-             acc
-  in
   let ownerships =
     Hashtbl.fold (fun _ o acc -> o :: acc) ownership_map []
     |> List.sort (fun a b ->
@@ -1156,11 +1160,5 @@ let interpret
             , b.Interpretation.binding_service
             , b.Interpretation.binding_kind ) )
         bindings
-  ; interactions=
-      List.fold_left merge_sites [] !interactions
-      |> List.sort sort_interactions
-      |> List.map (fun i ->
-          { i with
-            Interpretation.sites= List.sort_uniq compare i.Interpretation.sites
-          } )
+  ; interactions= merge_interactions !interactions
   ; gaps= List.sort_uniq compare !gaps }

@@ -39,3 +39,13 @@
  (name config_test)
  (modules config_test)
  (libraries szaniec_config szaniec_model szaniec_architecture_access otoml unix))
+
+(test
+ (name interaction_grouping)
+ (modules interaction_grouping)
+ (libraries szaniec_interpretation_engine szaniec_model))
+
+(test
+ (name path_interactions)
+ (modules path_interactions)
+ (libraries szaniec_conformance_engine szaniec_model))
