@@ -23,6 +23,16 @@ let adapter_well = "szaniec-well-adapter/3.1.0"
 
 let rules = "szaniec-rules/3.1.0"
 
+let coverage_format = "szaniec-coverage/1"
+
+let coverage_config_format = "szaniec-coverage-config/1"
+
+let instrumentation_facade = "szaniec-instrumentation/1"
+
+let coverage_points = "szaniec-points/1"
+
+let coverage_probe = "szaniec-probe/1"
+
 let suggestion_format = "szaniec-suggestions/1"
 
 let suggestion_rubric = "szaniec-suggestion-rubric/1"

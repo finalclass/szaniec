@@ -1,0 +1,4 @@
+(library
+ (name coverage_app_core)
+ (instrumentation
+  (backend szaniec.instrumentation)))

@@ -10,6 +10,10 @@ let usage =
   \ szaniec complexity --policy <path> [--approval <path>] [--project-root \
    <dir>]\n\
   \                    [--rebuild] [--json] [--sort location|complexity]\n\
+  \ szaniec coverage [--project-root <dir>] [--config <path>] [--json]\n\
+  \                  [--out <path>] [--keep-work] [--function-inventory <path>]\n\
+  \ szaniec coverage supervise --port <int> [--pass-env <name>]... -- \
+   <command>...\n\
   \ szaniec suggestions [--policy <path>] [--project-root <dir>] [--rebuild]\n\
   \               [--json] [--experimental] [--model <id>] [--cache <path>]\n\
   \               [--no-cache] [--refresh] [--timeout <seconds>]\n\
@@ -563,242 +567,520 @@ let exit_code (r : Finding.report) : int =
   | Violations -> 1
   | Incomplete -> 2
 
+(* ── coverage rendering ───────────────────────────────────────────── *)
+
+let measurement_json (m : Coverage.measurement) =
+  match m with
+  | Uninstrumented -> (`String "uninstrumented", `Bool false, `Null)
+  | Measured {covered; total; executed} ->
+      ( `String "measured"
+      , `Bool executed
+      , `Assoc [("covered", `Int covered); ("total", `Int total)] )
+
+let crap_json = function
+  | Coverage.Available score ->
+      `Assoc [("status", `String "available"); ("score", `String score)]
+  | Coverage.Unavailable reason ->
+      `Assoc [("status", `String "unavailable"); ("reason", `String reason)]
+
+let coverage_json (r : Coverage.report) =
+  let func (f : Coverage.func) =
+    let measurement, executed, points = measurement_json f.measurement in
+    `Assoc
+      [ ("id", `String f.id)
+      ; ("path", `String f.path)
+      ; ("name", `String f.name)
+      ; ("kind", `String (Coverage.kind_string f.kind))
+      ; ("provenance", `String f.provenance)
+      ; ("line", `Int f.line)
+      ; ("col", `Int f.col)
+      ; ("measurement", measurement)
+      ; ("executed", executed)
+      ; ("points", points)
+      ; ( "complexity"
+        , match f.complexity with
+          | Some n -> `Int n
+          | None -> `Null )
+      ; ("crap", crap_json f.crap) ]
+  in
+  let gap (g : Coverage.gap) =
+    `Assoc
+      [ ("code", `String g.code)
+      ; ("message", `String g.message)
+      ; ("path", `String g.path) ]
+  in
+  let node (n : Coverage.node) =
+    let disposition, code, signal =
+      match n.disposition with
+      | Exited code -> ("exited", `Int code, `Null)
+      | Signaled signal -> ("signaled", `Null, `String signal)
+      | Unknown -> ("unknown", `Null, `Null)
+    in
+    `Assoc
+      [ ("id", `String n.id)
+      ; ("disposition", `String disposition)
+      ; ("code", code)
+      ; ("signal", signal)
+      ; ("records", `Int n.records) ]
+  in
+  let engine (e : Coverage.engine) =
+    let fields =
+      [ ("name", `String e.name)
+      ; ("version", `String e.version)
+      ; ("kind", `String e.kind) ]
+    in
+    `Assoc
+      ( match e.visits with
+      | None -> fields
+      | Some n -> fields @ [("visits", `Int n)] )
+  in
+  let scenario_status, scenario_exit =
+    match r.scenario with
+    | Passed code -> ("passed", `Int code)
+    | Failed code -> ("failed", `Int code)
+    | Not_run -> ("not-run", `Null)
+  in
+  let measured, unexecuted, uninstrumented =
+    List.fold_left
+      (fun (m, u, i) (f : Coverage.func) ->
+        match f.measurement with
+        | Uninstrumented -> (m, u, i + 1)
+        | Measured {executed= true; _} -> (m + 1, u, i)
+        | Measured {executed= false; _} -> (m + 1, u + 1, i) )
+      (0, 0, 0)
+      r.functions
+  in
+  let status =
+    match r.status with
+    | Complete -> "complete"
+    | Incomplete -> "incomplete"
+  in
+  let json =
+    `Assoc
+      [ ("format", `String Version.coverage_format)
+      ; ("status", `String status)
+      ; ( "scenario"
+        , `Assoc [("status", `String scenario_status); ("exit", scenario_exit)]
+        )
+      ; ("measurementWindow", `String r.measurement_window)
+      ; ("coverageKind", `String r.coverage_kind)
+      ; ("denominator", `String r.denominator)
+      ; ("facade", `String r.facade)
+      ; ("engines", `List (List.map engine r.engines))
+      ; ("snapshotDigest", `String r.snapshot_digest)
+      ; ("compiler", `String r.compiler)
+      ; ("exclusions", `List (List.map (fun e -> `String e) r.exclusions))
+      ; ( "summary"
+        , `Assoc
+            [ ("pointsCovered", `Int r.points_covered)
+            ; ("pointsTotal", `Int r.points_total)
+            ; ("functionsMeasured", `Int measured)
+            ; ("functionsUnexecuted", `Int unexecuted)
+            ; ("functionsUninstrumented", `Int uninstrumented)
+            ; ("gaps", `Int (List.length r.gaps)) ] )
+      ; ("functions", `List (List.map func r.functions))
+      ; ("gaps", `List (List.map gap r.gaps))
+      ; ("nodes", `List (List.map node r.nodes)) ]
+  in
+  Yojson.Safe.to_string json ^ "\n"
+
+let coverage_text (r : Coverage.report) =
+  let buf = Buffer.create 512 in
+  let status =
+    match r.status with
+    | Complete -> "complete"
+    | Incomplete -> "incomplete"
+  in
+  let scenario =
+    match r.scenario with
+    | Passed code -> Printf.sprintf "passed (%d)" code
+    | Failed code -> Printf.sprintf "failed (%d)" code
+    | Not_run -> "not-run"
+  in
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "szaniec coverage: %s; scenario %s; facade %s; snapshot %s\n"
+       status
+       scenario
+       r.facade
+       r.snapshot_digest ) ;
+  Buffer.add_string
+    buf
+    (Printf.sprintf
+       "  kind: %s; denominator: %s; window: %s; compiler: %s\n"
+       r.coverage_kind
+       r.denominator
+       r.measurement_window
+       r.compiler ) ;
+  List.iter
+    (fun (e : Coverage.engine) ->
+      let visits =
+        match e.visits with
+        | None -> ""
+        | Some n -> Printf.sprintf "; visits %d" n
+      in
+      Buffer.add_string
+        buf
+        (Printf.sprintf
+           "  engine %s %s (%s)%s\n"
+           e.name
+           e.version
+           e.kind
+           visits ) )
+    r.engines ;
+  Buffer.add_string buf "  exclusions:\n" ;
+  List.iter
+    (fun e -> Buffer.add_string buf (Printf.sprintf "    - %s\n" e))
+    r.exclusions ;
+  Buffer.add_string
+    buf
+    (Printf.sprintf "  points: %d/%d\n" r.points_covered r.points_total) ;
+  List.iter
+    (fun (f : Coverage.func) ->
+      let detail =
+        match f.measurement with
+        | Uninstrumented -> "uninstrumented"
+        | Measured {covered; total; executed} ->
+            Printf.sprintf
+              "%s %d/%d"
+              (if executed then "executed" else "unexecuted")
+              covered
+              total
+      in
+      Buffer.add_string buf (Printf.sprintf "  %s %s [%s]\n" f.id f.name detail) )
+    r.functions ;
+  List.iter
+    (fun (g : Coverage.gap) ->
+      Buffer.add_string
+        buf
+        (Printf.sprintf "gap [%s] %s (%s)\n" g.code g.message g.path) )
+    r.gaps ;
+  Buffer.contents buf
+
+let coverage_exit (r : Coverage.report) =
+  match (r.status, r.scenario) with
+  | Complete, Passed _ -> 0
+  | Complete, Failed _ -> 1
+  | _ -> 2
+
+let rec parse_supervise pass_env port command = function
+  | [] -> (pass_env, port, List.rev command)
+  | "--" :: rest -> (pass_env, port, List.rev command @ rest)
+  | "--port" :: n :: rest ->
+      parse_supervise pass_env (int_of_string n) command rest
+  | "--pass-env" :: name :: rest ->
+      parse_supervise (name :: pass_env) port command rest
+  | arg :: rest -> parse_supervise pass_env port (arg :: command) rest
+
+let rec parse_coverage project config json out keep inventory = function
+  | [] -> (project, config, json, out, keep, inventory)
+  | "--project-root" :: p :: rest ->
+      parse_coverage p config json out keep inventory rest
+  | "--config" :: p :: rest ->
+      parse_coverage project p json out keep inventory rest
+  | "--json" :: rest ->
+      parse_coverage project config true out keep inventory rest
+  | "--out" :: p :: rest ->
+      parse_coverage project config json (Some p) keep inventory rest
+  | "--keep-work" :: rest ->
+      parse_coverage project config json out true inventory rest
+  | "--function-inventory" :: p :: rest ->
+      parse_coverage project config json out keep (Some p) rest
+  | bad :: _ ->
+      prerr_endline ("szaniec: unknown argument: " ^ bad) ;
+      prerr_endline usage ;
+      exit 2
+
+let run_coverage argv =
+  let project, config, json, out, keep, inventory =
+    parse_coverage
+      (Sys.getcwd ())
+      "szaniec/coverage.json"
+      false
+      None
+      false
+      None
+      argv
+  in
+  match
+    Szaniec_inspection_manager.Coverage_run.run
+      ~project_root:project
+      ~config_path:config
+      ~inventory
+      ~keep_work:keep
+  with
+  | Error message ->
+      prerr_endline ("szaniec: " ^ message) ;
+      exit 2
+  | Ok report ->
+      let rendered =
+        if json then coverage_json report else coverage_text report
+      in
+      ( match out with
+      | None -> ()
+      | Some path ->
+          let oc = open_out path in
+          output_string oc (coverage_json report) ;
+          close_out oc ) ;
+      print_string rendered ;
+      exit (coverage_exit report)
+
 (* ── entry point ──────────────────────────────────────────────────── *)
 
 let () =
   let argv = List.tl (Array.to_list Sys.argv) in
-  let args = parse argv default_args in
-  if args.command = ""
-  then (
-    prerr_endline usage ;
-    exit 2 ) ;
-  if args.command <> "complexity" && args.sort <> ""
-  then (
-    prerr_endline "szaniec: --sort is only valid with complexity" ;
-    exit 2 ) ;
-  match args.command with
-  | "approve" -> (
-      let resolve_path p =
-        if Filename.is_relative p && not (Sys.file_exists p)
-        then Filename.concat args.project_root p
-        else p
-      in
-      let policy_path = resolve_path args.policy in
-      let approval =
-        resolve_path
-          (Option.value ~default:"szaniec/approval.json" args.approval)
-      in
-      match
-        Szaniec_architecture_access.Architecture_access.approve
-          ~policy_path
-          ~approval_path:approval
-      with
-      | Ok () ->
-          Printf.printf
-            "approved policy %s (digest recorded in %s)\n"
-            args.policy
-            approval ;
-          exit 0
-      | Error e ->
-          prerr_endline ("szaniec: " ^ e) ;
-          exit 2 )
-  | "suggestions" when args.subcommand = "decide" -> (
-      let path =
-        let raw =
-          Option.value
-            ~default:"szaniec/suggestion-decisions.json"
-            args.decisions
-        in
-        if Filename.is_relative raw
-        then Filename.concat args.project_root raw
-        else raw
-      in
-      match
-        Szaniec_suggestion_manager.Suggestion_manager.record_decision
-          ~path
-          ~id:args.suggestion_id
-          ~decision:args.decision
-          ~rationale:args.rationale
-      with
-      | Ok () ->
-          Printf.printf "recorded %s for %s\n" args.decision args.suggestion_id ;
-          exit 0
-      | Error e ->
-          prerr_endline ("szaniec: " ^ e) ;
-          exit 2 )
-  | "suggestions" -> (
-      let module S = Szaniec_suggestion_manager.Suggestion_manager in
-      let resolve p =
-        if Filename.is_relative p && not (Sys.file_exists p)
-        then Filename.concat args.project_root p
-        else p
-      in
-      let policy_path = resolve args.policy in
-      let program_roots =
-        match
-          Szaniec_architecture_access.Architecture_access.parse_policy
-            policy_path
-        with
-        | Error e ->
-            prerr_endline ("szaniec: " ^ e) ;
-            exit 2
-        | Ok policy -> policy.Szaniec_model.Policy.program_roots
-      in
-      let decisions_path =
-        let raw =
-          Option.value
-            ~default:"szaniec/suggestion-decisions.json"
-            args.decisions
-        in
-        if Filename.is_relative raw
-        then Filename.concat args.project_root raw
-        else raw
-      in
-      let decisions =
-        match S.read_decisions decisions_path with
-        | Ok items -> items
-        | Error e ->
-            prerr_endline ("szaniec: " ^ e) ;
-            exit 2
-      in
-      let provider =
-        match args.provider_fixture with
-        | None -> None
-        | Some path -> (
-          match
-            Szaniec_model_access.Jev_provider.fixture_of_file (resolve path)
-          with
-          | Ok provider -> Some provider
-          | Error e ->
-              prerr_endline ("szaniec: " ^ e) ;
-              exit 2 )
-      in
-      let api_candidates =
-        match args.api_candidates with
-        | None -> []
-        | Some path -> (
-          match S.load_api_candidates (resolve path) with
-          | Ok items -> items
-          | Error e ->
-              prerr_endline ("szaniec: " ^ e) ;
-              exit 2 )
-      in
-      let cache_path =
-        if args.no_cache
-        then None
-        else
-          Some
-            ( match args.cache with
-            | Some p ->
-                if Filename.is_relative p
-                then Filename.concat args.project_root p
-                else p
-            | None ->
-                Filename.concat
-                  args.project_root
-                  "szaniec/suggestion-cache.json" )
-      in
-      let budgets : Szaniec_suggestion_manager.Retrieve.budgets =
-        { Szaniec_suggestion_manager.Retrieve.names= args.budget_names
-        ; pairs= args.budget_pairs
-        ; responsibility= args.budget_responsibility
-        ; complexity= args.budget_complexity
-        ; experimental= 6
-        ; body_chars= 1200 }
-      in
-      match
-        S.run
-          { S.project_root= args.project_root
-          ; program_roots
-          ; rebuild= args.rebuild
-          ; experimental= args.experimental
-          ; budgets
-          ; model= args.model
-          ; timeout_s= args.timeout_s
-          ; cache_path
-          ; refresh= args.refresh
-          ; provider
-          ; decisions
-          ; api_candidates }
-      with
-      | Error e ->
-          prerr_endline ("szaniec: " ^ e) ;
-          exit 2
-      | Ok report ->
-          print_string
-            ( if args.json
-              then S.json_of_report report
-              else S.text_of_report report ) ;
-          exit (S.exit_code report) )
-  | "complexity" -> (
-      let sort = if args.sort = "" then "location" else args.sort in
-      if sort <> "location" && sort <> "complexity"
+  match argv with
+  | "coverage" :: "supervise" :: rest ->
+      let pass_env, port, command = parse_supervise [] 0 [] rest in
+      if port <= 0
       then (
-        prerr_endline
-          ("szaniec: --sort must be location or complexity, not " ^ sort) ;
+        prerr_endline "szaniec: coverage supervise requires --port" ;
         exit 2 ) ;
-      let policy_path =
-        if Filename.is_relative args.policy && not (Sys.file_exists args.policy)
-        then Filename.concat args.project_root args.policy
-        else args.policy
-      in
-      let approval_path =
-        match args.approval with
-        | Some ap ->
-            if Filename.is_relative ap && not (Sys.file_exists ap)
-            then Some (Filename.concat args.project_root ap)
-            else Some ap
-        | None -> None
-      in
-      try
-        let report =
-          Szaniec_inspection_manager.Inspection_manager.complexity
-            ~sort
-            { Szaniec_inspection_manager.Inspection_manager.project_root=
-                args.project_root
-            ; policy_path
-            ; approval_path
-            ; rebuild= args.rebuild }
-        in
-        print_string
-          (if args.json then complexity_json report else complexity_text report) ;
-        exit (if report.Complexity.status = "ok" then 0 else 2)
-      with
-      | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
-          prerr_endline ("szaniec: " ^ e) ;
+      Szaniec_inspection_manager.Coverage_run.supervise ~port ~pass_env command
+  | "coverage" :: rest -> run_coverage rest
+  | _ -> (
+      let args = parse argv default_args in
+      if args.command = ""
+      then (
+        prerr_endline usage ;
+        exit 2 ) ;
+      if args.command <> "complexity" && args.sort <> ""
+      then (
+        prerr_endline "szaniec: --sort is only valid with complexity" ;
+        exit 2 ) ;
+      match args.command with
+      | "approve" -> (
+          let resolve_path p =
+            if Filename.is_relative p && not (Sys.file_exists p)
+            then Filename.concat args.project_root p
+            else p
+          in
+          let policy_path = resolve_path args.policy in
+          let approval =
+            resolve_path
+              (Option.value ~default:"szaniec/approval.json" args.approval)
+          in
+          match
+            Szaniec_architecture_access.Architecture_access.approve
+              ~policy_path
+              ~approval_path:approval
+          with
+          | Ok () ->
+              Printf.printf
+                "approved policy %s (digest recorded in %s)\n"
+                args.policy
+                approval ;
+              exit 0
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      | "suggestions" when args.subcommand = "decide" -> (
+          let path =
+            let raw =
+              Option.value
+                ~default:"szaniec/suggestion-decisions.json"
+                args.decisions
+            in
+            if Filename.is_relative raw
+            then Filename.concat args.project_root raw
+            else raw
+          in
+          match
+            Szaniec_suggestion_manager.Suggestion_manager.record_decision
+              ~path
+              ~id:args.suggestion_id
+              ~decision:args.decision
+              ~rationale:args.rationale
+          with
+          | Ok () ->
+              Printf.printf
+                "recorded %s for %s\n"
+                args.decision
+                args.suggestion_id ;
+              exit 0
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      | "suggestions" -> (
+          let module S = Szaniec_suggestion_manager.Suggestion_manager in
+          let resolve p =
+            if Filename.is_relative p && not (Sys.file_exists p)
+            then Filename.concat args.project_root p
+            else p
+          in
+          let policy_path = resolve args.policy in
+          let program_roots =
+            match
+              Szaniec_architecture_access.Architecture_access.parse_policy
+                policy_path
+            with
+            | Error e ->
+                prerr_endline ("szaniec: " ^ e) ;
+                exit 2
+            | Ok policy -> policy.Szaniec_model.Policy.program_roots
+          in
+          let decisions_path =
+            let raw =
+              Option.value
+                ~default:"szaniec/suggestion-decisions.json"
+                args.decisions
+            in
+            if Filename.is_relative raw
+            then Filename.concat args.project_root raw
+            else raw
+          in
+          let decisions =
+            match S.read_decisions decisions_path with
+            | Ok items -> items
+            | Error e ->
+                prerr_endline ("szaniec: " ^ e) ;
+                exit 2
+          in
+          let provider =
+            match args.provider_fixture with
+            | None -> None
+            | Some path -> (
+              match
+                Szaniec_model_access.Jev_provider.fixture_of_file (resolve path)
+              with
+              | Ok provider -> Some provider
+              | Error e ->
+                  prerr_endline ("szaniec: " ^ e) ;
+                  exit 2 )
+          in
+          let api_candidates =
+            match args.api_candidates with
+            | None -> []
+            | Some path -> (
+              match S.load_api_candidates (resolve path) with
+              | Ok items -> items
+              | Error e ->
+                  prerr_endline ("szaniec: " ^ e) ;
+                  exit 2 )
+          in
+          let cache_path =
+            if args.no_cache
+            then None
+            else
+              Some
+                ( match args.cache with
+                | Some p ->
+                    if Filename.is_relative p
+                    then Filename.concat args.project_root p
+                    else p
+                | None ->
+                    Filename.concat
+                      args.project_root
+                      "szaniec/suggestion-cache.json" )
+          in
+          let budgets : Szaniec_suggestion_manager.Retrieve.budgets =
+            { Szaniec_suggestion_manager.Retrieve.names= args.budget_names
+            ; pairs= args.budget_pairs
+            ; responsibility= args.budget_responsibility
+            ; complexity= args.budget_complexity
+            ; experimental= 6
+            ; body_chars= 1200 }
+          in
+          match
+            S.run
+              { S.project_root= args.project_root
+              ; program_roots
+              ; rebuild= args.rebuild
+              ; experimental= args.experimental
+              ; budgets
+              ; model= args.model
+              ; timeout_s= args.timeout_s
+              ; cache_path
+              ; refresh= args.refresh
+              ; provider
+              ; decisions
+              ; api_candidates }
+          with
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2
+          | Ok report ->
+              print_string
+                ( if args.json
+                  then S.json_of_report report
+                  else S.text_of_report report ) ;
+              exit (S.exit_code report) )
+      | "complexity" -> (
+          let sort = if args.sort = "" then "location" else args.sort in
+          if sort <> "location" && sort <> "complexity"
+          then (
+            prerr_endline
+              ("szaniec: --sort must be location or complexity, not " ^ sort) ;
+            exit 2 ) ;
+          let policy_path =
+            if
+              Filename.is_relative args.policy
+              && not (Sys.file_exists args.policy)
+            then Filename.concat args.project_root args.policy
+            else args.policy
+          in
+          let approval_path =
+            match args.approval with
+            | Some ap ->
+                if Filename.is_relative ap && not (Sys.file_exists ap)
+                then Some (Filename.concat args.project_root ap)
+                else Some ap
+            | None -> None
+          in
+          try
+            let report =
+              Szaniec_inspection_manager.Inspection_manager.complexity
+                ~sort
+                { Szaniec_inspection_manager.Inspection_manager.project_root=
+                    args.project_root
+                ; policy_path
+                ; approval_path
+                ; rebuild= args.rebuild }
+            in
+            print_string
+              ( if args.json
+                then complexity_json report
+                else complexity_text report ) ;
+            exit (if report.Complexity.status = "ok" then 0 else 2)
+          with
+          | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      | "check" -> (
+          let policy_path =
+            if
+              Filename.is_relative args.policy
+              && not (Sys.file_exists args.policy)
+            then Filename.concat args.project_root args.policy
+            else args.policy
+          in
+          let approval_path =
+            match args.approval with
+            | Some ap ->
+                if Filename.is_relative ap && not (Sys.file_exists ap)
+                then Some (Filename.concat args.project_root ap)
+                else Some ap
+            | None -> None
+          in
+          try
+            let report =
+              Szaniec_inspection_manager.Inspection_manager.check
+                { Szaniec_inspection_manager.Inspection_manager.project_root=
+                    args.project_root
+                ; policy_path
+                ; approval_path
+                ; rebuild= args.rebuild }
+            in
+            if not args.no_callgraph
+            then write_callgraph report args.out args.project_root ;
+            print_string
+              (if args.json then json_report report else text_report report) ;
+            exit (exit_code report)
+          with
+          | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 )
+      | _ ->
+          prerr_endline usage ;
           exit 2 )
-  | "check" -> (
-      let policy_path =
-        if Filename.is_relative args.policy && not (Sys.file_exists args.policy)
-        then Filename.concat args.project_root args.policy
-        else args.policy
-      in
-      let approval_path =
-        match args.approval with
-        | Some ap ->
-            if Filename.is_relative ap && not (Sys.file_exists ap)
-            then Some (Filename.concat args.project_root ap)
-            else Some ap
-        | None -> None
-      in
-      try
-        let report =
-          Szaniec_inspection_manager.Inspection_manager.check
-            { Szaniec_inspection_manager.Inspection_manager.project_root=
-                args.project_root
-            ; policy_path
-            ; approval_path
-            ; rebuild= args.rebuild }
-        in
-        if not args.no_callgraph
-        then write_callgraph report args.out args.project_root ;
-        print_string
-          (if args.json then json_report report else text_report report) ;
-        exit (exit_code report)
-      with
-      | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
-          prerr_endline ("szaniec: " ^ e) ;
-          exit 2 )
-  | _ ->
-      prerr_endline usage ;
-      exit 2

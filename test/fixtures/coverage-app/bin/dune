@@ -1,0 +1,5 @@
+(executable
+ (name server)
+ (libraries coverage_app_api unix)
+ (instrumentation
+  (backend szaniec.instrumentation)))

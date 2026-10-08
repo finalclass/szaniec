@@ -1,0 +1,4 @@
+(library
+ (name szaniec_coverage_runtime)
+ (public_name szaniec.coverage_runtime)
+ (libraries unix))

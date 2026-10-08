@@ -1,0 +1,7 @@
+(rule
+ (alias runtest)
+ (package szaniec)
+ (deps
+  (file %{workspace_root}/test/coverage/run.sh))
+ (action
+  (run sh "%{workspace_root}/test/coverage/run.sh")))
