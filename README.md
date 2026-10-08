@@ -30,6 +30,9 @@ official IDesign product.
 
 ## Commands and status
 
+Run `szaniec --help` (or `-h`) for command syntax and descriptions. These flags
+also work after a command or subcommand and do not require project configuration.
+
 All five commands have executable implementations:
 
 | Command | Purpose | Result |

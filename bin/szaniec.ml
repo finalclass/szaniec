@@ -4,25 +4,46 @@ open Szaniec_model
 module Config = Szaniec_config.Config
 
 let usage =
-  "usage:\n\
+  "Szaniec: architecture checks, complexity, coverage and code-quality \
+   suggestions.\n\n\
+   usage:\n\
+  \ szaniec --help | -h\n\
+  \   Show this help without loading project configuration.\n\n\
   \ szaniec approve [--config <path>] [--project-root <dir>]\n\
+  \   Record the current policy's name and SHA-256 digest as approved in \
+   szaniec.toml.\n\n\
   \ szaniec check [--config <path>] [--project-root <dir>]\n\
   \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
+  \   Check implementation against approved architecture; report violations \
+   and evidence gaps.\n\n\
   \ szaniec complexity [--config <path>] [--project-root <dir>]\n\
   \                    [--rebuild] [--json] [--sort location|complexity]\n\
+  \   List functions and their local cyclomatic complexity.\n\n\
   \ szaniec coverage [--project-root <dir>] [--config <path>] [--json]\n\
   \                  [--out <path>] [--keep-work] [--function-inventory <path>]\n\
+  \   Run an existing scenario on an instrumented application; report point \
+   coverage and CRAP.\n\n\
   \ szaniec coverage supervise --port <int> [--pass-env <name>]... -- \
    <command>...\n\
+  \   Launch a server for a coverage scenario, wait for readiness and record \
+   its exit.\n\n\
   \ szaniec suggestions [--config <path>] [--project-root <dir>] [--rebuild]\n\
   \               [--json] [--experimental] [--model <id>] [--cache <path>]\n\
   \               [--no-cache] [--refresh] [--timeout <seconds>]\n\
   \               [--budget-names <n>] [--budget-pairs <n>]\n\
   \               [--budget-responsibility <n>] [--budget-complexity <n>]\n\
   \               [--provider-fixture <path>] [--decisions <path>]\n\
+  \   Request optional experimental code-quality suggestions from Jev or a \
+   local fixture.\n\n\
   \ szaniec suggestions decide --id <id> --decision apply|reject|defer\n\
   \               --rationale <text> [--decisions <path>] [--project-root \
-   <dir>] [--config <path>]"
+   <dir>] [--config <path>]\n\
+  \   Record a suggestion review decision and its rationale; leave source code \
+   unchanged."
+
+let show_help () =
+  print_endline usage ;
+  exit 0
 
 type args =
   { command: string
@@ -63,6 +84,7 @@ let int_arg (flag : string) (raw : string) : int =
 let rec parse (argv : string list) (acc : args) : args =
   match argv with
   | [] -> acc
+  | ("--help" | "-h") :: _ -> show_help ()
   | "--config" :: p :: rest -> parse rest {acc with config= Some p}
   | "--project-root" :: p :: rest -> parse rest {acc with project_root= Some p}
   | "--rebuild" :: rest -> parse rest {acc with rebuild= true}
@@ -759,6 +781,7 @@ let coverage_exit (r : Coverage.report) =
 let rec parse_supervise pass_env port command = function
   | [] -> (pass_env, port, List.rev command)
   | "--" :: rest -> (pass_env, port, List.rev command @ rest)
+  | ("--help" | "-h") :: _ -> show_help ()
   | "--port" :: n :: rest ->
       parse_supervise pass_env (int_of_string n) command rest
   | "--pass-env" :: name :: rest ->
@@ -767,6 +790,7 @@ let rec parse_supervise pass_env port command = function
 
 let rec parse_coverage project config json out keep inventory = function
   | [] -> (project, config, json, out, keep, inventory)
+  | ("--help" | "-h") :: _ -> show_help ()
   | "--project-root" :: p :: rest ->
       parse_coverage p config json out keep inventory rest
   | "--config" :: p :: rest ->

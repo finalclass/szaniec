@@ -5,6 +5,11 @@ Format identifiers: request is CLI-only; machine-readable report is
 
 ## Commands
 
+`szaniec --help` and `szaniec -h` print command syntax and descriptions to
+stdout and exit 0 without loading project configuration or running an inspection.
+The flags also work after a command or subcommand. Arguments after the `--`
+separator in `coverage supervise` belong to the child command.
+
 ```
 szaniec approve [--config <path>] [--project-root <dir>]
 szaniec check   [--config <path>] [--project-root <dir>]
