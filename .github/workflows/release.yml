@@ -43,7 +43,7 @@ jobs:
       - name: Verify source acceptance
         run: opam exec -- make verify
       - name: Verify packaged coverage and nested launcher
-        run: ./_release/szaniec coverage --project-root test/fixtures/coverage-app
+        run: opam exec -- ./_release/szaniec coverage --project-root test/fixtures/coverage-app
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
