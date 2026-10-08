@@ -83,6 +83,12 @@ and point-to-function evidence. ConformanceEngine does not score coverage and
 does not apply a threshold. The facade is not an architectural service of the
 program under check. See [the coverage contract](docs/contracts/coverage.md).
 
+Config is approved input infrastructure owned by CheckClient. CheckClient
+loads the document once and supplies typed sections to InspectionManager,
+SuggestionManager and ArchitectureAccess. These consumers may use the data
+contract; only CheckClient performs configuration discovery, loading and writing.
+The Engines and ProgramAccess do not depend on Config.
+
 ## Adapters
 
 Language/toolchain adapters live inside ProgramAccess. They extract symbol identity,
@@ -224,7 +230,8 @@ introduce a shared business library.
 
 Implementation-level contracts resolved under this architecture:
 
-- [Policy format](docs/contracts/policy-format.md) — `szaniec-policy/2`, approved-policy selection, ownership matching.
+- [Project configuration](docs/contracts/configuration.md) — one root TOML document and CheckClient-owned Config infrastructure.
+- [Policy format](docs/contracts/policy-format.md) — embedded TOML policy, approved-policy selection, ownership matching.
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.

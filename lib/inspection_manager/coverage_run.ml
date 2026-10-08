@@ -7,12 +7,6 @@ module Facts = Szaniec_program_access.Coverage_facts
 
 let ( // ) = Filename.concat
 
-type config =
-  { scope: string list
-  ; build: string list
-  ; server: string
-  ; scenario: string list }
-
 let find_dune_root start =
   let rec walk dir =
     if Sys.file_exists (dir // "dune-project")
@@ -25,53 +19,6 @@ let find_dune_root start =
 
 let abs_cwd path =
   if Filename.is_relative path then Sys.getcwd () // path else path
-
-let read_config path =
-  match Yojson.Safe.from_file path with
-  | exception _ -> Error ("coverage config is not readable JSON: " ^ path)
-  | `Assoc fields -> (
-      let str k =
-        match List.assoc_opt k fields with
-        | Some (`String s) -> Some s
-        | _ -> None
-      in
-      let string_list k =
-        match List.assoc_opt k fields with
-        | Some (`List items) ->
-            if
-              List.for_all
-                (function
-                  | `String _ -> true
-                  | _ -> false )
-                items
-            then
-              Some
-                (List.map
-                   (function
-                     | `String s -> s
-                     | _ -> "" )
-                   items )
-            else None
-        | _ -> None
-      in
-      let format = str "format" in
-      if format <> Some Version.coverage_config_format
-      then
-        Error
-          ("coverage config format must be " ^ Version.coverage_config_format)
-      else
-        match
-          ( string_list "scope"
-          , string_list "build"
-          , str "server"
-          , string_list "scenario" )
-        with
-        | Some scope, Some build, Some server, Some scenario ->
-            Ok {scope; build; server; scenario}
-        | _ ->
-            Error "coverage config requires scope, build, server, and scenario"
-      )
-  | _ -> Error "coverage config must be a JSON object"
 
 let inject_instrument = function
   | [] -> Error "coverage build command is empty"
@@ -452,198 +399,190 @@ let node_gaps (nodes : Coverage.node list) =
       | _ -> None )
     nodes
 
-let run ~project_root ~config_path ~inventory ~keep_work =
+let run
+    ~project_root
+    ~(config : Szaniec_config.Config.coverage)
+    ~inventory
+    ~keep_work =
   Random.self_init () ;
   let project_root = abs_cwd project_root in
   let dune_root = find_dune_root project_root in
-  let config_path =
-    if Filename.is_relative config_path
-    then project_root // config_path
-    else config_path
-  in
-  match read_config config_path with
+  match inject_instrument config.build with
   | Error message -> Error message
-  | Ok config -> (
-    match inject_instrument config.build with
-    | Error message -> Error message
-    | Ok build ->
-        let scope = if config.scope = [] then [""] else config.scope in
-        let snapshot, _ = Facts.snapshot dune_root scope in
-        let work =
-          Filename.get_temp_dir_name ()
-          // Printf.sprintf
-               "szaniec-cov-%x-%x"
-               (Unix.getpid ())
-               (Random.bits ())
-        in
-        mkdir_p work ;
-        mkdir_p (work // "data") ;
-        mkdir_p (work // "nodes") ;
-        mkdir_p (work // "probe") ;
-        let cleanup () = if not keep_work then rm_rf work in
-        let finish report =
-          cleanup () ;
-          if keep_work then prerr_endline ("szaniec coverage work: " ^ work) ;
-          report
-        in
-        let env = Array.to_list (build_env ()) in
-        let build_code = run_argv ~cwd:dune_root ~env build in
-        if build_code <> 0
-        then
-          Ok
-            (finish
-               (empty_report
-                  ~snapshot
-                  ~scenario:Coverage.Not_run
-                  ~gaps:
-                    [ { Coverage.code= "COVERAGE-BUILD-FAILED"
-                      ; message=
-                          "Instrumented build exited "
-                          ^ string_of_int build_code
-                      ; path= dune_root } ] ) )
-        else
-          let server = dune_root // config.server in
-          let scenario_env =
-            let entries = Unix.environment () |> Array.to_list in
-            let entries = put entries "SZANIEC_COVERAGE_CONTEXT" work in
-            let entries = put entries "SZANIEC_BIN" (abs_cwd Sys.argv.(0)) in
-            let entries = put entries "COVERAGE_SERVER" server in
-            let entries = put entries "COVERAGE_PROJECT_ROOT" project_root in
-            put entries "COVERAGE_DUNE_ROOT" dune_root
-          in
-          let scenario_code =
-            if config.scenario = []
-            then 0
-            else run_argv ~cwd:dune_root ~env:scenario_env config.scenario
-          in
-          let scenario =
-            if scenario_code = 0
-            then Coverage.Passed scenario_code
-            else Coverage.Failed scenario_code
-          in
-          let later, _ = Facts.snapshot dune_root scope in
-          let stanzas, scan_gaps, _mlx = Facts.scan_stanzas dune_root scope in
-          let index_files =
-            Facts.files_under dune_root scope (fun name ->
-                Filename.check_suffix name ".ml" )
-          in
-          let spans, parse_gaps = Facts.index_sources dune_root index_files in
-          let expected = Facts.expected_sources dune_root stanzas in
-          let points, read_gaps =
-            collect_points ~project_root:dune_root ~dune_root (work // "data")
-          in
-          let merged, merge_gaps = Facts.merge_points points in
-          let measured_paths =
-            List.map (fun (f : Facts.file_points) -> f.Facts.path) merged
-          in
-          let evidence_gaps =
-            List.filter_map
-              (fun rel ->
-                if List.mem rel measured_paths
-                then None
-                else
-                  Some
-                    { Coverage.code= "COVERAGE-NO-EVIDENCE"
-                    ; message= "Hooked source has no point file: " ^ rel
-                    ; path= rel } )
-              expected
-          in
-          let unmapped =
-            List.filter_map
-              (fun (file : Facts.file_points) ->
-                let under =
-                  List.exists
-                    (fun root ->
-                      root = ""
-                      || file.path = root
-                      || String.starts_with ~prefix:(root ^ "/") file.path )
-                    scope
-                in
-                if under && not (List.mem file.path index_files)
-                then
-                  Some
-                    { Coverage.code= "COVERAGE-UNMAPPED-FILE"
+  | Ok build ->
+      let scope = config.scope in
+      let snapshot, _ = Facts.snapshot dune_root scope in
+      let work =
+        Filename.get_temp_dir_name ()
+        // Printf.sprintf "szaniec-cov-%x-%x" (Unix.getpid ()) (Random.bits ())
+      in
+      mkdir_p work ;
+      mkdir_p (work // "data") ;
+      mkdir_p (work // "nodes") ;
+      mkdir_p (work // "probe") ;
+      let cleanup () = if not keep_work then rm_rf work in
+      let finish report =
+        cleanup () ;
+        if keep_work then prerr_endline ("szaniec coverage work: " ^ work) ;
+        report
+      in
+      let env = Array.to_list (build_env ()) in
+      let build_code = run_argv ~cwd:dune_root ~env build in
+      if build_code <> 0
+      then
+        Ok
+          (finish
+             (empty_report
+                ~snapshot
+                ~scenario:Coverage.Not_run
+                ~gaps:
+                  [ { Coverage.code= "COVERAGE-BUILD-FAILED"
                     ; message=
-                        "Point file does not match a source snapshot: "
-                        ^ file.path
-                    ; path= file.path }
-                else None )
-              merged
-          in
-          let stale =
-            if later = snapshot
-            then []
-            else
-              [ { Coverage.code= "COVERAGE-STALE-SNAPSHOT"
-                ; message= "Sources changed during the coverage run"
-                ; path= dune_root } ]
-          in
-          let inventory, inventory_gaps =
-            match inventory with
-            | None -> ([], [])
-            | Some path -> (
-              match Facts.load_inventory path with
-              | Ok entries -> (entries, [])
-              | Error gap -> ([], [gap]) )
-          in
-          let functions, points_covered, points_total =
-            Facts.attribute ~spans ~measured:merged ~inventory
-          in
-          let nodes = read_nodes (work // "nodes") in
-          let visits = Facts.count_probe_visits (work // "probe") in
-          let probe_gaps =
-            if
-              visits = 0
-              && List.exists
-                   (fun (n : Coverage.node) ->
-                     match n.disposition with
-                     | Coverage.Exited 0 -> true
-                     | _ -> false )
-                   nodes
-            then
-              [ { Coverage.code= "COVERAGE-NO-EVIDENCE"
-                ; message= "Probe engine produced no visits"
-                ; path= work // "probe" } ]
-            else []
-          in
-          let gaps =
-            sort_gaps
-              ( scan_gaps
-              @ parse_gaps
-              @ read_gaps
-              @ merge_gaps
-              @ evidence_gaps
-              @ unmapped
-              @ stale
-              @ inventory_gaps
-              @ node_gaps nodes
-              @ probe_gaps )
-          in
-          let engines =
-            [ { Coverage.name= "points"
-              ; version= Version.coverage_points
-              ; kind= "point"
-              ; visits= None }
-            ; { name= "probe"
-              ; version= Version.coverage_probe
-              ; kind= "visit"
-              ; visits= Some visits } ]
-          in
-          Ok
-            (finish
-               { Coverage.status=
-                   (if gaps = [] then Coverage.Complete else Coverage.Incomplete)
-               ; scenario
-               ; measurement_window= "process"
-               ; coverage_kind= "point"
-               ; denominator= "instrumented-points"
-               ; facade= Version.instrumentation_facade
-               ; engines
-               ; snapshot_digest= snapshot
-               ; compiler= Sys.ocaml_version
-               ; exclusions= Coverage.exclusions
-               ; functions
-               ; gaps
-               ; nodes
-               ; points_covered
-               ; points_total } ) )
+                        "Instrumented build exited " ^ string_of_int build_code
+                    ; path= dune_root } ] ) )
+      else
+        let server = dune_root // config.server in
+        let scenario_env =
+          let entries = Unix.environment () |> Array.to_list in
+          let entries = put entries "SZANIEC_COVERAGE_CONTEXT" work in
+          let entries = put entries "SZANIEC_BIN" (abs_cwd Sys.argv.(0)) in
+          let entries = put entries "COVERAGE_SERVER" server in
+          let entries = put entries "COVERAGE_PROJECT_ROOT" project_root in
+          put entries "COVERAGE_DUNE_ROOT" dune_root
+        in
+        let scenario_code =
+          if config.scenario = []
+          then 0
+          else run_argv ~cwd:dune_root ~env:scenario_env config.scenario
+        in
+        let scenario =
+          if scenario_code = 0
+          then Coverage.Passed scenario_code
+          else Coverage.Failed scenario_code
+        in
+        let later, _ = Facts.snapshot dune_root scope in
+        let stanzas, scan_gaps, _mlx = Facts.scan_stanzas dune_root scope in
+        let index_files =
+          Facts.files_under dune_root scope (fun name ->
+              Filename.check_suffix name ".ml" )
+        in
+        let spans, parse_gaps = Facts.index_sources dune_root index_files in
+        let expected = Facts.expected_sources dune_root stanzas in
+        let points, read_gaps =
+          collect_points ~project_root:dune_root ~dune_root (work // "data")
+        in
+        let merged, merge_gaps = Facts.merge_points points in
+        let measured_paths =
+          List.map (fun (f : Facts.file_points) -> f.Facts.path) merged
+        in
+        let evidence_gaps =
+          List.filter_map
+            (fun rel ->
+              if List.mem rel measured_paths
+              then None
+              else
+                Some
+                  { Coverage.code= "COVERAGE-NO-EVIDENCE"
+                  ; message= "Hooked source has no point file: " ^ rel
+                  ; path= rel } )
+            expected
+        in
+        let unmapped =
+          List.filter_map
+            (fun (file : Facts.file_points) ->
+              let under =
+                List.exists
+                  (fun root ->
+                    root = ""
+                    || file.path = root
+                    || String.starts_with ~prefix:(root ^ "/") file.path )
+                  scope
+              in
+              if under && not (List.mem file.path index_files)
+              then
+                Some
+                  { Coverage.code= "COVERAGE-UNMAPPED-FILE"
+                  ; message=
+                      "Point file does not match a source snapshot: "
+                      ^ file.path
+                  ; path= file.path }
+              else None )
+            merged
+        in
+        let stale =
+          if later = snapshot
+          then []
+          else
+            [ { Coverage.code= "COVERAGE-STALE-SNAPSHOT"
+              ; message= "Sources changed during the coverage run"
+              ; path= dune_root } ]
+        in
+        let inventory, inventory_gaps =
+          match inventory with
+          | None -> ([], [])
+          | Some path -> (
+            match Facts.load_inventory path with
+            | Ok entries -> (entries, [])
+            | Error gap -> ([], [gap]) )
+        in
+        let functions, points_covered, points_total =
+          Facts.attribute ~spans ~measured:merged ~inventory
+        in
+        let nodes = read_nodes (work // "nodes") in
+        let visits = Facts.count_probe_visits (work // "probe") in
+        let probe_gaps =
+          if
+            visits = 0
+            && List.exists
+                 (fun (n : Coverage.node) ->
+                   match n.disposition with
+                   | Coverage.Exited 0 -> true
+                   | _ -> false )
+                 nodes
+          then
+            [ { Coverage.code= "COVERAGE-NO-EVIDENCE"
+              ; message= "Probe engine produced no visits"
+              ; path= work // "probe" } ]
+          else []
+        in
+        let gaps =
+          sort_gaps
+            ( scan_gaps
+            @ parse_gaps
+            @ read_gaps
+            @ merge_gaps
+            @ evidence_gaps
+            @ unmapped
+            @ stale
+            @ inventory_gaps
+            @ node_gaps nodes
+            @ probe_gaps )
+        in
+        let engines =
+          [ { Coverage.name= "points"
+            ; version= Version.coverage_points
+            ; kind= "point"
+            ; visits= None }
+          ; { name= "probe"
+            ; version= Version.coverage_probe
+            ; kind= "visit"
+            ; visits= Some visits } ]
+        in
+        Ok
+          (finish
+             { Coverage.status=
+                 (if gaps = [] then Coverage.Complete else Coverage.Incomplete)
+             ; scenario
+             ; measurement_window= "process"
+             ; coverage_kind= "point"
+             ; denominator= "instrumented-points"
+             ; facade= Version.instrumentation_facade
+             ; engines
+             ; snapshot_digest= snapshot
+             ; compiler= Sys.ocaml_version
+             ; exclusions= Coverage.exclusions
+             ; functions
+             ; gaps
+             ; nodes
+             ; points_covered
+             ; points_total } )

@@ -516,10 +516,9 @@ let () =
 
 let quote_cmd (exe : string) (work : string) (extra : string) : string =
   Printf.sprintf
-    "%s complexity --policy %s --approval %s --project-root %s%s --json"
+    "%s complexity --config %s --project-root %s%s --json"
     (Filename.quote exe)
-    (Filename.quote (Filename.concat work "szaniec/complexity-policy.json"))
-    (Filename.quote (Filename.concat work "szaniec/approval.json"))
+    (Filename.quote (Filename.concat work "complexity.toml"))
     (Filename.quote work)
     (if extra = "" then "" else " " ^ extra)
 
@@ -600,11 +599,9 @@ let () =
           fail errors msg ) ;
       let text_cmd =
         Printf.sprintf
-          "%s complexity --policy %s --approval %s --project-root %s"
+          "%s complexity --config %s --project-root %s"
           (Filename.quote exe)
-          (Filename.quote
-             (Filename.concat work_dir "szaniec/complexity-policy.json") )
-          (Filename.quote (Filename.concat work_dir "szaniec/approval.json"))
+          (Filename.quote (Filename.concat work_dir "complexity.toml"))
           (Filename.quote work_dir)
       in
       let text, text_code = capture text_cmd in

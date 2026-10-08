@@ -34,3 +34,8 @@
  (package szaniec)
  (action
   (run %{exe:suggestions.exe})))
+
+(test
+ (name config_test)
+ (modules config_test)
+ (libraries szaniec_config szaniec_model szaniec_architecture_access otoml unix))

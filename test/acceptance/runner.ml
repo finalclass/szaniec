@@ -28,9 +28,7 @@ let sc
   {name; mutations; add_files; reapprove; no_rebuild; check_twice}
 
 let fixture_policy_edited =
-  ( "szaniec/policy.json"
-  , {|"policyName": "tasks-app"|}
-  , {|"policyName": "tasks-app-edited"|} )
+  ("szaniec.toml", {|name = "tasks-app"|}, {|name = "tasks-app-edited"|})
 
 let scenarios =
   [ sc "base-pass" ~check_twice:true
@@ -184,9 +182,9 @@ module Impl : Task_manager.IMPL = struct
 |}
           ) ]
       ~mutations:
-        [ ( "szaniec/policy.json"
-          , {|  "approvedSharedModules": ["App.Clock"],|}
-          , {|  "approvedSharedModules": ["App.Clock", "Hash"],|} )
+        [ ( "szaniec.toml"
+          , {|approved_shared_modules = ["App.Clock"]|}
+          , {|approved_shared_modules = ["App.Clock", "Hash"]|} )
         ; ( "lib/task_manager/dune"
           , "(libraries contract well task_access_lib)"
           , "(libraries contract well task_access_lib kit)" )
@@ -807,11 +805,7 @@ let prepare_work (fixture : string) : string =
 let run_scenario (exe : string) (fixture : string) (s : scenario) : string =
   let work = prepare_work fixture in
   sync_tree fixture work ;
-  let flags =
-    "--policy szaniec/policy.json --approval szaniec/approval.json \
-     --project-root "
-    ^ work
-  in
+  let flags = "--config szaniec.toml --project-root " ^ work in
   (* approve the base policy first, so later policy edits are detected as
      unapproved changes *)
   if s.reapprove then ignore (run_szaniec exe ("approve " ^ flags)) ;

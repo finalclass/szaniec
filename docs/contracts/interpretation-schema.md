@@ -97,7 +97,7 @@ Derived from calls and value references, with helper paths:
   module. Registration patterns below are not implementation access.
   One consumer is enough: the access leaves the caller's family.
 - `resource-access` — call whose resolved callee path has a prefix listed
-  in policy `resources[].apiPrefixes`; carries the resource name.
+  in policy `policy.resources[].api_prefixes`; carries the resource name.
 - `registration` — composition-root wiring: `Well.Service.register
   M.spec`, and references to implementation values passed to route
   registration calls (`Well.get`, `Well.post`, `Well.live`) or exposed

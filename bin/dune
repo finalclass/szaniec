@@ -1,7 +1,7 @@
 (executable
  (name szaniec)
  (public_name szaniec)
- (libraries
+ (libraries szaniec_config
  szaniec_inspection_manager
  szaniec_architecture_access
  szaniec_suggestion_manager

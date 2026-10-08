@@ -5,8 +5,7 @@ open Szaniec_model
 
 type request =
   { project_root: string
-  ; policy_path: string
-  ; approval_path: string option
+  ; config: Szaniec_config.Config.t
   ; rebuild: bool }
 
 exception Policy_error of string
@@ -287,9 +286,7 @@ let check (req : request) : Finding.report =
   (* 1. resolve the approved policy *)
   let resolution, approval_gap =
     match
-      Szaniec_architecture_access.Architecture_access.resolve
-        ~policy_path:req.policy_path
-        ~approval_path:req.approval_path
+      Szaniec_architecture_access.Architecture_access.resolve ~config:req.config
     with
     | Error e -> raise (Policy_error e)
     | Ok (r, gap) -> (r, gap)
@@ -301,7 +298,7 @@ let check (req : request) : Finding.report =
      policy lives under it *)
   let policy_display_path =
     let root = req.project_root in
-    let p = req.policy_path in
+    let p = req.config.path in
     if
       String.length p > String.length root + 1
       && String.sub p 0 (String.length root + 1) = root ^ "/"
@@ -453,9 +450,7 @@ let prepare (req : request) :
     * Interpretation.t =
   let resolution, _approval_gap =
     match
-      Szaniec_architecture_access.Architecture_access.resolve
-        ~policy_path:req.policy_path
-        ~approval_path:req.approval_path
+      Szaniec_architecture_access.Architecture_access.resolve ~config:req.config
     with
     | Error e -> raise (Policy_error e)
     | Ok (r, gap) -> (r, gap)

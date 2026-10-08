@@ -6,10 +6,10 @@ Format identifiers: request is CLI-only; machine-readable report is
 ## Commands
 
 ```
-szaniec approve --policy <path> [--approval <path>]
-szaniec check   --policy <path> [--approval <path>] [--project-root <dir>]
+szaniec approve [--config <path>] [--project-root <dir>]
+szaniec check   [--config <path>] [--project-root <dir>]
                 [--rebuild] [--json] [--out <path>] [--no-callgraph]
-szaniec complexity --policy <path> [--approval <path>] [--project-root <dir>]
+szaniec complexity [--config <path>] [--project-root <dir>]
                    [--rebuild] [--json] [--sort location|complexity]
 szaniec coverage [--project-root <dir>] [--config <path>] [--json] [--out <path>]
                  [--keep-work] [--function-inventory <path>]
@@ -19,12 +19,11 @@ szaniec coverage supervise --port <int> [--pass-env <name>]... -- <command>...
 `coverage` is specified in [the coverage contract](coverage.md). It does not
 run conformance rules and it does not require an approved policy.
 
-- `approve` writes the approval file recording the policy name and
+- `approve` updates `[approval]` with the policy name and
   SHA-256 digest of the current policy content (see
   [policy format](policy-format.md)).
-- `check` runs the full inspection. Paths default to the working
-  directory (`--project-root`), `szaniec/policy.json` next to it
-  (`--policy`), `szaniec/approval.json` (`--approval`).
+- `check` runs the full inspection. Configuration discovery and CLI precedence
+  follow [project configuration](configuration.md).
 - Every successful `check` writes the call network artifact
   (`szaniec.json`, see below) into the project root; `--out <path>`
   moves it, `--no-callgraph` disables writing it.
@@ -58,7 +57,7 @@ Declared exclusions of the profile (reported in the report, never gaps):
 - `.mlx` view files (MLX preprocessor not in profile),
 - `.mli` interfaces (implementation facts only),
 - dune wrapper units (`.ml-gen`),
-- resource access beyond policy-declared `apiPrefixes` (e.g. direct
+- resource access beyond policy-declared `api_prefixes` (e.g. direct
   `Sqlite3.*` calls) — recorded as external calls, not resource
   interactions.
 

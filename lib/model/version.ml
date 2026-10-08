@@ -9,9 +9,7 @@ let complexity_format = "szaniec-complexity/1"
 
 let complexity_metric = "szaniec-cc/1"
 
-let policy_format = "szaniec-policy/2"
-
-let approval_format = "szaniec-approval/1"
+let config_format = "szaniec-config/1"
 
 let observation_format = "szaniec-observation/2"
 
@@ -24,8 +22,6 @@ let adapter_well = "szaniec-well-adapter/3.1.0"
 let rules = "szaniec-rules/3.1.0"
 
 let coverage_format = "szaniec-coverage/1"
-
-let coverage_config_format = "szaniec-coverage-config/1"
 
 let instrumentation_facade = "szaniec-instrumentation/1"
 

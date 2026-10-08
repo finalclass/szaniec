@@ -5,7 +5,7 @@ set -eu
 
 dir=$(cd "$(dirname "$0")" && pwd)
 repo=$dir
-while [ ! -f "$repo/test/fixtures/coverage-app/szaniec/coverage.json" ]; do
+while [ ! -f "$repo/test/fixtures/coverage-app/szaniec.toml" ]; do
   repo=$(dirname "$repo")
   if [ "$repo" = "/" ]; then
     echo "run.sh: cannot locate the szaniec repository" >&2
@@ -30,7 +30,7 @@ trap cleanup EXIT
 dune build bin/szaniec.exe test/fixtures/coverage-app/bin/server.exe
 szaniec="$repo/_build/default/bin/szaniec.exe"
 server="$repo/_build/default/test/fixtures/coverage-app/bin/server.exe"
-config="$repo/test/fixtures/coverage-app/szaniec/coverage.json"
+config="$repo/test/fixtures/coverage-app/szaniec.toml"
 inventory="$repo/test/fixtures/coverage-app/functions.json"
 
 if grep -a -q "BISECT-COVERAGE-" "$server"; then
@@ -41,7 +41,7 @@ fi
 if grep -R -n -E "bisect_ppx|BISECT_" \
   "$repo/test/fixtures/coverage-app" \
   --include=dune --include='*.ml' --include='*.json' --include='*.md' \
-  --include='*.ts'
+  --include='*.ts' --include='*.toml'
 then
   echo "fixture names the internal points engine" >&2
   exit 1

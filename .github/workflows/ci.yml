@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: 5.4.1
@@ -21,9 +24,13 @@ jobs:
         run: opam exec -- dune exec ocamlformat -- --check $(git ls-files '*.ml')
       - name: Build
         run: opam exec -- dune build @all
+      - name: Unit tests
+        run: opam exec -- dune build @test/unit/runtest
       - name: Acceptance suite
         run: opam exec -- test/acceptance/run.sh
       - name: Suggestions suite
         run: opam exec -- test/acceptance/suggestions.sh
+      - name: Configuration suite
+        run: opam exec -- deno test --allow-read --allow-write --allow-run test/config/run.ts
       - name: Coverage suite
         run: opam exec -- test/coverage/run.sh

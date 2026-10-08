@@ -33,7 +33,7 @@ All five commands have executable implementations:
 
 | Command | Purpose | Result |
 |---|---|---|
-| `approve` | Record the selected policy's name and SHA-256 digest | Approval JSON file |
+| `approve` | Record the selected policy's name and SHA-256 digest | `[approval]` in `szaniec.toml` |
 | `check` | Check service interactions and project boundaries | Text or `szaniec-report/1` JSON; separate call graph |
 | `complexity` | Inventory syntactic functions and local cyclomatic complexity | Text or `szaniec-complexity/1` JSON |
 | `coverage` | Build with instrumentation and run an existing scenario | Text or `szaniec-coverage/1` JSON |
@@ -56,7 +56,7 @@ From this repository's root, with Dune available:
 dune build @all
 dune exec szaniec -- complexity \
   --project-root test/fixtures/tasks-app \
-  --policy szaniec/complexity-policy.json --rebuild --sort complexity
+  --config complexity.toml --rebuild --sort complexity
 ```
 
 Dune resolves the OCaml toolchain and dependencies through the checked-in
@@ -79,17 +79,15 @@ the executable's absolute path or a `szaniec` executable on `PATH`.
 
 ### Try the architecture fixture
 
-From the Szaniec checkout, inspect the included valid application without
-creating an approval or report in its source tree:
+From the Szaniec checkout, inspect a temporary copy of the valid application:
 
 ```sh
-dune exec szaniec -- approve \
-  --project-root test/fixtures/tasks-app --policy szaniec/policy.json \
-  --approval /tmp/tasks-app-approval.json
-dune exec szaniec -- check \
-  --project-root test/fixtures/tasks-app --policy szaniec/policy.json \
-  --approval /tmp/tasks-app-approval.json --rebuild --json \
+fixture=$(mktemp -d)
+cp -R test/fixtures/tasks-app/. "$fixture/"
+dune exec szaniec -- approve --project-root "$fixture"
+dune exec szaniec -- check --project-root "$fixture" --rebuild --json \
   --out /tmp/tasks-app-callgraph.json > /tmp/tasks-app-findings.json
+rm -rf "$fixture"
 ```
 
 The unmodified fixture should report `status: ok`, zero violations and gaps,
@@ -98,45 +96,42 @@ the [fixture README](test/fixtures/tasks-app/README.md).
 
 ## Configure a project
 
-Run project examples from the application's Dune root. A typical layout is:
+Create one `szaniec.toml` in the Git repository root:
 
-```text
-my-app/
-  dune-project
-  lib/
-    contract/Task_manager.cyrograf
-    contract/Task_access.cyrograf
-    task_manager/...
-    task_access/...
-    web_client/...
-    app.ml
-  szaniec/
-    policy.json
-    approval.json
-    coverage.json              # optional
-    suggestion-decisions.json  # created by suggestions decide
+```toml
+format = "szaniec-config/1"
+
+[policy]
+name = "my-app"
+roots = ["lib"]
+approved_shared_modules = []
+
+[[policy.resources]]
+name = "database"
+api_prefixes = ["Well.Db.", "Sqlite3."]
 ```
 
-Create `szaniec/policy.json`:
+Szaniec finds the Git root from the current directory, including nested
+subdirectories and worktrees. Outside Git it uses the nearest Dune root.
+`--project-root <dir>` explicitly selects an analyzed root; `--config <path>`
+selects another TOML document. Relative input and output paths resolve against
+the selected root. CLI options override settings from the command's section.
+Missing files, malformed TOML, unknown keys and invalid values fail with exit 2.
 
-```json
-{
-  "format": "szaniec-policy/2",
-  "policyName": "my-app",
-  "program": { "roots": ["lib"] },
-  "approvedSharedModules": [],
-  "resources": [
-    { "name": "database", "apiPrefixes": ["Well.Db.", "Sqlite3."] }
-  ]
-}
-```
+`[policy].roots` selects source directories relative to that root. Keep tests,
+static assets and data outside the roots when they are not application code.
+The scanner skips `_build`, `node_modules` and hidden subdirectories. Explicit
+test roots can be inventoried, as the complexity fixture demonstrates.
 
-`program.roots` selects source directories relative to the project root.
-Choose the actual application scope; code outside it is not checked. Keep
-tests, static assets, and data outside the roots if they are not application
-implementation. The source scanner skips `_build`, `node_modules`, and hidden
-subdirectories. Explicit test roots can be inventoried, as the public
-complexity fixture demonstrates.
+The file also holds optional `[check]`, `[complexity]`, `[coverage]` and
+`[suggestions]` defaults, plus the approval recorded by `approve`. See
+[the complete configuration reference](docs/contracts/configuration.md).
+Reports, provider fixtures, inventories, caches and recorded suggestion decisions
+remain JSON artifacts. Existing policy, approval and coverage JSON configuration
+files and `--policy`/`--approval`/`--api-candidates` options are no longer read;
+move their values into the corresponding TOML sections. Existing JSON-byte
+approval digests require a new approval through architecture review after
+migration. Credentials stay in the environment.
 
 Do not put a service list or permitted-edge list in the policy. Services are
 discovered from `.cyrograf` files declaring `rpc` methods, for example
@@ -170,45 +165,46 @@ folder `common`, `shared`, or `utils` does not approve shared implementation.
 For infrastructure explicitly approved by the architecture, list its
 canonical module path:
 
-```json
-"approvedSharedModules": ["App.Clock"]
+```toml
+# In [policy]:
+approved_shared_modules = ["App.Clock"]
 ```
 
-This is a field replacement in the policy above, not a complete JSON file.
-Approval applies only while the policy digest matches the recorded approval.
-It does not make cross-service business implementation reuse acceptable or
-grant a disallowed caller access to protected resources.
+Approval applies while the policy digest matches `[approval]`. It does not
+make cross-service business implementation reuse acceptable or grant a
+disallowed caller access to protected resources.
 
-Record the approved identity once the policy has been selected:
+Record the approved identity after selecting the policy:
 
 ```sh
-szaniec approve --policy szaniec/policy.json --approval szaniec/approval.json
+szaniec approve
 ```
 
-The approval file records `format: szaniec-approval/1`, `policyName`, and
-`policyDigest`. SHA-256 covers the raw policy bytes, so formatting changes
-also change its identity. Editing the policy and running `approve` during
-every implementation check defeats the separation of implementation from
-approved architecture. In CI, select the approved policy and approval through
-the project's review process, outside the implementation patch.
+This updates `[approval].policy_name` and `[approval].policy_digest` in the same
+TOML file. The command serializes the document atomically and preserves section
+values, but drops comments. SHA-256 covers the normalized policy values;
+formatting and measurement settings do not change the approved identity.
+Policy edits require deliberate approval through the project's review process.
+Do not approve automatically on every check. CI selects the approved document
+outside the implementation patch.
 
 ## Check architecture
 
 Build and inspect the declared program:
 
 ```sh
-szaniec check --policy szaniec/policy.json \
-  --approval szaniec/approval.json --project-root . --rebuild
+szaniec check \
+  --project-root . --rebuild
 ```
 
 Once artifacts are fresh, omit `--rebuild`:
 
 ```sh
-szaniec check --policy szaniec/policy.json --json
+szaniec check --json
 ```
 
-Defaults are the working directory, `szaniec/policy.json`, and
-`szaniec/approval.json`. `--rebuild` runs `dune build` before extraction.
+Configuration comes from the selected root's `szaniec.toml`. `--rebuild` runs
+`dune build` before extraction.
 Missing, stale, unreadable, or unsupported artifacts produce gaps.
 
 ### What the checker catches
@@ -288,9 +284,9 @@ It is a projection of this run, not a hand-maintained architecture allowlist.
 List functions in source order, or review the most complex first:
 
 ```sh
-szaniec complexity --policy szaniec/policy.json --rebuild
-szaniec complexity --policy szaniec/policy.json --sort complexity
-szaniec complexity --policy szaniec/policy.json --json \
+szaniec complexity --rebuild
+szaniec complexity --sort complexity
+szaniec complexity --json \
   > /tmp/my-app-functions.json
 ```
 
@@ -316,7 +312,7 @@ Here, file **coverage** means completeness of static inventory, not execution
 coverage. Unmeasurable definitions retain a gap and a null complexity.
 
 There is no complexity threshold. `--sort complexity` sorts descending,
-then by id, with unmeasurable definitions last. `--approval` can record the
+then by id, with unmeasurable definitions last. `[approval]` records the
 policy's approval status; lack of approval alone does not fail this inventory.
 The command does not write `szaniec.json`. See the
 [metric specification](docs/contracts/complexity-metric.md) for exact counts.
@@ -350,19 +346,17 @@ PPX rewriter libraries and test-directory stanzas are outside application scope.
 
 ### Configure and run a scenario
 
-Create `szaniec/coverage.json` (adjust the executable and scenario paths):
+Add the scenario to `szaniec.toml` (adjust the executable and scenario paths):
 
-```json
-{
-  "format": "szaniec-coverage-config/1",
-  "scope": ["lib", "bin"],
-  "build": ["dune", "build", "bin/server.exe"],
-  "server": "_build/default/bin/server.exe",
-  "scenario": [
-    "deno", "run", "--allow-run", "--allow-net", "--allow-env",
-    "--allow-read", "--allow-write", "scenarios/http.ts"
-  ]
-}
+```toml
+[coverage]
+scope = ["lib", "bin"]
+build = ["dune", "build", "bin/server.exe"]
+server = "_build/default/bin/server.exe"
+scenario = [
+  "deno", "run", "--allow-run", "--allow-net", "--allow-env",
+  "--allow-read", "--allow-write", "scenarios/http.ts"
+]
 ```
 
 All configuration paths are relative to the discovered Dune root, found by
@@ -372,7 +366,7 @@ not a new assertion language. Coverage supplies `COVERAGE_SERVER`,
 `SZANIEC_BIN`, and `SZANIEC_COVERAGE_CONTEXT` for launching the built server.
 
 ```sh
-szaniec coverage --project-root . --config szaniec/coverage.json
+szaniec coverage --project-root .
 szaniec coverage --json --out /tmp/my-app-coverage.json
 ```
 
@@ -421,7 +415,7 @@ are reported separately and can coexist.
 Supply the complexity inventory to calculate per-function CRAP:
 
 ```sh
-szaniec complexity --policy szaniec/policy.json --rebuild --json \
+szaniec complexity --rebuild --json \
   > /tmp/my-app-functions.json
 szaniec coverage --function-inventory /tmp/my-app-functions.json \
   --json --out /tmp/my-app-coverage.json
@@ -451,12 +445,12 @@ policy, or call graph. Architecture checking remains usable without Jev.
 With `curl` installed and `TYPESAFE_API_KEY` supplied through your environment:
 
 ```sh
-szaniec suggestions --policy szaniec/policy.json --rebuild
-szaniec suggestions --policy szaniec/policy.json --json \
+szaniec suggestions --rebuild
+szaniec suggestions --json \
   > /tmp/my-app-suggestions.json
 ```
 
-The policy selects program roots; its approval is not read. Only a live
+The policy selects program roots; suggestions do not validate its approval. Only a live
 suggestions command sends selected source context to
 `https://api.typesafe.ai/v1/systemone`. Do not put a credential in a command,
 configuration file, cache, or report.
@@ -478,17 +472,20 @@ Default timeout is 30 seconds. `--model <id>` selects the requested model
 (default `jev-latest`). Each model state contains bounded source context;
 truncation is marked. Retrieval does not send every function automatically.
 
-To provide project-relevant API candidates for the experimental idiomatic
-alternative review, create a JSON array, for example:
+Configure project-relevant API candidates inline for the experimental
+idiomatic-alternative review:
 
-```json
-["List.filter_map", "Option.map"]
+```toml
+[suggestions]
+api_candidates = ["List.filter_map", "Option.map"]
+# Optional command defaults:
+model = "jev-latest"
+timeout = 30
+budget_names = 12
 ```
 
-Then pass its filename:
-
 ```sh
-szaniec suggestions --experimental --api-candidates szaniec/api-candidates.json
+szaniec suggestions --experimental
 ```
 
 Without a candidate list, that criterion is explicitly listed as not run.
@@ -511,7 +508,7 @@ For an offline example using the public corpus, run from this repository:
 ```sh
 dune exec szaniec -- suggestions \
   --project-root test/fixtures/suggestions-corpus \
-  --policy szaniec/policy.json --rebuild --json --no-cache \
+  --rebuild --json --no-cache \
   --provider-fixture szaniec/provider-fixture.json
 ```
 
@@ -561,8 +558,8 @@ provider fixtures, cache, and decision formats.
 A CI architecture gate can preserve JSON and the command's status:
 
 ```sh
-if szaniec check --policy szaniec/policy.json \
-    --approval szaniec/approval.json --rebuild --json --no-callgraph \
+if szaniec check \
+    --rebuild --json --no-callgraph \
     > /tmp/my-app-findings.json; then
   echo "Architecture check passed"
 else
@@ -622,6 +619,7 @@ dune pkg lock                       # resolve/verify dependency lock
 dune build @all
 dune exec ocamlformat -- --check $(git ls-files '*.ml')
 dune build @runtest                  # unit and integration aliases
+deno test --allow-read --allow-write --allow-run test/config/run.ts
 
 # Standalone integration entry points:
 test/acceptance/run.sh               # architecture and complexity
@@ -647,6 +645,7 @@ standalone integration suites.
 This README is the usage guide. Detailed formats and accepted design live in:
 
 - [Architecture](ARCHITECTURE.md) and [implementation brief](IMPLEMENTATION.md).
+- [Project configuration](docs/contracts/configuration.md).
 - [Policy and approval format](docs/contracts/policy-format.md).
 - [CLI, diagnostics, and call graph](docs/contracts/inspection-contract.md).
 - [Rule catalog](docs/contracts/rule-catalog.md).

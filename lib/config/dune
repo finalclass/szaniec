@@ -1,0 +1,3 @@
+(library
+ (name szaniec_config)
+ (libraries szaniec_model otoml unix))

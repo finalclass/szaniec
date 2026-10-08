@@ -5,7 +5,7 @@ directory name the `szaniec` package's backend and an ordinary ppxlib
 rewriter. They do not name the internal points engine.
 
 In this repository the fixture is built by the parent dune project, so
-`szaniec/coverage.json` uses paths relative to that dune root. A consumer
+`szaniec.toml` uses paths relative to that dune root. A consumer
 whose own `dune-project` is the root uses the same stanza with shorter
 paths:
 
@@ -15,14 +15,14 @@ paths:
  (instrumentation (backend szaniec.instrumentation)))
 ```
 
-```json
-{
-  "format": "szaniec-coverage-config/1",
-  "scope": ["lib", "bin"],
-  "build": ["dune", "build", "bin/server.exe"],
-  "server": "_build/default/bin/server.exe",
-  "scenario": ["deno", "run", "--allow-run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "scenarios/http.ts"]
-}
+```toml
+format = "szaniec-config/1"
+
+[coverage]
+scope = ["lib", "bin"]
+build = ["dune", "build", "bin/server.exe"]
+server = "_build/default/bin/server.exe"
+scenario = ["deno", "run", "--allow-all", "scenarios/http.ts"]
 ```
 
 `lib/core` and `lib/api` are two application libraries. `lib/api` keeps

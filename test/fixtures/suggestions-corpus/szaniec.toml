@@ -1,0 +1,6 @@
+format = "szaniec-config/1"
+
+[policy]
+name = "suggestions-corpus"
+roots = ["lib"]
+approved_shared_modules = []
