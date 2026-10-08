@@ -9,9 +9,11 @@ let usage =
    usage:\n\
   \ szaniec --help | -h\n\
   \   Show this help without loading project configuration.\n\n\
+  \ szaniec init [--config <path>] [--project-root <dir>]\n\
+  \   Create minimal analysis configuration; read services and methods from \
+   .cyrograf contracts.\n\n\
   \ szaniec approve [--config <path>] [--project-root <dir>]\n\
-  \   Record the current policy's name and SHA-256 digest as approved in \
-   szaniec.toml.\n\n\
+  \   Record approval of the configured analysis scope and policy exceptions.\n\n\
   \ szaniec check [--config <path>] [--project-root <dir>]\n\
   \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
   \   Check implementation against approved architecture; report violations \
@@ -117,7 +119,8 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--sort" :: s :: rest -> parse rest {acc with sort= s}
   | cmd :: rest
     when acc.command = ""
-         && ( cmd = "check"
+         && ( cmd = "init"
+            || cmd = "check"
             || cmd = "approve"
             || cmd = "suggestions"
             || cmd = "complexity" ) ->
@@ -929,6 +932,24 @@ let main () =
       then (
         prerr_endline "szaniec: --sort is only valid with complexity" ;
         exit 2 ) ;
+      ( if args.command = "init"
+        then
+          match
+            Config.initialize
+              ?project_root:args.project_root
+              ?path:args.config
+              ()
+          with
+          | Ok path ->
+              Printf.printf
+                "Created %s\n\
+                 Review [policy].roots before running szaniec approve.\n\
+                 Services and methods are read from .cyrograf contracts.\n"
+                path ;
+              exit 0
+          | Error e ->
+              prerr_endline ("szaniec: " ^ e) ;
+              exit 2 ) ;
       let config = load_config args.project_root args.config in
       let args = parse argv (configured_args config args.command) in
       let root = config.project_root in

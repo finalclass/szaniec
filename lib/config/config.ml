@@ -296,16 +296,56 @@ let discover_root start =
   in
   walk start None
 
+let locate ?project_root ?path () =
+  let project_root =
+    match project_root with
+    | Some root -> Unix.realpath root
+    | None -> discover_root (Sys.getcwd ())
+  in
+  let path =
+    resolve_path project_root (Option.value ~default:"szaniec.toml" path)
+  in
+  (project_root, path)
+
+let initialize ?project_root ?path () =
+  try
+    let project_root, path = locate ?project_root ?path () in
+    let document =
+      Otoml.TomlTable
+        [ ("format", Otoml.TomlString Version.config_format)
+        ; ( "policy"
+          , Otoml.TomlTable
+              [ ("name", Otoml.TomlString (Filename.basename project_root))
+              ; ("roots", Otoml.TomlArray [Otoml.TomlString "lib"])
+              ; ("approved_shared_modules", Otoml.TomlArray []) ] ) ]
+    in
+    let temporary, oc =
+      Filename.open_temp_file
+        ~temp_dir:(Filename.dirname path)
+        ".szaniec-"
+        ".toml"
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        close_out_noerr oc ;
+        Sys.remove temporary )
+      (fun () ->
+        output_string oc (Otoml.Printer.to_string document) ;
+        output_char oc '\n' ;
+        close_out oc ;
+        (* Publish only complete content; link refuses any existing target. *)
+        Unix.link temporary path ) ;
+    Ok path
+  with
+  | Sys_error e -> Error e
+  | Unix.Unix_error (Unix.EEXIST, _, path) ->
+      Error (path ^ ": already exists; configuration left unchanged")
+  | Unix.Unix_error (e, fn, arg) ->
+      Error (fn ^ " " ^ arg ^ ": " ^ Unix.error_message e)
+
 let load ?project_root ?path () =
   try
-    let project_root =
-      match project_root with
-      | Some root -> Unix.realpath root
-      | None -> discover_root (Sys.getcwd ())
-    in
-    let path =
-      resolve_path project_root (Option.value ~default:"szaniec.toml" path)
-    in
+    let project_root, path = locate ?project_root ?path () in
     match Otoml.Parser.from_file_result path with
     | Error e -> Error (path ^ ": " ^ e)
     | Ok document -> Ok (decode ~project_root ~path document)

@@ -68,6 +68,67 @@ Deno.test("discover repository configuration from a nested worktree directory", 
       "CLI overrides configured sort: " + r.err,
     );
   }));
+Deno.test("init discovers the root and creates usable configuration without approval", () =>
+  project(async (root, nested) => {
+    await Deno.remove(`${root}/szaniec.toml`);
+    let r = await run(nested, "init");
+    assert(r.code === 0, r.err);
+    const config = await Deno.readTextFile(`${root}/szaniec.toml`);
+    assert(!config.includes("[approval]"), "init must not approve the policy");
+    assert(
+      !(await Array.fromAsync(Deno.readDir(nested))).length,
+      "init must write at the project root, not the nested working directory",
+    );
+    r = await run(nested, "check", "--json", "--no-callgraph");
+    assert(r.code === 2, r.err + r.out);
+    const report = JSON.parse(r.out);
+    assert(
+      report.inputs.policy.approved === false,
+      "the generated policy must require deliberate approval",
+    );
+    assert(
+      report.inputs.policy.name === root.split("/").at(-1),
+      "policy identity must use the project directory name",
+    );
+    r = await run(nested, "approve");
+    assert(r.code === 0, r.err);
+    r = await run(nested, "check", "--json", "--no-callgraph");
+    assert(r.code === 0 && JSON.parse(r.out).inputs.policy.approved, r.err);
+  }));
+Deno.test("init preserves existing files and symlinks and respects explicit paths", () =>
+  project(async (root, nested) => {
+    const path = `${root}/szaniec.toml`;
+    // Invalid configuration must also be preserved byte for byte.
+    await Deno.writeTextFile(path, "keep this content unchanged");
+    let r = await run(nested, "init");
+    assert(r.code === 2 && r.err.includes("already exists"), r.err);
+    assert(
+      await Deno.readTextFile(path) === "keep this content unchanged",
+      "init must not overwrite an existing file",
+    );
+    await Deno.remove(path);
+    await Deno.symlink("missing-config.toml", path);
+    r = await run(nested, "init");
+    assert(r.code === 2, "init must refuse a dangling symbolic link");
+    assert(
+      await Deno.readLink(path) === "missing-config.toml",
+      "existing symbolic links must remain unchanged",
+    );
+    r = await run(
+      nested,
+      "init",
+      "--project-root",
+      root,
+      "--config",
+      "selected.toml",
+    );
+    assert(r.code === 0, r.err);
+    r = await run(nested, "approve", "--config", "selected.toml");
+    assert(
+      r.code === 0,
+      "the explicitly located configuration must load: " + r.err,
+    );
+  }));
 Deno.test("explicit root/config and decision paths resolve against selected root", () =>
   project(async (root, nested) => {
     await Deno.rename(`${root}/szaniec.toml`, `${root}/selected.toml`);

@@ -33,10 +33,11 @@ official IDesign product.
 Run `szaniec --help` (or `-h`) for command syntax and descriptions. These flags
 also work after a command or subcommand and do not require project configuration.
 
-All five commands have executable implementations:
+The following commands have executable implementations:
 
 | Command | Purpose | Result |
 |---|---|---|
+| `init` | Create minimal analysis configuration without overwriting an existing file | New `szaniec.toml` |
 | `approve` | Record the selected policy's name and SHA-256 digest | `[approval]` in `szaniec.toml` |
 | `check` | Check service interactions and project boundaries | Text or `szaniec-report/1` JSON; separate call graph |
 | `complexity` | Inventory syntactic functions and local cyclomatic complexity | Text or `szaniec-complexity/1` JSON |
@@ -192,7 +193,24 @@ copy of the existing executable because Well's packager expects that path.
 
 ## Configure a project
 
-Create one `szaniec.toml` in the Git repository root:
+Initialize `szaniec.toml` in the Git repository root, including when called
+from a nested directory:
+
+```sh
+szaniec init
+```
+
+The file contains `format`, a policy name taken from the project directory,
+`roots = ["lib"]`, and an empty `approved_shared_modules` list. Review the
+roots to include the intended source directories. Initialization does not
+approve the policy and refuses to replace any existing file or symbolic link.
+Use `--project-root <dir>` or `--config <path>` to select a different location.
+
+Services and methods continue to come from `.cyrograf` contracts; TOML only
+configures analysis scope, approved sharing, protected resources, and command
+defaults. It does not duplicate the service architecture.
+
+An example with a protected resource is:
 
 ```toml
 format = "szaniec-config/1"

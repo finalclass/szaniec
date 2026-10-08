@@ -27,6 +27,16 @@ Credentials remain in the environment and are never configuration fields.
 
 ## Document
 
+`szaniec init [--project-root <dir>] [--config <path>]` creates a minimal
+document without requiring existing configuration. Root discovery and relative
+path resolution follow the rules above. The policy name is the project
+directory's basename, roots are `["lib"]`, and approved sharing is empty.
+No approval, resources, service declarations, or command defaults are written.
+Review the roots before approving. Services and methods are discovered from
+`.cyrograf` contracts during analysis, not copied into TOML. Initialization
+exits 0 after creation; an existing file or symbolic link is preserved and
+reported with exit 2. Parent directories for an explicit path must exist.
+
 ```toml
 format = "szaniec-config/1"
 

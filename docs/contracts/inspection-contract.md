@@ -11,6 +11,7 @@ The flags also work after a command or subcommand. Arguments after the `--`
 separator in `coverage supervise` belong to the child command.
 
 ```
+szaniec init    [--config <path>] [--project-root <dir>]
 szaniec approve [--config <path>] [--project-root <dir>]
 szaniec check   [--config <path>] [--project-root <dir>]
                 [--rebuild] [--json] [--out <path>] [--no-callgraph]
@@ -24,7 +25,10 @@ szaniec coverage supervise --port <int> [--pass-env <name>]... -- <command>...
 `coverage` is specified in [the coverage contract](coverage.md). It does not
 run conformance rules and it does not require an approved policy.
 
-- `approve` updates `[approval]` with the policy name and
+- `init` creates minimal analysis configuration as specified in
+  [project configuration](configuration.md); it does not approve the policy.
+- `approve` accepts the configured analysis scope and policy exceptions by
+  updating `[approval]` with the policy name and
   SHA-256 digest of the current policy content (see
   [policy format](policy-format.md)).
 - `check` runs the full inspection. Configuration discovery and CLI precedence
