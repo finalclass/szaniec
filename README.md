@@ -1,224 +1,660 @@
 # Szaniec
 
-**Check that an implementation respects its approved architecture.**
+**Check architecture conformance, measure OCaml code, and review optional
+code-quality suggestions.**
 
-Szaniec is an architecture conformance checker for code written by people
-and coding agents. Given a codebase and an approved architecture, it
-extracts code dependencies and service interactions from compiler-typed
-artifacts, then checks them against structural IDesign rules and
-project-specific boundaries.
+Szaniec is a local CLI for people and coding agents. It extracts facts from
+compiler-typed OCaml artifacts, interprets [Well](https://github.com/finalclass/well)
+services, and checks implementation against approved architecture. It also
+inventories function complexity, measures an existing application scenario,
+and offers optional Jev judgments about code quality.
 
 The name is Polish for a defensive earthwork: Szaniec protects established
-boundaries.
+boundaries. It checks implementation conformance; it does not decide whether
+an architecture was correctly decomposed around volatility. This is not an
+official IDesign product.
 
-## Status
+## Contents
 
-**First delivery works end to end**: `szaniec check` runs against OCaml
-applications built with [Well](https://github.com/finalclass/well),
-extracts facts from real compiler artifacts (`.cmt`), interprets Well
-service mechanics (contracts, proxies, registrations, database access),
-evaluates the rule catalog, and reports deterministic text/JSON findings.
+- [Commands and status](#commands-and-status)
+- [Build and run](#build-and-run)
+- [Configure a project](#configure-a-project)
+- [Check architecture](#check-architecture)
+- [Inspect function complexity](#inspect-function-complexity)
+- [Measure coverage and CRAP](#measure-coverage-and-crap)
+- [Review code-quality suggestions](#review-code-quality-suggestions)
+- [Exit statuses and automation](#exit-statuses-and-automation)
+- [Troubleshooting and limits](#troubleshooting-and-limits)
+- [Verification and reference documents](#verification-and-reference-documents)
 
-Supported profile: `well-ocaml-core` — OCaml **5.4.x** artifacts produced
-by dune. `szaniec complexity` inventories every function in the declared
-program roots and reports local cyclomatic complexity (`szaniec-cc/1`).
-It does not apply a threshold and it does not write `szaniec.json`. See
-[ARCHITECTURE.md](ARCHITECTURE.md), the contract documents under
-[docs/contracts](docs/contracts) and the stack decision in
-[docs/decisions/stack.md](docs/decisions/stack.md).
+## Commands and status
 
-## Intended use
+All five commands have executable implementations:
 
-In a configured project:
+| Command | Purpose | Result |
+|---|---|---|
+| `approve` | Record the selected policy's name and SHA-256 digest | Approval JSON file |
+| `check` | Check service interactions and project boundaries | Text or `szaniec-report/1` JSON; separate call graph |
+| `complexity` | Inventory syntactic functions and local cyclomatic complexity | Text or `szaniec-complexity/1` JSON |
+| `coverage` | Build with instrumentation and run an existing scenario | Text or `szaniec-coverage/1` JSON |
+| `suggestions` | Review selected source context with Jev or a local fixture | Text or `szaniec-suggestions/1` JSON |
+
+Supported architecture profile: `well-ocaml-core`, OCaml **5.4.x** artifacts
+produced by Dune. The locked coverage combination is OCaml 5.4.1
+(`5.4.1+relocatable`), Dune 3.24.2, and ppxlib 0.38.0.
+
+Architecture checks, complexity, and coverage run locally. Live suggestions
+send selected source context to the provider. All suggestion categories are
+**experimental and not evaluated**: routine acceptance uses recorded fixtures;
+no live quality evaluation with cost and latency has been recorded.
+
+## Build and run
+
+From this repository's root, with Dune available:
+
+```sh
+dune build @all
+dune exec szaniec -- complexity \
+  --project-root test/fixtures/tasks-app \
+  --policy szaniec/complexity-policy.json --rebuild --sort complexity
+```
+
+Dune resolves the OCaml toolchain and dependencies through the checked-in
+`dune.lock`; the first build needs network access. The executable is
+`_build/default/bin/szaniec.exe`. There is no verified registry installation
+recipe yet. Coverage consumers also need the `szaniec` package's Dune backend
+available in their build; copying the CLI alone does not provide it.
+
+The examples below use `szaniec` for that executable. To run them from an
+application directory using a source checkout, first set an absolute path:
+
+```sh
+# Run in the Szaniec checkout, then change to your application directory.
+export PATH="$PWD/_build/default/bin:$PATH"
+alias szaniec=szaniec.exe
+```
+
+The alias is for an interactive shell. Scripts and subprocesses should use
+the executable's absolute path or a `szaniec` executable on `PATH`.
+
+### Try the architecture fixture
+
+From the Szaniec checkout, inspect the included valid application without
+creating an approval or report in its source tree:
+
+```sh
+dune exec szaniec -- approve \
+  --project-root test/fixtures/tasks-app --policy szaniec/policy.json \
+  --approval /tmp/tasks-app-approval.json
+dune exec szaniec -- check \
+  --project-root test/fixtures/tasks-app --policy szaniec/policy.json \
+  --approval /tmp/tasks-app-approval.json --rebuild --json \
+  --out /tmp/tasks-app-callgraph.json > /tmp/tasks-app-findings.json
+```
+
+The unmodified fixture should report `status: ok`, zero violations and gaps,
+and exit 0. Its generated-code stand-ins and Well API stub are documented in
+the [fixture README](test/fixtures/tasks-app/README.md).
+
+## Configure a project
+
+Run project examples from the application's Dune root. A typical layout is:
+
+```text
+my-app/
+  dune-project
+  lib/
+    contract/Task_manager.cyrograf
+    contract/Task_access.cyrograf
+    task_manager/...
+    task_access/...
+    web_client/...
+    app.ml
+  szaniec/
+    policy.json
+    approval.json
+    coverage.json              # optional
+    suggestion-decisions.json  # created by suggestions decide
+```
+
+Create `szaniec/policy.json`:
+
+```json
+{
+  "format": "szaniec-policy/2",
+  "policyName": "my-app",
+  "program": { "roots": ["lib"] },
+  "approvedSharedModules": [],
+  "resources": [
+    { "name": "database", "apiPrefixes": ["Well.Db.", "Sqlite3."] }
+  ]
+}
+```
+
+`program.roots` selects source directories relative to the project root.
+Choose the actual application scope; code outside it is not checked. Keep
+tests, static assets, and data outside the roots if they are not application
+implementation. The source scanner skips `_build`, `node_modules`, and hidden
+subdirectories. Explicit test roots can be inventoried, as the public
+complexity fixture demonstrates.
+
+Do not put a service list or permitted-edge list in the policy. Services are
+discovered from `.cyrograf` files declaring `rpc` methods, for example
+`lib/contract/Task_manager.cyrograf`:
+
+```text
+rpc list(ListReq) -> TaskList
+rpc add(AddReq) -> Task
+```
+
+Roles follow the filename suffix, case-insensitively:
+
+| Example service | Role |
+|---|---|
+| `Web_client` | Client |
+| `Task_manager` | Manager |
+| `Template_engine` | Engine |
+| `Task_access` | Access |
+| `Clock` | Utility |
+
+A contract without `rpc` methods does not declare a service. Implementations
+must be bound and registered through the supported Well mechanics. The
+[public tasks fixture](test/fixtures/tasks-app/README.md) includes contracts,
+generated-code stand-ins, service libraries, and a composition root.
+
+Private helpers belong in their service's directory tree; nested directories
+and modules are supported. Compiler evidence such as `make_spec` also binds
+ownership. One observed caller does not adopt an outside helper. Naming a
+folder `common`, `shared`, or `utils` does not approve shared implementation.
+
+For infrastructure explicitly approved by the architecture, list its
+canonical module path:
+
+```json
+"approvedSharedModules": ["App.Clock"]
+```
+
+This is a field replacement in the policy above, not a complete JSON file.
+Approval applies only while the policy digest matches the recorded approval.
+It does not make cross-service business implementation reuse acceptable or
+grant a disallowed caller access to protected resources.
+
+Record the approved identity once the policy has been selected:
 
 ```sh
 szaniec approve --policy szaniec/policy.json --approval szaniec/approval.json
-szaniec check   --policy szaniec/policy.json --approval szaniec/approval.json \
-                --project-root . [--rebuild] [--json]
-szaniec complexity --policy szaniec/policy.json \
-                   [--approval szaniec/approval.json] [--project-root .] \
-                   [--rebuild] [--json] [--sort location|complexity]
 ```
 
-- `approve` records the approved policy identity (name + SHA-256) in the
-  approval file; CI selects the policy outside the implementation patch.
-- `check` reports violations, their source locations, analysis gaps, and
-  the input identities (policy digest, snapshot digest, adapter and rule
-  versions). Unresolved calls and stale or missing artifacts never
-  produce a passing result.
-- Exit status of `check`: `0` no violations and no gaps; `1` violations
-  with complete analysis; `2` incomplete analysis or execution failure.
-- `complexity` lists every syntactic function with its `szaniec-cc/1`
-  complexity, source span, provenance, and ownership when interpretation
-  has one. `--sort location` (the default) is source order; `--sort
-  complexity` is descending complexity, then `id`, with unmeasurable
-  definitions last. Exit status: `0` when coverage is complete, `2` when
-  a file or construct could not be measured. The command never exits
-  `1`. A recorded policy approval does not by itself change that status.
+The approval file records `format: szaniec-approval/1`, `policyName`, and
+`policyDigest`. SHA-256 covers the raw policy bytes, so formatting changes
+also change its identity. Editing the policy and running `approve` during
+every implementation check defeats the separation of implementation from
+approved architecture. In CI, select the approved policy and approval through
+the project's review process, outside the implementation patch.
 
-## Coverage
+## Check architecture
 
-`szaniec coverage` measures an existing application scenario. It does not
-change conformance rules and it does not apply a coverage threshold.
+Build and inspect the declared program:
 
-The consumer hook is one Dune backend on every in-scope library and
-executable:
+```sh
+szaniec check --policy szaniec/policy.json \
+  --approval szaniec/approval.json --project-root . --rebuild
+```
+
+Once artifacts are fresh, omit `--rebuild`:
+
+```sh
+szaniec check --policy szaniec/policy.json --json
+```
+
+Defaults are the working directory, `szaniec/policy.json`, and
+`szaniec/approval.json`. `--rebuild` runs `dune build` before extraction.
+Missing, stale, unreadable, or unsupported artifacts produce gaps.
+
+### What the checker catches
+
+| Example | Expected interpretation |
+|---|---|
+| Client calls Manager, which calls Access | Allowed; not collapsed into Client → Access |
+| Client calls Access directly or through a private helper/proxy | `ID-CLIENT-ACCESS` |
+| Client calls Engine | `ID-CLIENT-ENGINE` |
+| Engine calls another Engine | `ID-ENGINE-ENGINE` |
+| Access calls another Access | `ID-ACCESS-ACCESS` |
+| Access calls Manager or Engine | `ID-ACCESS-OUTBOUND` |
+| Manager, Engine, or Access calls a Client | Corresponding `ID-*-CLIENT` violation |
+| Manager synchronously calls another Manager | `ID-MANAGER-MANAGER` |
+| One Client path calls two distinct Managers | `UC-CLIENT-MULTI-MANAGER` |
+| One queued path targets several Managers | `Q-MULTI-MANAGER` |
+| A queued command targets Engine or Access | `Q-TARGET-ROLE` |
+| A non-Manager publishes an event | `EVT-PUBLISH-ROLE` |
+| A role other than Client or Manager subscribes | `EVT-SUBSCRIBE-ROLE` |
+| Code reaches another service's implementation | `IMPL-ACCESS-CROSS-SERVICE` |
+| Several families execute unapproved outside implementation | `SHARED-UNAPPROVED` |
+| A disallowed owner directly accesses a protected resource API | `RESOURCE-BOUNDARY` |
+| New in-scope implementation has no owner | `POLICY-UNCLASSIFIED` |
+| A contract call names a method absent from its `rpc` declarations | `SPEC-UNDECLARED-METHOD` |
+| A declared service is not bound/registered | `SPEC-UNREGISTERED-SERVICE` |
+
+Separate handlers and mutually exclusive branches do not count as one path.
+For example, these conceptual Client paths have different results:
+
+```text
+handler: Task_manager.list; Notification_manager.list  -> two Managers: violation
+handler: if condition then Task_manager.list
+         else Notification_manager.list               -> one per alternative
+```
+
+These illustrate analysis behavior, not complete OCaml applications.
+`Well.request` is a queued command; a Manager may delegate to another Manager
+this way. Targets come from subscribers to the same topic. `Well.publish`
+and `Well.subscribe`, including supported keyed and MessageBus variants,
+are events. Publishing does not create a synchronous call to each subscriber.
+An unresolved topic or a request with no observed subscriber is a gap.
+
+Calls, aliases, value references, and callbacks can expose implementation
+access. One consumer is enough for an implementation-access violation;
+type-only references do not count as executable sharing. The
+[rule catalog](docs/contracts/rule-catalog.md) defines the full criteria.
+
+### Reports and call graph
+
+Save diagnostic JSON separately from the graph:
+
+```sh
+szaniec check --json --out /tmp/my-app-callgraph.json \
+  > /tmp/my-app-findings.json
+```
+
+**`check --out` selects the call-graph file**, not the diagnostic report.
+By default the graph is written to `szaniec.json` in the project root, including
+runs with findings or gaps. To avoid writing it:
+
+```sh
+szaniec check --json --no-callgraph > /tmp/my-app-findings.json
+```
+
+Diagnostic JSON includes `status` (`ok`, `violations`, or `incomplete`),
+`inputs`, `findings`, and `summary`. Each finding keeps its rule identifier,
+severity, participants, locations, and evidence path. Inputs identify the
+policy and approved digest, source snapshot, compiler, adapters, and rules.
+A report can contain both confirmed violations and analysis gaps.
+
+The separate `szaniec-callgraph/1` artifact lists services, declared methods,
+observed outgoing/incoming calls, unresolved calls, and unclassified units.
+It is a projection of this run, not a hand-maintained architecture allowlist.
+
+## Inspect function complexity
+
+List functions in source order, or review the most complex first:
+
+```sh
+szaniec complexity --policy szaniec/policy.json --rebuild
+szaniec complexity --policy szaniec/policy.json --sort complexity
+szaniec complexity --policy szaniec/policy.json --json \
+  > /tmp/my-app-functions.json
+```
+
+The metric is local cyclomatic complexity `szaniec-cc/1`. Straight-line code
+starts at 1; decisions add to the count. Simple examples:
+
+```ocaml
+let increment x = x + 1                         (* complexity 1 *)
+let absolute x = if x < 0 then -x else x         (* complexity 2 *)
+let sign x =                                   (* complexity 3 *)
+  if x < 0 then -1 else if x = 0 then 0 else 1
+```
+
+Matches, guards, short-circuit operators, loops, and exception/effect handlers
+have metric-specific counting rules. Nested functions are separate entries;
+the outer function does not absorb their decisions. Unused functions and
+anonymous callbacks are inventoried. A curried syntactic function is one
+entry; aliases and partial applications do not receive invented bodies.
+
+The JSON report includes source spans, names/ids, ownership when known,
+provenance, file coverage, gaps, complexity values, and summary statistics.
+Here, file **coverage** means completeness of static inventory, not execution
+coverage. Unmeasurable definitions retain a gap and a null complexity.
+
+There is no complexity threshold. `--sort complexity` sorts descending,
+then by id, with unmeasurable definitions last. `--approval` can record the
+policy's approval status; lack of approval alone does not fail this inventory.
+The command does not write `szaniec.json`. See the
+[metric specification](docs/contracts/complexity-metric.md) for exact counts.
+
+## Measure coverage and CRAP
+
+Coverage runs an existing scenario against an instrumented build. It measures
+**executed source points**, not branch/path/assertion coverage. The measurement
+window is the server process, including startup before the first request.
+
+### Add the Dune hook
+
+Every in-scope application library and executable needs the backend:
 
 ```lisp
-(instrumentation (backend szaniec.instrumentation))
+(library
+ (name app)
+ (instrumentation (backend szaniec.instrumentation)))
+
+(executable
+ (name server)
+ (libraries app)
+ (instrumentation (backend szaniec.instrumentation)))
 ```
 
-Ordinary `dune build` does not instrument. `szaniec coverage` adds
-`--instrument-with szaniec.instrumentation` to the configured build.
-An application PPX rewriter stays in its own `(preprocess (pps ...))`
-stanza. A second measurement engine is composed inside this same
-backend; consumers do not add another instrumentation line.
+Keep existing `(preprocess (pps ...))` rewriters in their own stanzas.
+Ordinary `dune build` does not activate instrumentation; `szaniec coverage`
+adds `--instrument-with szaniec.instrumentation`. Consumers use this one
+backend; the internal points and probe engines are composed behind it.
+PPX rewriter libraries and test-directory stanzas are outside application scope.
+
+### Configure and run a scenario
+
+Create `szaniec/coverage.json` (adjust the executable and scenario paths):
+
+```json
+{
+  "format": "szaniec-coverage-config/1",
+  "scope": ["lib", "bin"],
+  "build": ["dune", "build", "bin/server.exe"],
+  "server": "_build/default/bin/server.exe",
+  "scenario": [
+    "deno", "run", "--allow-run", "--allow-net", "--allow-env",
+    "--allow-read", "--allow-write", "scenarios/http.ts"
+  ]
+}
+```
+
+All configuration paths are relative to the discovered Dune root, found by
+walking parents from `--project-root` to `dune-project`. The build command
+must start with `dune`. The scenario is your application's existing scenario,
+not a new assertion language. Coverage supplies `COVERAGE_SERVER`,
+`SZANIEC_BIN`, and `SZANIEC_COVERAGE_CONTEXT` for launching the built server.
 
 ```sh
-szaniec coverage --project-root . --config szaniec/coverage.json --json
+szaniec coverage --project-root . --config szaniec/coverage.json
+szaniec coverage --json --out /tmp/my-app-coverage.json
 ```
 
-The configuration format is `szaniec-coverage-config/1`. The machine
-report is `szaniec-coverage/1`: point coverage over instrumented points,
-not branch or path coverage. A function with no points is uninstrumented.
-A function with points that did not run is measured and unexecuted.
-CRAP is available only when a `szaniec-complexity/1` inventory
-(`szaniec-cc/1`, from `szaniec complexity --json`) supplies complexity
-for that function; otherwise the score is unavailable. There
-is no CRAP gate. The command, the `supervise` runner, sanitized
-environments, and the gap codes are specified in
-[the coverage contract](docs/contracts/coverage.md).
+Unlike `check --out`, **`coverage --out` writes the coverage report JSON**.
+The report is also printed (as text unless `--json` is present). Raw point
+files and the temporary collection context are removed after reporting.
+`--keep-work` retains that context and prints its path for investigation;
+remove it after use. Coverage requires no policy approval.
 
-The public fixture is `test/fixtures/coverage-app`: two application
-libraries, a local ppxlib rewriter, nested and unused functions, an MLX
-file, and a Deno HTTP scenario. The scenario assertions stay as they
-are. `test/coverage/run.sh` checks that a normal build is not
-instrumented, then that one `szaniec coverage` command builds the
-instrumented server, runs those assertions, and writes the report.
-It also exercises a sanitized environment, a restart, concurrent
-servers, `SIGTERM` flush, `SIGKILL`, a library missing the hook, and a
-source change during the run.
-
-Verified with the locked toolchain: OCaml 5.4.1 (the compiler reports
-`5.4.1+relocatable`), dune 3.24.2, and ppxlib 0.38.0. The internal
-points engine is `bisect_ppx_ng` 3.0.0, because released `bisect_ppx`
-2.8.3 requires ppxlib older than 0.36. That package is not part of the
-consumer hook or the report. MLX is excluded unless the dune project
-declares an `mlx` dialect, in which case an in-scope `.mlx` file is a
-gap. Raw point files and reports stay in a temporary directory and are
-not committed.
-
-Findings examples: a Client calling an Access service (also through
-helpers or supported proxies), a Client calling an Engine, an Engine
-calling another Engine, a Manager, Engine or Access calling a Client,
-a synchronous Manager-to-Manager call, a Client calling two Managers
-on one executable path, a queued command fanning out to several
-Managers or aimed at an Engine or Access service, a publication or
-subscription from a role that may not use it, a service bypassing
-another service's public contract, an unapproved shared module, direct
-access to a protected resource by a non-accessor, a contract call that
-is not a declared `rpc` method, and unclassified code. A layer-correct
-call is not a violation merely because no edge list names it: allowed
-calls come from the IDesign don'ts, not from a specification of
-permitted edges. A queued Manager-to-Manager command is allowed.
-Separate handlers and mutually exclusive branches are not one path.
-
-Every check writes `szaniec.json` in the project root: for each service
-and each declared method, the outgoing and incoming calls observed in
-that run.
-
-Optional `szaniec suggestions` asks Jev for narrow code-quality
-judgments (names, possible reuse, local responsibility mix, local
-complexity). It is not part of `check`. Suggestions never become
-violations, never change the check exit status, and are not a gate.
-Every category is **experimental** and not yet promoted: no live
-evaluation with cost and latency has been recorded. The corpus in
-`test/fixtures/suggestions-corpus` holds smells and counterexamples for
-that future run. Routine tests replay a fixture and do not call the
-provider.
+For a scenario that sanitizes its environment, launch each server through
+`supervise`, preserving `SZANIEC_COVERAGE_CONTEXT` and passing required
+application variables explicitly:
 
 ```sh
-szaniec suggestions --policy szaniec/policy.json --project-root . [--json]
-# live review, only this command sends source context:
-# TYPESAFE_API_KEY=... szaniec suggestions --policy szaniec/policy.json
-szaniec suggestions decide --id <suggestion-id> --decision reject \
-  --rationale "short reason"
+szaniec coverage supervise --port 8080 --pass-env PORT -- "$COVERAGE_SERVER"
 ```
 
-`--provider-fixture` replaces the network call. A missing key, timeout,
-or error is an unavailable review (exit 2), not an empty success.
-`--experimental` adds the pilot criteria from the suggestion contract.
-Cached replies replay; live replies are not claimed to be deterministic.
+Run that inside the scenario, with `PORT=8080` in its environment and the
+coverage context inherited. The adapter prints `pid <n>` and `ready`, then
+waits for the server. In Deno, the same launch can be expressed as:
 
-The checker preserves legitimate boundaries: `Client -> Manager -> Access`
-is never misreported as a direct `Client -> Access` call; helpers are
-followed only inside one service boundary.
+```typescript
+const child = new Deno.Command(Deno.env.get("SZANIEC_BIN")!, {
+  args: ["coverage", "supervise", "--port", "8080", "--pass-env", "PORT",
+    "--", Deno.env.get("COVERAGE_SERVER")!],
+  env: { PORT: "8080" },
+  stdout: "piped",
+}).spawn();
+// Consume readiness, run your assertions, then stop the server gracefully.
+```
 
-Services are discovered from `.cyrograf` contract files that declare
-`rpc` methods. The role of a service is the suffix of its name
-(`manager`, `client`, `engine`, `access`; any other name is a utility).
-A private helper belongs to a service only when its source path sits in
-that service's directory tree or compiler evidence binds the unit.
-One caller does not adopt an outside module. `approvedSharedModules`
-is an exception only while the policy digest matches the approval.
+This is a launch excerpt. The [complete public HTTP scenario](test/fixtures/coverage-app/scenarios/http.ts)
+shows readiness, assertions, sanitized environments, shutdown, restarts, and
+concurrent processes. Graceful application exit must run its flush handlers;
+`supervise` does not install an application signal handler. `SIGKILL` or a
+signal that prevents flushing yields incomplete coverage. Compatible records
+from restarts and concurrent nodes are merged only for the same source snapshot.
 
-Szaniec checks implementation conformance. It does not judge whether the
-approved architecture was correctly decomposed around volatility.
+### Interpret coverage and add CRAP
 
-## Build and verification
+A function with points but no visits is **measured and unexecuted**. A function
+with no instrumented points is **uninstrumented**, not measured at 0%.
+Summary counts distinguish these states. Scenario failure and collection gaps
+are reported separately and can coexist.
 
-From the repository root (dune resolves the OCaml 5.4 toolchain and
-package lock through `dune pkg`; first run needs network access):
+Supply the complexity inventory to calculate per-function CRAP:
 
 ```sh
-dune pkg lock                       # resolve/verify dune.lock
-dune build @all                     # build everything
-dune exec ocamlformat -- --check $(git ls-files '*.ml')   # formatter check
-dune build @runtest                 # unit tests, acceptance, complexity, coverage, suggestions
-test/acceptance/run.sh              # architecture and complexity acceptance, standalone
-test/acceptance/suggestions.sh      # suggestion fixture replay; check output stays unchanged
-test/coverage/run.sh                # coverage fixture, standalone
+szaniec complexity --policy szaniec/policy.json --rebuild --json \
+  > /tmp/my-app-functions.json
+szaniec coverage --function-inventory /tmp/my-app-functions.json \
+  --json --out /tmp/my-app-coverage.json
 ```
 
-The acceptance suite copies `test/fixtures/tasks-app` (a minimal
-Well-shaped application), applies controlled source mutations per
-scenario, rebuilds the fixture inside the scenario work directory, runs
-`szaniec check --json` and compares the report with golden files in
-`test/acceptance/expected/`. The same entry point then runs `szaniec
-complexity` against the `metric/` and `test/` specimens (straight-line
-code, matches, loops, recursion, exceptions, nested and anonymous
-functions, an rpc method, a test-provenance definition, a stale
-artifact, a source that does not type-check, and object constructs).
-Expected complexities are listed in the fixture README. The fixture
-uses a documented stub of the Well API surface (`lib/well_stub/`)
-instead of the real framework dependency; see the fixture README.
+For point coverage fraction `c` and local complexity `cc`:
 
-CI (`.github/workflows/ci.yml`) runs the same commands.
+```text
+CRAP = cc^2 * (1 - c)^3 + cc
+```
 
-## Profile exclusions
+For example, complexity 3 gives CRAP 3.00 at full point coverage and 12.00 at
+zero point coverage. Inventory joining uses source path, local name, and line;
+regenerate it after source changes. Missing complexity or missing points
+makes the score unavailable with a reason. There is no coverage or CRAP gate.
+The [coverage contract](docs/contracts/coverage.md) defines all report fields.
 
-Declared exclusions of the `well-ocaml-core` profile (reported in every
-check, never silently dropped): `.mlx` view files, `.mli` interfaces,
-dune wrapper units, resource access beyond policy-declared API prefixes,
-and calls through locally bound functions (reported as `GAP-UNRESOLVED-CALL`,
-exit 2). Queued commands (`Well.request`), publications and subscriptions
-are checked. A topic that cannot be resolved, or a function whose
-executable paths cannot be built, is an analysis gap (exit 2), not a pass.
+## Review code-quality suggestions
 
-## Design
+Suggestions review selected definitions for naming, exact duplication,
+possible semantic reuse, a local mix of responsibilities, and complicated
+constructs. They do not edit source or change `check` results, exit status,
+policy, or call graph. Architecture checking remains usable without Jev.
 
-- [Architecture](ARCHITECTURE.md): volatility analysis, components, adapters, evidence,
-  policy, and the check workflow.
-- [Implementation brief](IMPLEMENTATION.md): first delivery, acceptance scenarios,
-  unresolved implementation decisions, and verification expectations.
-- [Contract documents](docs/contracts): policy format, observation schema,
-  interpretation schema, inspection contract, rule catalog, the
-  [complexity metric](docs/contracts/complexity-metric.md),
-  [coverage](docs/contracts/coverage.md), and the
-  [suggestion contract](docs/contracts/suggestion-contract.md).
-- [Agent instructions](AGENTS.md): repository rules for an implementing agent.
+### Live review
 
-The checker is a local command-line program. It needs no server or
-database. IDesign-inspired checks and project-specific policy checks
-remain distinguishable in diagnostics. This project is not an official
-IDesign product.
+With `curl` installed and `TYPESAFE_API_KEY` supplied through your environment:
+
+```sh
+szaniec suggestions --policy szaniec/policy.json --rebuild
+szaniec suggestions --policy szaniec/policy.json --json \
+  > /tmp/my-app-suggestions.json
+```
+
+The policy selects program roots; its approval is not read. Only a live
+suggestions command sends selected source context to
+`https://api.typesafe.ai/v1/systemone`. Do not put a credential in a command,
+configuration file, cache, or report.
+
+All categories remain experimental, including those enabled by default.
+`--experimental` adds pilot criteria for vocabulary consistency, predicate
+clarity, unexpected effects, mode flags, comment mismatch, unnecessary
+indirection, and idiomatic alternatives.
+
+```sh
+szaniec suggestions --experimental \
+  --budget-names 4 --budget-pairs 2 \
+  --budget-responsibility 2 --budget-complexity 2 --timeout 30
+```
+
+Default budgets are 12 name subjects, 6 reuse pairs, 6 responsibility
+candidates, and 6 complexity candidates. Budgets limit candidates, not money.
+Default timeout is 30 seconds. `--model <id>` selects the requested model
+(default `jev-latest`). Each model state contains bounded source context;
+truncation is marked. Retrieval does not send every function automatically.
+
+To provide project-relevant API candidates for the experimental idiomatic
+alternative review, create a JSON array, for example:
+
+```json
+["List.filter_map", "Option.map"]
+```
+
+Then pass its filename:
+
+```sh
+szaniec suggestions --experimental --api-candidates szaniec/api-candidates.json
+```
+
+Without a candidate list, that criterion is explicitly listed as not run.
+
+### Cache and offline replay
+
+The default cache is `szaniec/suggestion-cache.json`. A matching source
+snapshot, rubric, model, budgets, and question state replays cached answers.
+Changed inputs miss the cache. Live inference is not claimed to be
+deterministic; fixture replay and cache hits are.
+
+```sh
+szaniec suggestions --cache /tmp/my-app-suggestion-cache.json
+szaniec suggestions --refresh
+szaniec suggestions --no-cache
+```
+
+For an offline example using the public corpus, run from this repository:
+
+```sh
+dune exec szaniec -- suggestions \
+  --project-root test/fixtures/suggestions-corpus \
+  --policy szaniec/policy.json --rebuild --json --no-cache \
+  --provider-fixture szaniec/provider-fixture.json
+```
+
+`--provider-fixture` replaces the network call; no key is needed. The
+[corpus README](test/fixtures/suggestions-corpus/README.md) explains the
+smells and counterexamples. Missing credentials, provider failure, invalid
+fixtures, or catalog gaps are unavailable/incomplete review, not empty success.
+
+### Interpret results and record decisions
+
+The report includes suggestions, uncertain judgments, source locations,
+subjects, ownership relations, category status, provider/model information,
+cache state, gaps, and summary counts. Exact duplicates are static matches;
+semantic reuse is a model judgment, not proof of equivalent behavior.
+Duplicate code across services must not be merged into an unapproved shared
+business library. Uncertainty stays visible and does not become a suggestion.
+
+Copy an actual suggestion id from the report and record your decision:
+
+```sh
+szaniec suggestions decide --id 'name-quality:App.Web_client.Names.x:x' \
+  --decision reject --rationale "This short binding is clear in its local context."
+
+szaniec suggestions decide --id 'name-quality:App.Web_client.Names.x:x' \
+  --decision defer --rationale "Review after the handler refactor."
+```
+
+The id above illustrates a report id; use the one from your own run.
+Decisions are `apply`, `reject`, or `defer`, with a required non-empty rationale.
+`apply` records a decision; it does not perform the edit. The default file is
+`szaniec/suggestion-decisions.json`; `--decisions <path>` selects another.
+Subsequent reviews join decisions by suggestion id. See the
+[suggestion contract](docs/contracts/suggestion-contract.md) for the rubric,
+provider fixtures, cache, and decision formats.
+
+## Exit statuses and automation
+
+| Command | Exit 0 | Exit 1 | Exit 2 |
+|---|---|---|---|
+| `approve` | Approval written | Unused | Execution failure |
+| `check` | No violations or gaps | Violations, complete analysis | Gaps, unapproved policy, or execution failure; violations retained |
+| `complexity` | Inventory complete | Unused | Incomplete inventory or execution failure |
+| `coverage` | Scenario passed, collection complete | Scenario failed, collection complete | Incomplete collection or execution failure |
+| `suggestions` | Review complete; suggestions may exist | Unused | Unavailable provider/review, catalog gaps, or execution failure |
+| `suggestions decide` | Decision recorded | Unused | Invalid decision or file/error |
+
+A CI architecture gate can preserve JSON and the command's status:
+
+```sh
+if szaniec check --policy szaniec/policy.json \
+    --approval szaniec/approval.json --rebuild --json --no-callgraph \
+    > /tmp/my-app-findings.json; then
+  echo "Architecture check passed"
+else
+  check_status=$?
+  cat /tmp/my-app-findings.json
+  exit "$check_status"
+fi
+```
+
+Use separate runs for measurements and optional review. A suggestion count,
+high complexity, or low point coverage is not an architecture-check failure.
+Reports in these examples go to `/tmp`; handle them as temporary artifacts,
+not source files.
+
+## Troubleshooting and limits
+
+| Symptom | What to check |
+|---|---|
+| `GAP-UNOBSERVED-SOURCE` / `GAP-STALE-ARTIFACT` | Run the appropriate Dune build or `--rebuild`; verify every declared source has a fresh `.cmt` |
+| `GAP-UNSUPPORTED-COMPILER` | Build with OCaml 5.4.x; artifacts from another compiler series are unsupported |
+| `GAP-POLICY-NOT-APPROVED` | Compare policy to its approved identity; reapprove only through the intended architecture review |
+| `POLICY-UNCLASSIFIED` | Check contracts, family layout, binding evidence, or an explicit infrastructure approval |
+| `GAP-AMBIGUOUS-OWNERSHIP` | Resolve conflicting ownership evidence or ambiguous module matching |
+| `GAP-UNRESOLVED-CALL` | A dynamic/local function target is unsupported; the report preserves the site |
+| `GAP-AMBIGUOUS-PATH` | Path alternatives exceed support, such as recursive helper inlining or mixed calling `try`/`with` paths |
+| `GAP-UNRESOLVED-TARGET` | Resolve the queue topic and ensure its subscriber is observed |
+| `COVERAGE-MISSING-HOOK` | Add the backend to every in-scope library/executable |
+| `COVERAGE-NO-EVIDENCE` / `COVERAGE-MISSING-OUTPUT` | Verify instrumented server launch, context propagation, and normal flush |
+| `COVERAGE-FORCED-TERMINATION` | Make the application exit gracefully; a killed process is not measured as zero |
+| `COVERAGE-STALE-SNAPSHOT` | Avoid source changes while the build and scenario run |
+| CRAP unavailable | Supply a matching complexity inventory and verify the function has points |
+| Suggestions unavailable | Check credentials, `curl`, timeout, fixture/decision files, and fresh compiler artifacts |
+
+Declared architecture exclusions are `.mlx` views, `.mli` interfaces, Dune
+wrapper units, and resource access beyond policy-declared API prefixes.
+Unresolved locally bound calls are gaps, not exclusions that permit a pass.
+Commands/events and Client use-case paths are supported with explicit evidence
+limits; the path builder caps executable alternatives at 48.
+
+Coverage excludes `.mli`, branch/path/assertion coverage, and undeclared MLX
+view files. An in-scope `.mlx` under a declared `mlx` dialect is a gap.
+Action preprocessors and class/object methods are unsupported and produce
+gaps. The facade's internal points engine is `bisect_ppx_ng` 3.0.0; consumers
+do not configure that package's backend or measurement environment directly.
+
+Suggestions do not validate tests against specifications, prove equivalence,
+judge whole-program correctness, or generate/apply code changes. Local
+complexity measurements are separate from model judgments about complicated
+constructs. Preserve unresolved evidence in every workflow.
+
+## Verification and reference documents
+
+From this repository's root:
+
+```sh
+dune pkg lock                       # resolve/verify dependency lock
+dune build @all
+dune exec ocamlformat -- --check $(git ls-files '*.ml')
+dune build @runtest                  # unit and integration aliases
+
+# Standalone integration entry points:
+test/acceptance/run.sh               # architecture and complexity
+test/acceptance/suggestions.sh       # fixture replay; check stays unchanged
+test/coverage/run.sh                 # instrumentation and HTTP scenarios
+```
+
+Architecture acceptance mutates copies of
+[test/fixtures/tasks-app](test/fixtures/tasks-app/README.md), rebuilds real
+compiler artifacts, and compares reports with golden files. Complexity cases
+cover nested/anonymous functions, shadowing, recursion, branches, handlers,
+and incomplete artifacts. The fixture documents its Well API stub; it is not
+an undocumented dependency on a sibling checkout.
+
+The [coverage fixture](test/fixtures/coverage-app/README.md) exercises a normal
+uninstrumented build, application PPX, sanitized environments, restarts,
+concurrent nodes, graceful/forced termination, missing hooks, and stale source.
+Suggestion acceptance replays local answers and verifies that a review changes
+neither `check` output nor its call graph. No routine test calls the provider.
+[CI](.github/workflows/ci.yml) builds, checks formatting, and runs the three
+standalone integration suites.
+
+This README is the usage guide. Detailed formats and accepted design live in:
+
+- [Architecture](ARCHITECTURE.md) and [implementation brief](IMPLEMENTATION.md).
+- [Policy and approval format](docs/contracts/policy-format.md).
+- [CLI, diagnostics, and call graph](docs/contracts/inspection-contract.md).
+- [Rule catalog](docs/contracts/rule-catalog.md).
+- [Complexity metric](docs/contracts/complexity-metric.md).
+- [Coverage workflow and gaps](docs/contracts/coverage.md).
+- [Suggestion rubric, cache, fixtures, and decisions](docs/contracts/suggestion-contract.md).
+- [Observation](docs/contracts/observation-schema.md) and
+  [interpretation](docs/contracts/interpretation-schema.md) schemas.
+- [Stack decision](docs/decisions/stack.md),
+  [don'ts-based rules decision](docs/decisions/donts-based-rules.md), and
+  [agent instructions](AGENTS.md).
