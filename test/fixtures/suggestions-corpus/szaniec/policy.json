@@ -1,0 +1,7 @@
+{
+  "format": "szaniec-policy/2",
+  "policyName": "suggestions-corpus",
+  "program": { "roots": ["lib"] },
+  "approvedSharedModules": [],
+  "resources": []
+}

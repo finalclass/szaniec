@@ -1,0 +1,3 @@
+(library
+ (name szaniec_model_access)
+ (libraries szaniec_model yojson unix))

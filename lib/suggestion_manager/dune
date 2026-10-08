@@ -1,0 +1,8 @@
+(library
+ (name szaniec_suggestion_manager)
+ (libraries
+  szaniec_model
+  szaniec_program_access
+  szaniec_architecture_access
+  szaniec_model_access
+  unix))

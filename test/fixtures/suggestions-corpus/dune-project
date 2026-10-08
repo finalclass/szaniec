@@ -1,0 +1,7 @@
+(lang dune 3.17)
+
+(package
+ (name suggestionscorpus)
+ (allow_empty)
+ (depends
+  (ocaml (and (>= 5.4) (< 5.5)))))

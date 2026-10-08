@@ -37,6 +37,9 @@ szaniec complexity --policy <path> [--approval <path>] [--project-root <dir>]
   coverage is complete, `2` when a file or construct could not be
   measured. Policy approval is recorded and does not by itself change
   that status.
+- `szaniec suggestions` is specified separately in the
+  [suggestion contract](suggestion-contract.md). It does not change the
+  check exit status and does not add findings to the check report.
 
 ## Profile
 
