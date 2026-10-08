@@ -1,0 +1,32 @@
+name: Set up Linux build
+description: Install Deno, OCaml, packaging tools, and the pinned public Well CLI
+runs:
+  using: composite
+  steps:
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.x
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: 5.4.1
+        opam-pin: false
+    - name: Install system build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y patchelf pkg-config libssl-dev libgmp-dev zlib1g-dev libsqlite3-dev
+        opam install dune -y
+    - name: Build pinned Well CLI
+      shell: bash
+      env:
+        WELL_REVISION: 276baf8cffa0db5f849196194083ca4726a0a326
+      run: |
+        git init "$RUNNER_TEMP/well-source"
+        git -C "$RUNNER_TEMP/well-source" remote add origin https://github.com/finalclass/well.git
+        git -C "$RUNNER_TEMP/well-source" fetch --depth 1 origin "$WELL_REVISION"
+        git -C "$RUNNER_TEMP/well-source" checkout --detach FETCH_HEAD
+        opam exec -- dune build --root "$RUNNER_TEMP/well-source" bin/main.exe
+        mkdir -p "$RUNNER_TEMP/well-cli"
+        cp "$RUNNER_TEMP/well-source/_build/default/bin/main.exe" "$RUNNER_TEMP/well-cli/well"
+        chmod +x "$RUNNER_TEMP/well-cli/well"
+        echo "$RUNNER_TEMP/well-cli" >> "$GITHUB_PATH"

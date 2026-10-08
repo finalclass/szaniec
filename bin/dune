@@ -6,3 +6,10 @@
  szaniec_architecture_access
  szaniec_suggestion_manager
  szaniec_model_access))
+
+; Well's production packager expects this path. Keep the existing executable
+; name for Dune users and acceptance scripts.
+(rule
+ (target main.exe)
+ (deps szaniec.exe)
+ (action (copy %{deps} %{target})))

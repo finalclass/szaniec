@@ -18,6 +18,7 @@ official IDesign product.
 
 - [Commands and status](#commands-and-status)
 - [Build and run](#build-and-run)
+- [Linux releases](#linux-releases)
 - [Configure a project](#configure-a-project)
 - [Check architecture](#check-architecture)
 - [Inspect function complexity](#inspect-function-complexity)
@@ -50,32 +51,55 @@ no live quality evaluation with cost and latency has been recorded.
 
 ## Build and run
 
-From this repository's root, with Dune available:
+From this repository's root, with `well`, Dune, Deno 2, `make`, and
+`patchelf` available on Linux:
 
 ```sh
-dune build @all
+make build
 dune exec szaniec -- complexity \
   --project-root test/fixtures/tasks-app \
   --config complexity.toml --rebuild --sort complexity
 ```
 
-Dune resolves the OCaml toolchain and dependencies through the checked-in
-`dune.lock`; the first build needs network access. The executable is
-`_build/default/bin/szaniec.exe`. There is no verified registry installation
-recipe yet. Coverage consumers also need the `szaniec` package's Dune backend
-available in their build; copying the CLI alone does not provide it.
+`make build` calls `well build`: Dune compilation, shared-library discovery,
+bundling, and `patchelf`. It then adds a launcher and creates a development
+archive with a SHA-256 checksum in `dist/`. Dune resolves the OCaml toolchain
+and dependencies through the checked-in `dune.lock`; the first build needs
+network access. On Debian/Ubuntu, install `patchelf` with
+`sudo apt-get install patchelf`.
+The build host needs glibc 2.33 or newer for the bundled loader's `--argv0`
+option; CI uses Ubuntu 24.04. That loader is included in the release, so this
+requirement applies to the build host rather than the target's glibc.
 
-The examples below use `szaniec` for that executable. To run them from an
-application directory using a source checkout, first set an absolute path:
+The resulting layout is:
 
-```sh
-# Run in the Szaniec checkout, then change to your application directory.
-export PATH="$PWD/_build/default/bin:$PATH"
-alias szaniec=szaniec.exe
+```text
+_release/
+  szaniec           # launcher; preserves the application's current directory
+  README.md
+  bin/szaniec       # Well-packaged ELF executable
+  bin/lib/          # bundled loader and shared libraries, including glibc
 ```
 
-The alias is for an interactive shell. Scripts and subprocesses should use
-the executable's absolute path or a `szaniec` executable on `PATH`.
+Add the launcher to your path before changing to an application directory:
+
+```sh
+export PATH="$PWD/_release:$PATH"
+szaniec complexity --project-root test/fixtures/tasks-app \
+  --policy szaniec/complexity-policy.json --sort complexity
+```
+
+Use `_release/szaniec`, rather than `bin/szaniec`, for calls from arbitrary
+directories. Well sets a relative ELF interpreter; the launcher explicitly
+uses the bundled loader and libraries without changing the working directory.
+It also preserves the launcher identity for nested coverage processes.
+Its only launcher dependencies are Linux `/bin/sh` and `readlink`/`dirname`.
+
+`well build` itself remains available for the raw bundle; `make build` adds
+the CLI launcher and verifies relocation. `_build/default/bin/szaniec.exe`
+remains the development executable. Coverage consumers also need the `szaniec`
+package's Dune instrumentation backend in their application build; installing
+the CLI archive alone does not provide it.
 
 ### Try the architecture fixture
 
@@ -93,6 +117,67 @@ rm -rf "$fixture"
 The unmodified fixture should report `status: ok`, zero violations and gaps,
 and exit 0. Its generated-code stand-ins and Well API stub are documented in
 the [fixture README](test/fixtures/tasks-app/README.md).
+
+## Linux releases
+
+Publishing a GitHub Release triggers [Linux release](.github/workflows/release.yml).
+It builds the release's tag on native Linux runners for **x86_64** and
+**aarch64 (ARM64)**, verifies the bundle and acceptance suites, and uploads:
+
+```text
+szaniec-<tag>-linux-x86_64.tar.gz
+szaniec-<tag>-linux-x86_64.tar.gz.sha256
+szaniec-<tag>-linux-aarch64.tar.gz
+szaniec-<tag>-linux-aarch64.tar.gz.sha256
+```
+
+Create and publish a release in GitHub's Releases UI, selecting a tag whose
+commit contains the workflow. For example, after selecting the intended
+commit, the equivalent CLI command is:
+
+```sh
+gh release create v0.1.0 --target main --generate-notes --title "Szaniec v0.1.0"
+```
+
+`v0.1.0` is an example tag. The workflow adds binary assets after successful
+builds for both architectures; publishing a draft triggers it, saving a draft
+does not. For recovery, run the workflow manually with the existing release
+tag. It checks out that tag and replaces assets with the same names. It does
+not create a release on its own.
+
+To package locally without publishing anything:
+
+```sh
+make release VERSION=v0.1.0
+```
+
+Download and install a published release, choosing the matching architecture:
+
+```sh
+release_tag=v0.1.0  # replace with an available release tag
+release_arch=x86_64 # use aarch64 on ARM64 Linux
+archive="szaniec-${release_tag}-linux-${release_arch}.tar.gz"
+gh release download "$release_tag" --repo finalclass/szaniec \
+  --pattern "$archive" --pattern "$archive.sha256"
+sha256sum --check "$archive.sha256"
+mkdir -p "$HOME/.local/share/szaniec/$release_tag" "$HOME/.local/bin"
+tar xzf "$archive" -C "$HOME/.local/share/szaniec/$release_tag"
+ln -sfn "$HOME/.local/share/szaniec/$release_tag/szaniec" "$HOME/.local/bin/szaniec"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Keep the extracted directory intact: the executable uses its bundled loader
+and libraries. This is a dynamically linked Linux bundle, not a static binary
+or a cross-architecture executable. Bundling glibc removes reliance on the
+target system's glibc version for Szaniec itself; it does not bundle the
+application's compiler/build tools or external commands such as `curl`.
+
+CI installs the Well CLI from the pinned public commit recorded in
+[the build setup action](.github/actions/setup-build/action.yml); no sibling
+checkout or machine-specific path is required. The packaging helper is
+[TypeScript on Deno](scripts/release.ts). Its generated POSIX shell launcher
+runs without Deno on the target machine. `bin/dune` provides `main.exe` as a
+copy of the existing executable because Well's packager expects that path.
 
 ## Configure a project
 
@@ -616,12 +701,14 @@ From this repository's root:
 
 ```sh
 dune pkg lock                       # resolve/verify dependency lock
-dune build @all
-dune exec ocamlformat -- --check $(git ls-files '*.ml')
-dune build @runtest                  # unit and integration aliases
-deno test --allow-read --allow-write --allow-run test/config/run.ts
+make build                          # well build, bundle, launcher, archive
+deno check scripts/release.ts
+make verify                         # formatter, unit tests, integration suites
 
-# Standalone integration entry points:
+# Individual verification entry points:
+dune exec ocamlformat -- --check $(git ls-files '*.ml')
+dune build @test/unit/runtest
+deno test --allow-read --allow-write --allow-run test/config/run.ts
 test/acceptance/run.sh               # architecture and complexity
 test/acceptance/suggestions.sh       # fixture replay; check stays unchanged
 test/coverage/run.sh                 # instrumentation and HTTP scenarios
@@ -639,8 +726,12 @@ uninstrumented build, application PPX, sanitized environments, restarts,
 concurrent nodes, graceful/forced termination, missing hooks, and stale source.
 Suggestion acceptance replays local answers and verifies that a review changes
 neither `check` output nor its call graph. No routine test calls the provider.
-[CI](.github/workflows/ci.yml) builds, checks formatting, and runs the three
-standalone integration suites.
+[CI](.github/workflows/ci.yml) packages through Well, checks formatting and the
+Deno helper, and runs `make verify`. That target runs integration suites
+sequentially, outside the parent Dune alias: coverage builds the same project
+and needs its own Dune lock. CI and releases also run
+the HTTP coverage fixture through the packaged launcher, exercising its nested
+`supervise` launches from outside the bundle directory.
 
 This README is the usage guide. Detailed formats and accepted design live in:
 
