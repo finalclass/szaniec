@@ -52,7 +52,8 @@ let service name =
   }
 
 let services =
-  {Cy.services= [service "Task_manager"; service "Notification_manager"]}
+  { Cy.services= [service "Task_manager"; service "Notification_manager"]
+  ; contracts= [] }
 
 let catalog functions =
   { Function_def.snapshot_digest= "snap-1"

@@ -27,7 +27,8 @@ let split_double (s : string) : string list =
   in
   go 0 "" []
 
-let join_dots (segs : string list) : string = String.concat "." segs
+let join_dots (segs : string list) : string =
+  String.concat "." (List.filter (( <> ) "") segs)
 
 (* Canonicalize a compiler unit name given the name of the dune library
    (or executable) that produced the artifact. *)
@@ -99,3 +100,22 @@ let unit_prefix (units : t list) (c : t) : t option =
       if List.mem cand units then Some cand else try_n (n - 1)
   in
   try_n (List.length segs)
+
+let resolve_alias aliases path =
+  let rec resolve visited path =
+    match unit_prefix (List.map fst aliases) path with
+    | None -> Some path
+    | Some prefix ->
+        if List.mem prefix visited
+        then None
+        else
+          let target = List.assoc prefix aliases in
+          let suffix =
+            String.sub
+              path
+              (String.length prefix)
+              (String.length path - String.length prefix)
+          in
+          resolve (prefix :: visited) (target ^ suffix)
+  in
+  resolve [] path

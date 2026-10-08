@@ -70,6 +70,52 @@ canonical path. Stem matching is case-insensitive and ignores
 underscores. A private file under the service directory belongs to that
 family even when the compiled module name does not repeat the stem.
 
+## Public contracts
+
+Public contract data and generated bindings are not shared implementation and
+do not need `approved_shared_modules`. A compiled module beside a matching
+`.cyrograf` source is bound to that contract. Data-only contracts declare no
+service. Only declared message constructors/codecs and RPC proxies are public;
+other executable members remain private.
+
+When generated server/browser projections have different paths or prefixed
+names, bind their exact compiler module paths to the source contract:
+
+```toml
+[[policy.contract_bindings]]
+source = "lib/contract/Common.cyrograf"
+module = "App_contract.App_service_common"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Common.cyrograf"
+module = "App_browser.App_service_common"
+```
+
+An in-process, server-only facet of an existing service is declared explicitly:
+
+```toml
+[[policy.public_contracts]]
+service = "Task_access"
+module = "Task_access_lib.Api.Public"
+members = ["read"]
+consumers = ["Task_manager"]
+```
+
+The module must have fresh compiler evidence, belong to the declared service,
+and contain the exact declared values. Nested member paths are permitted;
+wildcards are not. Only the owner and listed consumers may use those members.
+Calls remain service requests subject to the structural rules. Other members,
+private Store/lock modules, and ordinary helpers remain implementation.
+The `.mli` restricts what the compiler exposes but does not approve a contract;
+neither an `api/` directory nor a convenience filename establishes a public facet.
+
+Both declaration lists default to empty. Nonempty lists are included in the
+approved-policy digest. An unapproved policy grants neither declaration.
+Missing, stale, conflicting or ambiguous bindings remain analysis gaps. An
+explicit generated binding must reference an in-scope `.cyrograf` contract;
+it does not approve arbitrary code inside that unit. Compiler module aliases
+preserve these identities across library aggregators and projections.
+
 ## Approved-policy selection
 
 The approved identity is embedded in the same TOML document:

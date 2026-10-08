@@ -53,6 +53,28 @@ let run_dune_build (project_root : string) : int =
   | Sys_error _ -> () ) ;
   code
 
+let observe_program (req : request) (policy : Policy.t) =
+  let build_code =
+    if req.rebuild then Some (run_dune_build req.project_root) else None
+  in
+  let observation =
+    Szaniec_program_access.Ocaml_adapter.observe
+      ~project_root:req.project_root
+      ~program_roots:policy.program_roots
+      ~assume_fresh:(build_code = Some 0)
+      ()
+  in
+  match build_code with
+  | Some code when code <> 0 ->
+      { observation with
+        Observation.gaps=
+          { Observation.gap_code= "GAP-BUILD"
+          ; gap_path= "dune-project"
+          ; gap_detail= Printf.sprintf "analysis rebuild failed (exit %d)" code
+          }
+          :: observation.gaps }
+  | _ -> observation
+
 (* Project the interpretation onto the per-service/per-method call
    network. *)
 let build_callgraph
@@ -322,23 +344,15 @@ let check (req : request) : Finding.report =
   (* 2. observe the program; a successful rebuild guarantees that dune's
      content-tracked artifacts are current, so freshness is assumed for
      them; without a rebuild freshness is verified by mtimes *)
-  let assume_fresh =
-    if req.rebuild
-    then
-      let code = run_dune_build req.project_root in
-      code = 0
-    else false
-  in
-  let observation =
-    Szaniec_program_access.Ocaml_adapter.observe
-      ~project_root:req.project_root
-      ~program_roots:policy.Policy.program_roots
-      ~assume_fresh
-      ()
-  in
+  let observation = observe_program req policy in
   (* 3. interpret *)
   let interpretation =
-    Szaniec_interpretation_engine.Well_adapter.interpret ~policy ~cy observation
+    Szaniec_interpretation_engine.Well_adapter.interpret
+      ~approved:
+        resolution.Szaniec_architecture_access.Architecture_access.approved
+      ~policy
+      ~cy
+      observation
   in
   (* 4. evaluate *)
   let violations =
@@ -435,6 +449,7 @@ let check (req : request) : Finding.report =
 let evidence_gap (g : Observation.gap) : bool =
   match g.Observation.gap_code with
   | "GAP-STALE-ARTIFACT"
+   |"GAP-BUILD"
    |"GAP-UNOBSERVED-SOURCE"
    |"GAP-ARTIFACT-READ"
    |"GAP-UNSUPPORTED-COMPILER"
@@ -467,22 +482,14 @@ let prepare (req : request) :
     | Ok cy -> cy
     | Error e -> raise (Policy_error e)
   in
-  let assume_fresh =
-    if req.rebuild
-    then
-      let code = run_dune_build req.project_root in
-      code = 0
-    else false
-  in
-  let observation =
-    Szaniec_program_access.Ocaml_adapter.observe
-      ~project_root:req.project_root
-      ~program_roots:policy.Policy.program_roots
-      ~assume_fresh
-      ()
-  in
+  let observation = observe_program req policy in
   let interpretation =
-    Szaniec_interpretation_engine.Well_adapter.interpret ~policy ~cy observation
+    Szaniec_interpretation_engine.Well_adapter.interpret
+      ~approved:
+        resolution.Szaniec_architecture_access.Architecture_access.approved
+      ~policy
+      ~cy
+      observation
   in
   (policy, resolution, cy, observation, interpretation)
 

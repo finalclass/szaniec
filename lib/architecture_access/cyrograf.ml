@@ -42,7 +42,27 @@ type service =
   ; svc_role: role
   ; svc_methods: method_decl list (* sorted by name *) }
 
-type t = {services: service list} (* sorted by name *)
+type contract =
+  { contract_name: string
+  ; contract_source: string
+  ; contract_messages: string list }
+
+type t =
+  { services: service list
+  ; contracts: contract list }
+
+let parse_messages content =
+  String.split_on_char '\n' content
+  |> List.filter_map (fun line ->
+      let words =
+        String.split_on_char ' ' (String.trim line) |> List.filter (( <> ) "")
+      in
+      match words with
+      | ("struct" | "enum" | "union" | "variant") :: name :: _ ->
+          let name = String.split_on_char '{' name |> List.hd in
+          if name = "" then None else Some name
+      | _ -> None )
+  |> List.sort_uniq compare
 
 let lowercase_stem (name : string) : string = String.lowercase_ascii name
 
@@ -134,6 +154,7 @@ let load ~(project_root : string) ~(program_roots : string list) :
   let files = ref [] in
   List.iter (fun root -> scan project_root root files) program_roots ;
   let services = ref [] in
+  let contracts = ref [] in
   List.iter
     (fun rel ->
       let stem = Filename.remove_extension (Filename.basename rel) in
@@ -147,6 +168,11 @@ let load ~(project_root : string) ~(program_roots : string list) :
         with
         | Sys_error _ -> ""
       in
+      contracts :=
+        { contract_name= stem
+        ; contract_source= rel
+        ; contract_messages= parse_messages content }
+        :: !contracts ;
       match parse_rpcs content with
       | [] -> () (* no rpc methods: not a service *)
       | methods ->
@@ -155,5 +181,6 @@ let load ~(project_root : string) ~(program_roots : string list) :
             :: !services )
     !files ;
   Ok
-    { services=
+    { contracts= List.sort_uniq compare !contracts
+    ; services=
         List.sort (fun a b -> String.compare a.svc_name b.svc_name) !services }

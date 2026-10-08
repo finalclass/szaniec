@@ -26,10 +26,12 @@ minor series. Typed trees are unversioned marshaled values, so the adapter
 declares the compiler series it can read and refuses others with an
 explicit gap (`GAP-UNSUPPORTED-COMPILER`), never a guessed interpretation.
 
-Adapter `szaniec-ocaml-adapter/1.2.0`, supporting artifacts compiled
+Adapter `szaniec-ocaml-adapter/1.3.0`, supporting artifacts compiled
 with **OCaml 5.4.x**. That adapter records path alternatives,
 call-argument identities, the `szaniec-cc/1` function inventory,
-structure-level module aliases, and unsupported module constructs.
+structure-level module aliases across compilation units and Dune wrappers,
+scoped compiler identities, exact defined values, interface freshness, and
+unsupported module constructs.
 Szaniec itself is built with the same series (the dune-managed toolchain
 resolves this).
 

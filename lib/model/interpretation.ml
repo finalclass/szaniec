@@ -12,6 +12,7 @@ type kind =
 
 type ownership_class =
   | Contract_of of string
+  | Contract_data of string
   | Implementation_of of string
   | Helper_of of string
   | CompositionRoot
@@ -52,6 +53,7 @@ let kind_name = function
 
 let class_name = function
   | Contract_of s -> "contract of " ^ s
+  | Contract_data s -> "contract data " ^ s
   | Implementation_of s -> "implementation of " ^ s
   | Helper_of s -> "helper of " ^ s
   | CompositionRoot -> "composition root"

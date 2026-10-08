@@ -1,0 +1,3 @@
+(library
+ (name bootstrap)
+ (libraries well task_access_lib task_manager_lib))

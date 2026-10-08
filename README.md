@@ -271,6 +271,15 @@ must be bound and registered through the supported Well mechanics. The
 [public tasks fixture](test/fixtures/tasks-app/README.md) includes contracts,
 generated-code stand-ins, service libraries, and a composition root.
 
+Data-only Cyrograf contracts, generated message constructors/codecs, and RPC
+proxies are public contracts and work with `approved_shared_modules = []`.
+Source pairs establish ordinary bindings; differently named or relocated
+server/browser projections use `[[policy.contract_bindings]]`. An owned
+server API uses `[[policy.public_contracts]]` with its service, exact module,
+members and consumers. Both declarations require policy approval. A directory
+named `api` or an `.mli` alone does not approve executable code. See
+[the declaration syntax and evidence requirements](docs/contracts/policy-format.md#public-contracts).
+
 Private helpers belong in their service's directory tree; nested directories
 and modules are supported. Compiler evidence such as `make_spec` also binds
 ownership. One observed caller does not adopt an outside helper. Naming a
@@ -707,8 +716,9 @@ not source files.
 | CRAP unavailable | Supply a matching complexity inventory and verify the function has points |
 | Suggestions unavailable | Check credentials, `curl`, timeout, fixture/decision files, and fresh compiler artifacts |
 
-Declared architecture exclusions are `.mlx` views, `.mli` interfaces, Dune
-wrapper units, and resource access beyond policy-declared API prefixes.
+Declared architecture exclusions are `.mlx` views, interface bodies, Dune
+wrapper execution, and resource access beyond policy-declared API prefixes.
+Interface freshness and compiler module aliases are included in the evidence.
 Unresolved locally bound calls are gaps, not exclusions that permit a pass.
 Commands/events and Client use-case paths are supported with explicit evidence
 limits; the path builder caps executable alternatives at 48.
@@ -738,6 +748,7 @@ make verify                         # formatter, unit tests, integration suites
 dune exec ocamlformat -- --check $(git ls-files '*.ml')
 dune build @test/unit/runtest
 deno test --allow-read --allow-write --allow-run test/config/run.ts
+deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
 test/acceptance/run.sh               # architecture and complexity
 test/acceptance/suggestions.sh       # fixture replay; check stays unchanged
 test/coverage/run.sh                 # instrumentation and HTTP scenarios

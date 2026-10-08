@@ -17,6 +17,8 @@ verify:
 	dune build @test/unit/runtest
 	deno fmt --check test/config/run.ts
 	deno test --allow-read --allow-write --allow-run test/config/run.ts
+	deno fmt --check test/acceptance/public_contracts.ts
+	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
 	test/acceptance/run.sh
 	test/acceptance/suggestions.sh
 	test/coverage/run.sh

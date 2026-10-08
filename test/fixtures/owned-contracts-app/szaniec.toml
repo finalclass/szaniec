@@ -1,0 +1,32 @@
+format = "szaniec-config/1"
+
+[policy]
+name = "owned-contracts-app"
+roots = ["lib"]
+approved_shared_modules = []
+
+[[policy.contract_bindings]]
+source = "lib/contract/Common.cyrograf"
+module = "App_contract.App_service_common"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_access.cyrograf"
+module = "App_contract.Task_access"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "App_contract.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Common.cyrograf"
+module = "App_browser.App_service_common"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "App_browser.App_service_task_manager"
+
+[[policy.public_contracts]]
+service = "Task_access"
+module = "Task_access_lib.Api.Public"
+members = ["read"]
+consumers = ["Task_manager"]

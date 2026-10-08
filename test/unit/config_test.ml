@@ -96,6 +96,42 @@ policy = { roots = ['lib'], approved_shared_modules = ['App.Clock'], name = 'con
     (Policy.digest original <> Policy.digest {original with resources= []})
     "resource edit invalidates approval" ;
   let defaults = decode base in
+  let owned =
+    decode
+      ( base
+      ^ {|
+[[policy.contract_bindings]]
+source = "lib/contract/Common.cyrograf"
+module = "App_contract.App_service_common"
+[[policy.public_contracts]]
+service = "Task_access"
+module = "Task_access_lib.Api.Public"
+members = ["read"]
+consumers = ["Task_manager"]
+|}
+      )
+  in
+  let owned_policy = policy owned in
+  check
+    (Policy.digest owned_policy <> Policy.digest original)
+    "public contracts are approved-policy inputs" ;
+  let facet = List.hd owned_policy.public_contracts in
+  check
+    ( Policy.digest
+        { owned_policy with
+          public_contracts= [{facet with public_consumers= ["Web_client"]}] }
+    <> Policy.digest owned_policy )
+    "consumer changes invalidate contract approval" ;
+  check
+    ( Policy.digest
+        { owned_policy with
+          public_contracts= [{facet with public_members= ["internal"]}] }
+    <> Policy.digest owned_policy )
+    "member changes invalidate contract approval" ;
+  check
+    ( Policy.digest {owned_policy with contract_bindings= []}
+    <> Policy.digest owned_policy )
+    "generated binding changes invalidate contract approval" ;
   check
     (Policy.digest (policy defaults) = Policy.digest original)
     "measurements excluded from digest" ;
@@ -131,6 +167,27 @@ policy = { roots = ['lib'], approved_shared_modules = ['App.Clock'], name = 'con
          server='a'\n\
          scenario=[]"
     ; base ^ "[approval]\npolicy_name='x'\npolicy_digest='invalid'" ] ;
+  List.iter
+    rejects
+    [ base
+      ^ "[[policy.public_contracts]]\n\
+         service='Task_access'\n\
+         module='Api'\n\
+         members=['*']\n\
+         consumers=['Task_manager']"
+    ; base
+      ^ "[[policy.public_contracts]]\n\
+         service='Task_access'\n\
+         module='Api'\n\
+         members=['read']\n\
+         consumers=[]"
+    ; base
+      ^ "[[policy.contract_bindings]]\n\
+         source='../Common.cyrograf'\n\
+         module='Common'"
+    ; base
+      ^ "[[policy.contract_bindings]]\nsource='lib/Common.ml'\nmodule='Common'"
+    ] ;
   let dir = Filename.temp_file "szaniec-config-" "" in
   Sys.remove dir ;
   Unix.mkdir dir 0o700 ;
