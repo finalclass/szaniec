@@ -1,0 +1,14 @@
+format = "szaniec-config/1"
+
+[policy]
+name = "tasks-app"
+roots = ["lib"]
+approved_shared_modules = ["App.Clock"]
+
+[[policy.resources]]
+name = "database"
+api_prefixes = ["Well.Db.","Sqlite3."]
+
+[approval]
+policy_name = "tasks-app"
+policy_digest = "sha256:f5410b5466eab097b995fcb3eae657d8c614e10766cecbfee716e6110aa0a3a6"

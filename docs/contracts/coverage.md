@@ -2,7 +2,7 @@
 
 Format identifiers:
 
-- configuration `szaniec-coverage-config/1`
+- configuration: `[coverage]` in [project configuration](configuration.md)
 - machine-readable report `szaniec-coverage/1`
 - function-inventory input `szaniec-complexity/1` (the `szaniec complexity` report; complexity is optional input)
 - instrumentation facade `szaniec-instrumentation/1`
@@ -69,20 +69,10 @@ stanzas under a `test` or `tests` directory are outside application scope.
 
 ## Configuration
 
-`szaniec/coverage.json` under `--project-root`, or the file passed to
-`--config`. The command discovers the dune project root by walking parents
-from `--project-root` until `dune-project`. Every path in the configuration
-is relative to that dune root.
-
-```json
-{
-  "format": "szaniec-coverage-config/1",
-  "scope": ["lib", "bin"],
-  "build": ["dune", "build", "bin/server.exe"],
-  "server": "_build/default/bin/server.exe",
-  "scenario": ["deno", "run", "--allow-run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "scenarios/http.ts"]
-}
-```
+Use the `[coverage]` section of `szaniec.toml`. Discovery, validation and
+defaults follow [project configuration](configuration.md). The command finds
+the Dune root by walking parents from the selected project root. Build, server,
+scenario and scope paths are relative to that Dune root.
 
 `build` must start with the `dune` executable. The command refuses a build
 line it cannot instrument. `scenario` is the project's existing scenario

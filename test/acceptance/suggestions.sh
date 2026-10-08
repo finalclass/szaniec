@@ -40,8 +40,7 @@ clean_nested_env() {
 )
 
 if ! "$szaniec" approve \
-  --policy "$work/szaniec/policy.json" \
-  --approval "$work/szaniec/approval.json" \
+  --config "$work/szaniec.toml" \
   --project-root "$work" >"$work/approve.txt"
 then
   echo "suggestions.sh: approve failed" >&2
@@ -51,8 +50,7 @@ fi
 
 run_check() {
   "$szaniec" check \
-    --policy "$work/szaniec/policy.json" \
-    --approval "$work/szaniec/approval.json" \
+    --config "$work/szaniec.toml" \
     --project-root "$work" \
     --json
 }
@@ -74,7 +72,7 @@ run_suggestions() {
   out=$2
   set +e
   "$szaniec" suggestions \
-    --policy "$work/szaniec/policy.json" \
+    --config "$work/szaniec.toml" \
     --project-root "$work" \
     --json \
     --no-cache \

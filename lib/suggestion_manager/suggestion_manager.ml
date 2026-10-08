@@ -744,19 +744,6 @@ let rebuild (project_root : string) : (unit, string) result =
   | Sys_error _ -> () ) ;
   if code = 0 then Ok () else Error "dune build failed before suggestions"
 
-let load_api_candidates (path : string) : (string list, string) result =
-  match Yojson.Safe.from_file path with
-  | `List items ->
-      Ok
-        (List.filter_map
-           (fun i ->
-             match i with
-             | `String s -> Some s
-             | _ -> None )
-           items )
-  | _ -> Error "API candidate file must be a JSON array of strings"
-  | exception _ -> Error "API candidate file is not valid JSON"
-
 let criteria_not_run ~experimental ~api_candidates =
   if not experimental
   then

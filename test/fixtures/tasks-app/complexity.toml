@@ -1,0 +1,6 @@
+format = "szaniec-config/1"
+
+[policy]
+name = "complexity-app"
+roots = ["metric","test"]
+approved_shared_modules = []

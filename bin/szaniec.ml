@@ -1,36 +1,34 @@
 (* CheckClient: command line, rendering and exit status mapping. *)
 
 open Szaniec_model
+module Config = Szaniec_config.Config
 
 let usage =
   "usage:\n\
-  \ szaniec approve --policy <path> [--approval <path>]\n\
-  \ szaniec check --policy <path> [--approval <path>] [--project-root <dir>]\n\
+  \ szaniec approve [--config <path>] [--project-root <dir>]\n\
+  \ szaniec check [--config <path>] [--project-root <dir>]\n\
   \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
-  \ szaniec complexity --policy <path> [--approval <path>] [--project-root \
-   <dir>]\n\
+  \ szaniec complexity [--config <path>] [--project-root <dir>]\n\
   \                    [--rebuild] [--json] [--sort location|complexity]\n\
   \ szaniec coverage [--project-root <dir>] [--config <path>] [--json]\n\
   \                  [--out <path>] [--keep-work] [--function-inventory <path>]\n\
   \ szaniec coverage supervise --port <int> [--pass-env <name>]... -- \
    <command>...\n\
-  \ szaniec suggestions [--policy <path>] [--project-root <dir>] [--rebuild]\n\
+  \ szaniec suggestions [--config <path>] [--project-root <dir>] [--rebuild]\n\
   \               [--json] [--experimental] [--model <id>] [--cache <path>]\n\
   \               [--no-cache] [--refresh] [--timeout <seconds>]\n\
   \               [--budget-names <n>] [--budget-pairs <n>]\n\
   \               [--budget-responsibility <n>] [--budget-complexity <n>]\n\
   \               [--provider-fixture <path>] [--decisions <path>]\n\
-  \               [--api-candidates <path>]\n\
   \ szaniec suggestions decide --id <id> --decision apply|reject|defer\n\
   \               --rationale <text> [--decisions <path>] [--project-root \
-   <dir>]"
+   <dir>] [--config <path>]"
 
 type args =
   { command: string
   ; subcommand: string
-  ; policy: string
-  ; approval: string option
-  ; project_root: string
+  ; config: string option
+  ; project_root: string option
   ; rebuild: bool
   ; json: bool
   ; out: string option
@@ -47,7 +45,6 @@ type args =
   ; budget_complexity: int
   ; provider_fixture: string option
   ; decisions: string option
-  ; api_candidates: string option
   ; suggestion_id: string
   ; decision: string
   ; rationale: string
@@ -66,9 +63,8 @@ let int_arg (flag : string) (raw : string) : int =
 let rec parse (argv : string list) (acc : args) : args =
   match argv with
   | [] -> acc
-  | "--policy" :: p :: rest -> parse rest {acc with policy= p}
-  | "--approval" :: p :: rest -> parse rest {acc with approval= Some p}
-  | "--project-root" :: p :: rest -> parse rest {acc with project_root= p}
+  | "--config" :: p :: rest -> parse rest {acc with config= Some p}
+  | "--project-root" :: p :: rest -> parse rest {acc with project_root= Some p}
   | "--rebuild" :: rest -> parse rest {acc with rebuild= true}
   | "--json" :: rest -> parse rest {acc with json= true}
   | "--out" :: p :: rest -> parse rest {acc with out= Some p}
@@ -93,8 +89,6 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--provider-fixture" :: p :: rest ->
       parse rest {acc with provider_fixture= Some p}
   | "--decisions" :: p :: rest -> parse rest {acc with decisions= Some p}
-  | "--api-candidates" :: p :: rest ->
-      parse rest {acc with api_candidates= Some p}
   | "--id" :: p :: rest -> parse rest {acc with suggestion_id= p}
   | "--decision" :: p :: rest -> parse rest {acc with decision= p}
   | "--rationale" :: p :: rest -> parse rest {acc with rationale= p}
@@ -116,9 +110,8 @@ let rec parse (argv : string list) (acc : args) : args =
 let default_args =
   { command= ""
   ; subcommand= ""
-  ; policy= "szaniec/policy.json"
-  ; approval= Some "szaniec/approval.json"
-  ; project_root= Sys.getcwd ()
+  ; config= None
+  ; project_root= None
   ; rebuild= false
   ; json= false
   ; out= None
@@ -135,7 +128,6 @@ let default_args =
   ; budget_complexity= 6
   ; provider_fixture= None
   ; decisions= None
-  ; api_candidates= None
   ; suggestion_id= ""
   ; decision= ""
   ; rationale= ""
@@ -792,43 +784,107 @@ let rec parse_coverage project config json out keep inventory = function
       prerr_endline usage ;
       exit 2
 
+let load_config project_root path =
+  match Config.load ?project_root ?path () with
+  | Ok config -> config
+  | Error e ->
+      prerr_endline ("szaniec: " ^ e) ;
+      exit 2
+
+let require_policy config =
+  match Config.require_policy config with
+  | Ok policy -> policy
+  | Error e ->
+      prerr_endline ("szaniec: " ^ e) ;
+      exit 2
+
 let run_coverage argv =
-  let project, config, json, out, keep, inventory =
+  let project, path, _, _, _, _ =
+    parse_coverage "" "" false None false None argv
+  in
+  let config =
+    load_config
+      (if project = "" then None else Some project)
+      (if path = "" then None else Some path)
+  in
+  let coverage =
+    match config.Config.coverage with
+    | Some coverage -> coverage
+    | None ->
+        prerr_endline ("szaniec: " ^ config.path ^ ": [coverage] is required") ;
+        exit 2
+  in
+  let _, _, json, out, keep, inventory =
     parse_coverage
-      (Sys.getcwd ())
-      "szaniec/coverage.json"
-      false
-      None
-      false
-      None
+      config.project_root
+      config.path
+      coverage.json
+      coverage.out
+      coverage.keep_work
+      coverage.function_inventory
       argv
   in
+  let resolve = Config.resolve_path config.project_root in
   match
     Szaniec_inspection_manager.Coverage_run.run
-      ~project_root:project
-      ~config_path:config
-      ~inventory
+      ~project_root:config.project_root
+      ~config:coverage
+      ~inventory:(Option.map resolve inventory)
       ~keep_work:keep
   with
   | Error message ->
       prerr_endline ("szaniec: " ^ message) ;
       exit 2
   | Ok report ->
-      let rendered =
-        if json then coverage_json report else coverage_text report
-      in
-      ( match out with
-      | None -> ()
-      | Some path ->
-          let oc = open_out path in
-          output_string oc (coverage_json report) ;
-          close_out oc ) ;
-      print_string rendered ;
+      Option.iter
+        (fun path ->
+          let oc = open_out (resolve path) in
+          Fun.protect
+            ~finally:(fun () -> close_out_noerr oc)
+            (fun () -> output_string oc (coverage_json report)) )
+        out ;
+      print_string (if json then coverage_json report else coverage_text report) ;
       exit (coverage_exit report)
+
+let configured_args (config : Config.t) command =
+  let defaults =
+    { default_args with
+      project_root= Some config.project_root
+    ; config= Some config.path }
+  in
+  match command with
+  | "check" ->
+      let c = config.check in
+      { defaults with
+        rebuild= c.rebuild
+      ; json= c.json
+      ; out= c.out
+      ; no_callgraph= c.no_callgraph }
+  | "complexity" ->
+      let c = config.complexity in
+      {defaults with rebuild= c.rebuild; json= c.json; sort= c.sort}
+  | "suggestions" ->
+      let c = config.suggestions in
+      { defaults with
+        rebuild= c.rebuild
+      ; json= c.json
+      ; experimental= c.experimental
+      ; model= c.model
+      ; timeout_s= c.timeout
+      ; budget_names= c.budget_names
+      ; budget_pairs= c.budget_pairs
+      ; budget_responsibility= c.budget_responsibility
+      ; budget_complexity= c.budget_complexity
+      ; cache= Some c.cache
+      ; no_cache= c.no_cache
+      ; refresh= c.refresh
+      ; provider_fixture= c.provider_fixture
+      ; decisions= Some c.decisions }
+  | _ -> defaults
 
 (* ── entry point ──────────────────────────────────────────────────── *)
 
-let () =
+let main () =
   let argv = List.tl (Array.to_list Sys.argv) in
   match argv with
   | "coverage" :: "supervise" :: rest ->
@@ -849,28 +905,24 @@ let () =
       then (
         prerr_endline "szaniec: --sort is only valid with complexity" ;
         exit 2 ) ;
+      let config = load_config args.project_root args.config in
+      let args = parse argv (configured_args config args.command) in
+      let root = config.project_root in
+      let resolve = Config.resolve_path root in
       match args.command with
       | "approve" -> (
-          let resolve_path p =
-            if Filename.is_relative p && not (Sys.file_exists p)
-            then Filename.concat args.project_root p
-            else p
-          in
-          let policy_path = resolve_path args.policy in
-          let approval =
-            resolve_path
-              (Option.value ~default:"szaniec/approval.json" args.approval)
-          in
+          let policy = require_policy config in
           match
-            Szaniec_architecture_access.Architecture_access.approve
-              ~policy_path
-              ~approval_path:approval
+            Config.write_approval
+              config
+              ~policy_name:policy.Policy.name
+              ~policy_digest:(Policy.digest policy)
           with
           | Ok () ->
               Printf.printf
                 "approved policy %s (digest recorded in %s)\n"
-                args.policy
-                approval ;
+                policy.name
+                config.path ;
               exit 0
           | Error e ->
               prerr_endline ("szaniec: " ^ e) ;
@@ -882,9 +934,7 @@ let () =
                 ~default:"szaniec/suggestion-decisions.json"
                 args.decisions
             in
-            if Filename.is_relative raw
-            then Filename.concat args.project_root raw
-            else raw
+            if Filename.is_relative raw then Filename.concat root raw else raw
           in
           match
             Szaniec_suggestion_manager.Suggestion_manager.record_decision
@@ -904,31 +954,14 @@ let () =
               exit 2 )
       | "suggestions" -> (
           let module S = Szaniec_suggestion_manager.Suggestion_manager in
-          let resolve p =
-            if Filename.is_relative p && not (Sys.file_exists p)
-            then Filename.concat args.project_root p
-            else p
-          in
-          let policy_path = resolve args.policy in
-          let program_roots =
-            match
-              Szaniec_architecture_access.Architecture_access.parse_policy
-                policy_path
-            with
-            | Error e ->
-                prerr_endline ("szaniec: " ^ e) ;
-                exit 2
-            | Ok policy -> policy.Szaniec_model.Policy.program_roots
-          in
+          let program_roots = (require_policy config).Policy.program_roots in
           let decisions_path =
             let raw =
               Option.value
                 ~default:"szaniec/suggestion-decisions.json"
                 args.decisions
             in
-            if Filename.is_relative raw
-            then Filename.concat args.project_root raw
-            else raw
+            if Filename.is_relative raw then Filename.concat root raw else raw
           in
           let decisions =
             match S.read_decisions decisions_path with
@@ -949,16 +982,7 @@ let () =
                   prerr_endline ("szaniec: " ^ e) ;
                   exit 2 )
           in
-          let api_candidates =
-            match args.api_candidates with
-            | None -> []
-            | Some path -> (
-              match S.load_api_candidates (resolve path) with
-              | Ok items -> items
-              | Error e ->
-                  prerr_endline ("szaniec: " ^ e) ;
-                  exit 2 )
-          in
+          let api_candidates = config.suggestions.api_candidates in
           let cache_path =
             if args.no_cache
             then None
@@ -966,13 +990,9 @@ let () =
               Some
                 ( match args.cache with
                 | Some p ->
-                    if Filename.is_relative p
-                    then Filename.concat args.project_root p
-                    else p
-                | None ->
-                    Filename.concat
-                      args.project_root
-                      "szaniec/suggestion-cache.json" )
+                    if Filename.is_relative p then Filename.concat root p else p
+                | None -> Filename.concat root "szaniec/suggestion-cache.json"
+                )
           in
           let budgets : Szaniec_suggestion_manager.Retrieve.budgets =
             { Szaniec_suggestion_manager.Retrieve.names= args.budget_names
@@ -984,7 +1004,7 @@ let () =
           in
           match
             S.run
-              { S.project_root= args.project_root
+              { S.project_root= root
               ; program_roots
               ; rebuild= args.rebuild
               ; experimental= args.experimental
@@ -1013,29 +1033,13 @@ let () =
             prerr_endline
               ("szaniec: --sort must be location or complexity, not " ^ sort) ;
             exit 2 ) ;
-          let policy_path =
-            if
-              Filename.is_relative args.policy
-              && not (Sys.file_exists args.policy)
-            then Filename.concat args.project_root args.policy
-            else args.policy
-          in
-          let approval_path =
-            match args.approval with
-            | Some ap ->
-                if Filename.is_relative ap && not (Sys.file_exists ap)
-                then Some (Filename.concat args.project_root ap)
-                else Some ap
-            | None -> None
-          in
           try
             let report =
               Szaniec_inspection_manager.Inspection_manager.complexity
                 ~sort
                 { Szaniec_inspection_manager.Inspection_manager.project_root=
-                    args.project_root
-                ; policy_path
-                ; approval_path
+                    root
+                ; config
                 ; rebuild= args.rebuild }
             in
             print_string
@@ -1048,39 +1052,31 @@ let () =
               prerr_endline ("szaniec: " ^ e) ;
               exit 2 )
       | "check" -> (
-          let policy_path =
-            if
-              Filename.is_relative args.policy
-              && not (Sys.file_exists args.policy)
-            then Filename.concat args.project_root args.policy
-            else args.policy
+        try
+          let report =
+            Szaniec_inspection_manager.Inspection_manager.check
+              { Szaniec_inspection_manager.Inspection_manager.project_root= root
+              ; config
+              ; rebuild= args.rebuild }
           in
-          let approval_path =
-            match args.approval with
-            | Some ap ->
-                if Filename.is_relative ap && not (Sys.file_exists ap)
-                then Some (Filename.concat args.project_root ap)
-                else Some ap
-            | None -> None
-          in
-          try
-            let report =
-              Szaniec_inspection_manager.Inspection_manager.check
-                { Szaniec_inspection_manager.Inspection_manager.project_root=
-                    args.project_root
-                ; policy_path
-                ; approval_path
-                ; rebuild= args.rebuild }
-            in
-            if not args.no_callgraph
-            then write_callgraph report args.out args.project_root ;
-            print_string
-              (if args.json then json_report report else text_report report) ;
-            exit (exit_code report)
-          with
-          | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
-              prerr_endline ("szaniec: " ^ e) ;
-              exit 2 )
+          if not args.no_callgraph
+          then write_callgraph report (Option.map resolve args.out) root ;
+          print_string
+            (if args.json then json_report report else text_report report) ;
+          exit (exit_code report)
+        with
+        | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->
+            prerr_endline ("szaniec: " ^ e) ;
+            exit 2 )
       | _ ->
           prerr_endline usage ;
           exit 2 )
+
+let () =
+  try main () with
+  | Sys_error e ->
+      prerr_endline ("szaniec: " ^ e) ;
+      exit 2
+  | Unix.Unix_error (e, fn, arg) ->
+      prerr_endline ("szaniec: " ^ fn ^ " " ^ arg ^ ": " ^ Unix.error_message e) ;
+      exit 2

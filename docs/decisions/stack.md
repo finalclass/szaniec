@@ -80,3 +80,10 @@ toolchain: it requires ppxlib older than 0.36 and cmdliner older than
 MLX is not instrumented. A dune project that does not declare an `mlx`
 dialect records that as an exclusion; a declared `mlx` dialect with an
 in-scope `.mlx` file is an instrumentation gap.
+## Project configuration parser
+
+The native CLI uses OTOML for TOML parsing and serialization. Menhir is
+constrained below 20260209: OTOML 1.0.5 uses the incremental parser stack API
+removed in that release. The lock pins the compatible 20250912 toolchain.
+Configuration syntax and typed input loading belong to CheckClient Config
+infrastructure, separate from compiler extraction and conformance judgments.

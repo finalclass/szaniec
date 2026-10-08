@@ -17,26 +17,23 @@ a check exit from 0 to 1 or from 1 to 0.
 ## Commands
 
 ```
-szaniec suggestions --policy <path> [--project-root <dir>] [--rebuild]
+szaniec suggestions [--config <path>] [--project-root <dir>] [--rebuild]
                     [--json] [--experimental] [--model <id>]
                     [--cache <path>] [--no-cache] [--refresh]
                     [--timeout <seconds>]
                     [--budget-names <n>] [--budget-pairs <n>]
                     [--budget-responsibility <n>] [--budget-complexity <n>]
                     [--provider-fixture <path>] [--decisions <path>]
-                    [--api-candidates <path>]
 
 szaniec suggestions decide --id <suggestion-id>
                     --decision apply|reject|defer
                     --rationale <text> [--decisions <path>]
-                    [--project-root <dir>]
+                    [--project-root <dir>] [--config <path>]
 ```
 
-- Paths default as for `check`: working directory, `szaniec/policy.json`,
-  cache `szaniec/suggestion-cache.json`, decisions
-  `szaniec/suggestion-decisions.json`.
-- The policy file supplies program roots only. The approval file is not
-  read. Suggestions do not report architectural violations.
+- Configuration discovery and defaults follow [project configuration](configuration.md).
+  Program roots come from `[policy]`. Suggestions do not validate approval
+  or report architectural violations.
 - `--rebuild` runs `dune build` before extraction. Without it, stale or
   missing artifacts are gaps and are not used as current evidence.
 - `--provider-fixture` answers from a local file. Without it, the command
@@ -45,8 +42,8 @@ szaniec suggestions decide --id <suggestion-id>
   executable. The key is not written to the cache, the report, or
   argv. No other command reads the key or sends source text.
 - `--experimental` adds the pilot criteria below. It is off by default.
-- `--api-candidates` is a JSON array of strings. It is consulted only
-  for the experimental idiomatic-alternative criterion.
+- `[suggestions].api_candidates` is an inline array of strings, consulted
+  only for the experimental idiomatic-alternative criterion.
 - `decide` records one agent decision and does not call the provider.
   The rationale is required and must be non-empty. Decisions are not
   automatic edits.

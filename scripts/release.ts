@@ -71,33 +71,32 @@ try {
   await run("cp", ["-a", `${bundle}/.`, relocated]);
   const project = `${scratch}/application`;
   await Deno.mkdir(project);
+  await Deno.mkdir(`${project}/lib`);
+  await Deno.writeTextFile(`${project}/dune-project`, "(lang dune 3.17)\n");
   await Deno.writeTextFile(
-    `${project}/policy.json`,
-    JSON.stringify({
-      format: "szaniec-policy/2",
-      policyName: "release-smoke",
-      program: { roots: ["lib"] },
-      approvedSharedModules: [],
-      resources: [],
-    }),
+    `${project}/szaniec.toml`,
+    `format = "szaniec-config/1"
+[policy]
+name = "release-smoke"
+roots = ["lib"]
+`,
   );
   await Deno.symlink(`${relocated}/szaniec`, `${scratch}/szaniec`);
-  await run(`${scratch}/szaniec`, [
-    "approve",
-    "--policy",
-    "policy.json",
-    "--approval",
-    "approval.json",
-  ], project);
-  const approval = JSON.parse(
-    await Deno.readTextFile(`${project}/approval.json`),
+  const nested = `${project}/lib`;
+  await run(`${scratch}/szaniec`, ["approve"], nested);
+  const report = JSON.parse(
+    await run(`${scratch}/szaniec`, [
+      "check",
+      "--json",
+      "--no-callgraph",
+    ], nested),
   );
   if (
-    approval.policyName !== "release-smoke" ||
-    approval.format !== "szaniec-approval/1" ||
-    !/^sha256:[a-f0-9]{64}$/.test(approval.policyDigest)
+    report.inputs.policy.name !== "release-smoke" ||
+    report.inputs.policy.approved !== true ||
+    !/^sha256:[a-f0-9]{64}$/.test(report.inputs.policy.approvedDigest)
   ) {
-    throw new Error("Relocated bundle did not produce a valid approval.");
+    throw new Error("Relocated bundle did not record a valid TOML approval.");
   }
 } finally {
   await Deno.remove(scratch, { recursive: true });

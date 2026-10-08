@@ -25,7 +25,7 @@ fixture. Each service is its own library, as in a Well application:
   dependency. It plays the role of the external `well` library. Typed
   topics (`Well.topic`) live on the contract modules. The base tree does
   not publish, subscribe, or call `Well.request`.
-- `szaniec/policy.json` — the approved policy for this application
+- `szaniec.toml` — the approved policy for this application
   (program roots, approved shared modules, protected resources). Services
   and roles are not listed there.
 
@@ -35,7 +35,7 @@ calls `App.run`) is deliberately outside the checked program. This is an
 explicit policy declaration, not a silent skip.
 
 `metric/` and `test/` are outside that program. They are the
-`szaniec complexity` fixture (`szaniec/complexity-policy.json`): specimens
+`szaniec complexity` fixture (`complexity.toml`): specimens
 for `szaniec-cc/1`, a `Widget_manager` rpc method, and a test-provenance
 definition. They are not part of `szaniec check`.
 
@@ -57,6 +57,7 @@ the compiler accepts the redefinition. `probe` is unused and unclassified. `ping
 helper of itself because its functions call each other; that ownership
 comes from interpretation, and the three functions are still inventoried.
 
-The base tree must pass `szaniec check` with exit 0. Acceptance scenarios
+After `approve` in a temporary copy, the base tree must pass `szaniec check`
+with exit 0. Acceptance scenarios
 in `test/acceptance` apply controlled source mutations to copies of this
 tree.

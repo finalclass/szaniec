@@ -21,4 +21,4 @@ jobs:
       - name: Unit and integration suites
         run: opam exec -- make verify
       - name: Verify packaged coverage and nested launcher
-        run: ./_release/szaniec coverage --project-root test/fixtures/coverage-app --config szaniec/coverage.json
+        run: ./_release/szaniec coverage --project-root test/fixtures/coverage-app
