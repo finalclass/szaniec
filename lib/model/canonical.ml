@@ -101,15 +101,27 @@ let unit_prefix (units : t list) (c : t) : t option =
   in
   try_n (List.length segs)
 
-let resolve_alias aliases path =
+let alias_resolver aliases =
+  let index = Hashtbl.create (List.length aliases) in
+  List.iter
+    (fun (path, target) ->
+      if not (Hashtbl.mem index path) then Hashtbl.add index path target )
+    aliases ;
+  let rec prefix path =
+    match Hashtbl.find_opt index path with
+    | Some target -> Some (path, target)
+    | None -> (
+      match String.rindex_opt path '.' with
+      | Some i -> prefix (String.sub path 0 i)
+      | None -> None )
+  in
   let rec resolve visited path =
-    match unit_prefix (List.map fst aliases) path with
+    match prefix path with
     | None -> Some path
-    | Some prefix ->
+    | Some (prefix, target) ->
         if List.mem prefix visited
         then None
         else
-          let target = List.assoc prefix aliases in
           let suffix =
             String.sub
               path
@@ -118,4 +130,6 @@ let resolve_alias aliases path =
           in
           resolve (prefix :: visited) (target ^ suffix)
   in
-  resolve [] path
+  resolve []
+
+let resolve_alias aliases path = alias_resolver aliases path

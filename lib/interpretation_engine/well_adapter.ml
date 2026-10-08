@@ -597,16 +597,18 @@ let interpret
       | _ -> None )
     | None -> None
   in
+  let topic_values = Hashtbl.create 16 in
+  List.iter
+    (fun (c : Observation.call) ->
+      if c.callee = "Well.topic"
+      then Hashtbl.replace topic_values (c.call_unit ^ "." ^ c.caller) () )
+    obs.calls ;
   let generated_member path =
     match contract_member path with
     | Some (c, member) ->
         Public_contracts.mechanic c member
         || Public_contracts.rpc_member cy c member <> None
-        || List.exists
-             (fun (call : Observation.call) ->
-               call.call_unit ^ "." ^ call.caller = path
-               && call.callee = "Well.topic" )
-             obs.calls
+        || Hashtbl.mem topic_values path
     | None -> false
   in
   let public_module_path path =

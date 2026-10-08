@@ -309,7 +309,7 @@ let check_inventory errors (j : Yojson.Safe.t) =
   let inputs = member "inputs" j in
   if jbool inputs "approved"
   then fail errors "approval must stay a recorded flag" ;
-  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.2.0"
+  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.3.0"
   then fail errors "adapter version" ;
   ( match member "programRoots" inputs with
   | `List [`String "metric"; `String "test"] -> ()
@@ -356,6 +356,17 @@ let check_inventory errors (j : Yojson.Safe.t) =
   if jint_opt summary "gaps" <> Some 0 then fail errors "summary.gaps" ;
   if jlist j "gaps" <> [] then fail errors "gaps is not empty" ;
   let cov = jlist j "coverage" in
+  if
+    List.exists
+      (fun c ->
+        let path = jstr c "path" in
+        Filename.check_suffix path ".cyrograf"
+        || Filename.check_suffix path ".mli" )
+      cov
+  then
+    fail
+      errors
+      "snapshot-only inputs must not be reported as measured implementations" ;
   let cov_is path provenance status functions =
     match List.filter (fun c -> jstr c "path" = path) cov with
     | [c] ->

@@ -1287,8 +1287,9 @@ let observe
   let module_aliases =
     List.filter (fun (a, b) -> a <> b) !module_aliases |> List.sort_uniq compare
   in
+  let resolve_alias = Canonical.alias_resolver module_aliases in
   let resolve path =
-    match Canonical.resolve_alias module_aliases path with
+    match resolve_alias path with
     | Some resolved -> resolved
     | None ->
         gaps :=
@@ -1437,7 +1438,7 @@ let observe
   in
   let source_coverage =
     List.map
-      (fun (path, _digest) ->
+      (fun path ->
         let status =
           match gap_status path with
           | Some s -> s
@@ -1445,7 +1446,7 @@ let observe
           | None -> "measured"
         in
         coverage_of path status (Measurement.file_provenance path) )
-      source_files
+      sources
   in
   let extra_coverage =
     List.sort_uniq
