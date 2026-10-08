@@ -1,1 +1,5 @@
 (dirs :standard \ _build tmp "test/fixtures/tasks-app")
+
+(subdir test
+ (subdir fixtures
+  (dirs :standard \ suggestions-corpus)))

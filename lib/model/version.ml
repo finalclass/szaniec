@@ -33,6 +33,18 @@ let coverage_points = "szaniec-points/1"
 
 let coverage_probe = "szaniec-probe/1"
 
+let suggestion_format = "szaniec-suggestions/1"
+
+let suggestion_rubric = "szaniec-suggestion-rubric/1"
+
+let suggestion_cache_format = "szaniec-suggestion-cache/1"
+
+let suggestion_decisions_format = "szaniec-suggestion-decisions/1"
+
+let suggestion_fixture_format = "szaniec-suggestion-fixture/1"
+
+let suggestion_model = "jev-latest"
+
 let default_profile = "well-ocaml-core"
 
 (* The compiler series whose .cmt artifacts this build of the OCaml adapter

@@ -127,6 +127,29 @@ Every check writes `szaniec.json` in the project root: for each service
 and each declared method, the outgoing and incoming calls observed in
 that run.
 
+Optional `szaniec suggestions` asks Jev for narrow code-quality
+judgments (names, possible reuse, local responsibility mix, local
+complexity). It is not part of `check`. Suggestions never become
+violations, never change the check exit status, and are not a gate.
+Every category is **experimental** and not yet promoted: no live
+evaluation with cost and latency has been recorded. The corpus in
+`test/fixtures/suggestions-corpus` holds smells and counterexamples for
+that future run. Routine tests replay a fixture and do not call the
+provider.
+
+```sh
+szaniec suggestions --policy szaniec/policy.json --project-root . [--json]
+# live review, only this command sends source context:
+# TYPESAFE_API_KEY=... szaniec suggestions --policy szaniec/policy.json
+szaniec suggestions decide --id <suggestion-id> --decision reject \
+  --rationale "short reason"
+```
+
+`--provider-fixture` replaces the network call. A missing key, timeout,
+or error is an unavailable review (exit 2), not an empty success.
+`--experimental` adds the pilot criteria from the suggestion contract.
+Cached replies replay; live replies are not claimed to be deterministic.
+
 The checker preserves legitimate boundaries: `Client -> Manager -> Access`
 is never misreported as a direct `Client -> Access` call; helpers are
 followed only inside one service boundary.
@@ -151,8 +174,9 @@ package lock through `dune pkg`; first run needs network access):
 dune pkg lock                       # resolve/verify dune.lock
 dune build @all                     # build everything
 dune exec ocamlformat -- --check $(git ls-files '*.ml')   # formatter check
-dune build @runtest                 # unit tests, acceptance suite, complexity suite, coverage suite
+dune build @runtest                 # unit tests, acceptance, complexity, coverage, suggestions
 test/acceptance/run.sh              # architecture and complexity acceptance, standalone
+test/acceptance/suggestions.sh      # suggestion fixture replay; check output stays unchanged
 test/coverage/run.sh                # coverage fixture, standalone
 ```
 
@@ -189,7 +213,9 @@ executable paths cannot be built, is an analysis gap (exit 2), not a pass.
   unresolved implementation decisions, and verification expectations.
 - [Contract documents](docs/contracts): policy format, observation schema,
   interpretation schema, inspection contract, rule catalog, the
-  [complexity metric](docs/contracts/complexity-metric.md), and coverage.
+  [complexity metric](docs/contracts/complexity-metric.md),
+  [coverage](docs/contracts/coverage.md), and the
+  [suggestion contract](docs/contracts/suggestion-contract.md).
 - [Agent instructions](AGENTS.md): repository rules for an implementing agent.
 
 The checker is a local command-line program. It needs no server or

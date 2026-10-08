@@ -8,6 +8,15 @@
  (modules coverage_facts_test)
  (libraries szaniec_program_access szaniec_model unix))
 
+(executable
+ (name suggestions)
+ (modules suggestions)
+ (libraries
+  szaniec_suggestion_manager
+  szaniec_model
+  szaniec_architecture_access
+  szaniec_model_access))
+
 (rule
  (alias runtest)
  (package szaniec)
@@ -19,3 +28,9 @@
  (package szaniec)
  (action
   (run %{exe:coverage_facts_test.exe})))
+
+(rule
+ (alias runtest)
+ (package szaniec)
+ (action
+  (run %{exe:suggestions.exe})))

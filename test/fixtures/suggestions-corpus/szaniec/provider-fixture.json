@@ -1,0 +1,44 @@
+{
+  "format": "szaniec-suggestion-fixture/1",
+  "model": "fixture-model-1",
+  "fail": null,
+  "onMissing": "default",
+  "defaults": {
+    "noul": {"type": "noul", "noul": 0.05},
+    "choice": {
+      "type": "choice",
+      "choice": "acceptable",
+      "probabilities": {
+        "acceptable": 0.9,
+        "misleading": 0.04,
+        "uninformative": 0.03,
+        "insufficient-context": 0.03
+      },
+      "confidence": 0.86
+    },
+    "score": {
+      "type": "score",
+      "score": 0.2,
+      "legend": {"0": "straightforward", "1": "some nesting", "2": "harder than the behavior"},
+      "probabilities": {"0": 0.8, "1": 0.15, "2": 0.05},
+      "confidence": 0.7
+    }
+  },
+  "answers": {
+    "name-quality:App.Web_client.Names.x:x": {
+      "type": "choice",
+      "choice": "misleading",
+      "probabilities": {
+        "acceptable": 0.04,
+        "misleading": 0.88,
+        "uninformative": 0.05,
+        "insufficient-context": 0.03
+      },
+      "confidence": 0.88
+    },
+    "semantic-reuse:App.Task_manager.Titles.clean_title|App.Task_manager.Titles.normalize_title": {
+      "type": "noul",
+      "noul": 0.91
+    }
+  }
+}
