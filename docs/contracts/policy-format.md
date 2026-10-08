@@ -137,6 +137,10 @@ both digests. Malformed approval is a configuration error.
 Digest: SHA-256 over compact UTF-8 JSON encoding of the normalized policy,
 with keys in this exact order: `name`, `roots`,
 `approved_shared_modules`, `resources`. Each resource has keys `name`
-then `api_prefixes`. Arrays retain declared order; optional empty lists
-are included. Comments, formatting, key order, approval and other sections
-do not affect this identity. Changing any normalized policy value does.
+then `api_prefixes`. These four fields include empty lists. Nonempty
+`contract_bindings` and `public_contracts` are appended in that order;
+empty declaration lists are omitted to preserve existing policy digests.
+Each binding has keys `source`, `module`; each public contract has keys
+`service`, `module`, `members`, `consumers`. Arrays retain declared order.
+Comments, formatting, key order, approval and other sections do not affect
+this identity. Changing any normalized policy value does.
