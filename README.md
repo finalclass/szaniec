@@ -86,7 +86,7 @@ Add the launcher to your path before changing to an application directory:
 ```sh
 export PATH="$PWD/_release:$PATH"
 szaniec complexity --project-root test/fixtures/tasks-app \
-  --policy szaniec/complexity-policy.json --sort complexity
+  --config complexity.toml --sort complexity
 ```
 
 Use `_release/szaniec`, rather than `bin/szaniec`, for calls from arbitrary
