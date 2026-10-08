@@ -15,7 +15,8 @@ while [ ! -f "$repo/test/fixtures/tasks-app/dune-project" ]; do
   fi
 done
 
-if [ ! -x "$repo/_build/default/bin/szaniec.exe" ] ||
+if [ -z "${INSIDE_DUNE:-}" ] ||
+   [ ! -x "$repo/_build/default/bin/szaniec.exe" ] ||
    [ ! -x "$repo/_build/default/test/acceptance/runner.exe" ] ||
    [ ! -x "$repo/_build/default/test/acceptance/complexity_runner.exe" ]; then
   cd "$repo" && dune build bin/szaniec.exe test/acceptance/runner.exe \

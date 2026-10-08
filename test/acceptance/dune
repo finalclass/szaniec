@@ -2,7 +2,13 @@
 
 (executable
  (name runner)
- (libraries unix))
+ (libraries
+  unix
+  szaniec_model
+  szaniec_program_access
+  szaniec_inspection_manager
+  szaniec_interpretation_engine
+  szaniec_architecture_access))
 
 (executable
  (name complexity_runner)

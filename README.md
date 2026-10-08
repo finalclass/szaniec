@@ -366,6 +366,15 @@ access. One consumer is enough for an implementation-access violation;
 type-only references do not count as executable sharing. The
 [rule catalog](docs/contracts/rule-catalog.md) defines the full criteria.
 
+Nested message constructors, codecs, and storage conversions on resolved
+contract surfaces remain code dependencies without creating service requests.
+Recognized Well/Cyrograf generator headers let server/browser bindings,
+including `App_service_` wrappers, retain their declared contract identity.
+RPC calls through these wrappers still name the original caller and target;
+missing provenance or conflicting ownership stays an analysis gap. See the
+[generated-contract fixture](test/fixtures/generated-contracts/README.md)
+for the verified shapes and limits.
+
 ### Reports and call graph
 
 Save diagnostic JSON separately from the graph:

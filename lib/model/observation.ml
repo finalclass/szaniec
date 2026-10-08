@@ -53,6 +53,7 @@ type unit_info =
   { unit_id: string (* compiler unit name *)
   ; canonical: string
   ; source_path: string
+  ; source_header: string
   ; source_digest: string (* md5 hex from the artifact *)
   ; artifact_path: string
   ; fresh: bool }

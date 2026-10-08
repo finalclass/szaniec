@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(library
+ (name app_server)
+ (libraries contract_data contract well)
+ (flags (:standard -bin-annot)))
