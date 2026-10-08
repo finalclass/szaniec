@@ -6,6 +6,8 @@
 # build and scratch
 tmp/
 _build/
+_release/
+dist/
 
 # coverage measurements are temporary and must not be committed
 *.coverage

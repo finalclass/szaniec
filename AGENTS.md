@@ -29,6 +29,10 @@ corpus, machine-specific skill path or external conversation is required.
 
 ## Agent workflow
 
+- Build distributable Linux packages with `make build` or `make release VERSION=<tag>`.
+  These invoke `well build`, bundle and patch shared libraries, and add the CLI
+  launcher. Raw `dune build` is for compiler fixtures and verification targets,
+  not a replacement for the production packaging workflow.
 - Ask questions in ordinary conversation text; never use popup dialogs or request-user-input tools in Codex or T3.
 - Number answer options; mark recommendations with "rekomenduję" and provide an example answer.
 - Before ending a turn, commit and push all pending repository changes, including instruction edits; leave the worktree clean.

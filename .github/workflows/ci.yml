@@ -4,26 +4,21 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: 5.4.1
-          opam-pin: false
-      - name: Install dune
-        run: opam install dune -y
-      - name: Resolve package lock
-        run: opam exec -- dune pkg lock
-      - name: Formatter check
-        run: opam exec -- dune exec ocamlformat -- --check $(git ls-files '*.ml')
-      - name: Build
-        run: opam exec -- dune build @all
-      - name: Acceptance suite
-        run: opam exec -- test/acceptance/run.sh
-      - name: Suggestions suite
-        run: opam exec -- test/acceptance/suggestions.sh
-      - name: Coverage suite
-        run: opam exec -- test/coverage/run.sh
+      - uses: ./.github/actions/setup-build
+      - name: Check packaging script
+        run: deno check scripts/release.ts
+      - name: Build portable Linux bundle through Well
+        run: opam exec -- make build
+      - name: Unit and integration suites
+        run: opam exec -- make verify
+      - name: Verify packaged coverage and nested launcher
+        run: ./_release/szaniec coverage --project-root test/fixtures/coverage-app --config szaniec/coverage.json

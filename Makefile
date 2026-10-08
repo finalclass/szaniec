@@ -1,0 +1,17 @@
+.PHONY: build release verify
+
+VERSION ?= dev
+
+# The Deno helper invokes well build and packages its patched Linux bundle.
+build:
+	deno run --allow-read --allow-write --allow-run scripts/release.ts dev
+
+release:
+	deno run --allow-read --allow-write --allow-run scripts/release.ts "$(VERSION)"
+
+verify:
+	dune exec ocamlformat -- --check $$(git ls-files '*.ml')
+	dune build test/unit/@runtest
+	test/acceptance/run.sh
+	test/acceptance/suggestions.sh
+	test/coverage/run.sh
