@@ -1,10 +1,13 @@
-.PHONY: build release verify
+.PHONY: build install release verify
 
 VERSION ?= dev
 
 # The Deno helper invokes well build and packages its patched Linux bundle.
 build:
 	deno run --allow-read --allow-write --allow-run scripts/release.ts dev
+
+install: build
+	deno run --allow-env=HOME --allow-read --allow-write scripts/install.ts
 
 release:
 	deno run --allow-read --allow-write --allow-run scripts/release.ts "$(VERSION)"

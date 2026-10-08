@@ -81,13 +81,21 @@ _release/
   bin/lib/          # bundled loader and shared libraries, including glibc
 ```
 
-Add the launcher to your path before changing to an application directory:
+Install the local checkout's launcher before changing to an application directory:
 
 ```sh
-export PATH="$PWD/_release:$PATH"
+make install
+export PATH="$HOME/.local/bin:$PATH"
 szaniec complexity --project-root test/fixtures/tasks-app \
   --config complexity.toml --sort complexity
 ```
+
+`make install` builds the bundle, then creates or replaces the
+`~/.local/bin/szaniec` symbolic link to this checkout's `_release/szaniec`
+launcher. Reinstallation is safe; an existing regular file is preserved and
+reported as an error. Keep the checkout and its complete `_release` directory
+in place. Subsequent builds update the linked bundle automatically. To use the
+bundle temporarily without installing, add `$PWD/_release` to `PATH` instead.
 
 Use `_release/szaniec`, rather than `bin/szaniec`, for calls from arbitrary
 directories. Well sets a relative ELF interpreter; the launcher explicitly
