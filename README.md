@@ -710,7 +710,7 @@ make verify                         # formatter, unit tests, integration suites
 
 # Individual verification entry points:
 dune exec ocamlformat -- --check $(git ls-files '*.ml')
-dune build test/unit/@runtest
+dune build @test/unit/runtest
 test/acceptance/run.sh               # architecture and complexity
 test/acceptance/suggestions.sh       # fixture replay; check stays unchanged
 test/coverage/run.sh                 # instrumentation and HTTP scenarios

@@ -11,7 +11,7 @@ release:
 
 verify:
 	dune exec ocamlformat -- --check $$(git ls-files '*.ml')
-	dune build test/unit/@runtest
+	dune build @test/unit/runtest
 	test/acceptance/run.sh
 	test/acceptance/suggestions.sh
 	test/coverage/run.sh
