@@ -199,6 +199,9 @@ publisher to a subscriber.
 - Evidence: resource name, API path, call site.
 - Outcome: violation. Framework library approval never grants resource
   access.
+- Access/Utility permission requires a declared service. A data contract,
+  serialization runtime or unowned module does not become a Utility service
+  because its name has no other role suffix.
 
 ### `POLICY-UNCLASSIFIED`
 - Precondition: an in-scope, non-generated unit has no ownership class
