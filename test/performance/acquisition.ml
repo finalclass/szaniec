@@ -54,6 +54,67 @@ let () =
   print_endline
     "tree-free metadata preserves annotation kind and interface requirements: \
      ok" ;
+  let cmi_path =
+    Filename.concat root (Filename.remove_extension artifact ^ ".cmi")
+  in
+  let cmi = Cmi_format.read_cmi cmi_path in
+  let expected = List.assoc cmt.cmt_modname cmi.cmi_crcs in
+  assert (expected <> None) ;
+  let input = open_in_bin cmi_path in
+  let bytes =
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr input)
+      (fun () -> really_input_string input (in_channel_length input))
+  in
+  let probe = Filename.temp_file "szaniec-import-path-" "" in
+  Sys.remove probe ;
+  Unix.mkdir probe 0o700 ;
+  let first = Filename.concat probe "first" in
+  let second = Filename.concat probe "second" in
+  Unix.mkdir first 0o700 ;
+  Unix.mkdir second 0o700 ;
+  let name = String.uncapitalize_ascii cmt.cmt_modname ^ ".cmi" in
+  let first_file = Filename.concat first name in
+  let second_file = Filename.concat second name in
+  let write path bytes =
+    let output = open_out_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_out_noerr output)
+      (fun () ->
+        output_string output bytes ;
+        close_out output )
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun path ->
+          try Sys.remove path with
+          | Sys_error _ -> () )
+        [first_file; second_file] ;
+      List.iter Unix.rmdir [first; second; probe] )
+    (fun () ->
+      let local_units = Hashtbl.create 1 in
+      Hashtbl.add local_units cmt.cmt_modname artifact ;
+      let check visible hidden =
+        Szaniec_program_access.Ocaml_adapter.current_imports
+          ~project_root:root
+          ~local_units
+          { cmt with
+            cmt_imports= [(cmt.cmt_modname, expected)]
+          ; cmt_loadpath= {visible; hidden} }
+      in
+      write first_file "invalid first interface" ;
+      write second_file bytes ;
+      assert (not (check [first; second] [])) ;
+      assert (check [second; first] []) ;
+      Sys.remove first_file ;
+      assert (check [first; second] []) ;
+      assert (check [first] [second]) ;
+      Sys.remove second_file ;
+      assert (not (check [first; second] [])) ) ;
+  print_endline
+    "compiler import paths preserve first-match rejection, fallback and \
+     missing-local gaps: ok" ;
   let architecture = observe Architecture in
   let measurement = observe Measurement in
   assert (
