@@ -1071,6 +1071,7 @@ and walk_module_type
   | _ -> ()
 
 let walk_unit
+    ?(execution = true)
     ~(project_root : string)
     ~(lib : string)
     ~(unit_name : string)
@@ -1089,22 +1090,59 @@ let walk_unit
       in
       pre_collect c s.str_items ;
       walk_structure c facts "" s.str_items ;
-      facts.execution <-
-        Execution.observe
-          ~unit_canonical
-          ~resolve:(fun path ->
-            match canonicalize c path with
-            | `Canonical symbol -> symbol
-            | `LocalVar
-             |`Dynamic ->
-                "" )
-          ~site_of_loc:(site_of_loc ~project_root)
-          s
+      if execution
+      then
+        facts.execution <-
+          Execution.observe
+            ~unit_canonical
+            ~resolve:(fun path ->
+              match canonicalize c path with
+              | `Canonical symbol -> symbol
+              | `LocalVar
+               |`Dynamic ->
+                  "" )
+            ~site_of_loc:(site_of_loc ~project_root)
+            s
   | Cmt_format.Interface _
    |Cmt_format.Packed _
    |Cmt_format.Partial_implementation _
    |Cmt_format.Partial_interface _ ->
       ()
+
+type evidence =
+  | Architecture
+  | Measurement
+  | All
+
+type extracted =
+  { facts: facts
+  ; alias_only: bool
+  ; functions: Observation.function_def list
+  ; measure_gaps: Observation.gap list
+  ; measured: bool }
+
+let strip_tree (cmt : Cmt_format.cmt_infos) =
+  let cmt_annots =
+    match cmt.cmt_annots with
+    | Cmt_format.Implementation _ ->
+        Cmt_format.Implementation
+          {Typedtree.str_items= []; str_type= []; str_final_env= Env.empty}
+    | Cmt_format.Interface _ ->
+        Cmt_format.Interface
+          {Typedtree.sig_items= []; sig_type= []; sig_final_env= Env.empty}
+    | Cmt_format.Packed _ -> Cmt_format.Packed ([], [])
+    | Cmt_format.Partial_implementation _ ->
+        Cmt_format.Partial_implementation [||]
+    | Cmt_format.Partial_interface _ -> Cmt_format.Partial_interface [||]
+  in
+  { cmt with
+    cmt_annots
+  ; cmt_initial_env= Env.empty
+  ; cmt_comments= []
+  ; cmt_declaration_dependencies= []
+  ; cmt_uid_to_decl= Shape.Uid.Tbl.create 0
+  ; cmt_impl_shape= None
+  ; cmt_ident_occurrences= [] }
 
 (* ── observation driver ───────────────────────────────────────────── *)
 
@@ -1139,20 +1177,49 @@ let rec alias_only_structure (s : Typedtree.structure) =
    transformation timestamp evidence; an unchanged plain-source rewrite is
    current even if Dune did not rewrite its artifact. *)
 let observe
+    ?(evidence = All)
     ~(project_root : string)
     ~(program_roots : string list)
     ~(assume_fresh : bool)
     () : Observation.t =
+  let architecture = evidence <> Measurement in
+  let measurement = evidence <> Architecture in
+  let cache =
+    Observation_cache.create
+      ~project_root
+      ~evidence:
+        ( match evidence with
+        | Architecture -> "architecture"
+        | Measurement -> "measurement"
+        | All -> "all" )
+  in
   let sources = scan_sources project_root program_roots in
   let artifacts = scan_artifacts project_root in
   let gaps = ref [] in
+  let selected = ref 0 in
   let read_infos =
     List.filter_map
       (fun artifact ->
         let rel = strip_build_prefix artifact in
         let lib = obj_lib_name rel in
         match
-          try Some (Cmt_format.read_cmt (project_root // artifact)) with
+          try
+            let key =
+              Observation_cache.key cache ~kind:"metadata" ~artifact ~source:""
+            in
+            let cmt =
+              match Observation_cache.read cache key with
+              | Some cmt -> cmt
+              | None ->
+                  Observation_cache.note_read cache ;
+                  let cmt =
+                    strip_tree (Cmt_format.read_cmt (project_root // artifact))
+                  in
+                  Observation_cache.write cache key cmt ;
+                  cmt
+            in
+            Some cmt
+          with
           | _ -> None
         with
         | None ->
@@ -1202,7 +1269,7 @@ let observe
       in
       match real_source recorded with
       | None -> () (* .mlx-derived unit: declared profile exclusion *)
-      | Some source_path -> (
+      | Some source_path ->
           let generated = Filename.check_suffix source_path ".ml-gen" in
           if source_path = "" || not (in_scope program_roots source_path)
           then ()
@@ -1212,6 +1279,7 @@ let observe
             |> Option.value ~default:false
           then ()
           else
+            let () = incr selected in
             let series = compiler_series_of_args cmt.Cmt_format.cmt_args in
             if !compiler_series = "unknown" then compiler_series := series ;
             if series <> Version.supported_compiler_series
@@ -1295,22 +1363,114 @@ let observe
                     ; fresh= false }
                     :: !units )
               else
-                let facts =
-                  { calls= []
-                  ; vrefs= []
-                  ; trefs= []
-                  ; symbols= []
-                  ; aliases= []
-                  ; unsupported= []
-                  ; execution= Observation.empty_execution
-                  ; flows= [] }
+                let cache_key =
+                  Observation_cache.key
+                    cache
+                    ~kind:"facts"
+                    ~artifact
+                    ~source:source_path
                 in
-                walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+                let extracted =
+                  match Observation_cache.read cache cache_key with
+                  | Some extracted -> extracted
+                  | None ->
+                      Observation_cache.note_read cache ;
+                      let current =
+                        Cmt_format.read_cmt (project_root // artifact)
+                      in
+                      let facts =
+                        { calls= []
+                        ; vrefs= []
+                        ; trefs= []
+                        ; symbols= []
+                        ; aliases= []
+                        ; unsupported= []
+                        ; execution= Observation.empty_execution
+                        ; flows= [] }
+                      in
+                      walk_unit
+                        ~execution:architecture
+                        ~project_root
+                        ~lib
+                        ~unit_name:modname
+                        current
+                        facts ;
+                      if not architecture then facts.flows <- [] ;
+                      let alias_only =
+                        match current.Cmt_format.cmt_annots with
+                        | Cmt_format.Implementation structure ->
+                            alias_only_structure structure
+                        | _ -> false
+                      in
+                      let functions, measure_gaps, measured =
+                        if not measurement
+                        then ([], [], false)
+                        else
+                          match current.Cmt_format.cmt_annots with
+                          | Cmt_format.Implementation structure -> (
+                            try
+                              let fns, gaps =
+                                Measurement.measure
+                                  ~project_root
+                                  ~source_path
+                                  ~unit_canonical
+                                  structure
+                              in
+                              (fns, gaps, true)
+                            with
+                            | exn ->
+                                ( []
+                                , [ { Observation.gap_code= "GAP-UNMEASURABLE"
+                                    ; gap_path= source_path
+                                    ; gap_detail=
+                                        "complexity walk failed: "
+                                        ^ Printexc.to_string exn } ]
+                                , false ) )
+                          | _ ->
+                              ( []
+                              , [ { Observation.gap_code= "GAP-UNMEASURABLE"
+                                  ; gap_path= source_path
+                                  ; gap_detail=
+                                      "typedtree is not a complete \
+                                       implementation" } ]
+                              , false )
+                      in
+                      let extracted =
+                        {facts; alias_only; functions; measure_gaps; measured}
+                      in
+                      if
+                        facts.unsupported = []
+                        && measure_gaps = []
+                        && Observation_cache.artifact_current cache ~artifact
+                        && Observation_cache.key
+                             cache
+                             ~kind:"facts"
+                             ~artifact
+                             ~source:source_path
+                           = cache_key
+                        &&
+                        match current.cmt_annots with
+                        | Cmt_format.Implementation _ -> true
+                        | _ -> false
+                      then Observation_cache.write cache cache_key extracted ;
+                      extracted
+                in
+                if not (Observation_cache.artifact_current cache ~artifact)
+                then
+                  raise
+                    (Sys_error "compiler artifact changed during observation") ;
+                if
+                  Observation_cache.key
+                    cache
+                    ~kind:"facts"
+                    ~artifact
+                    ~source:source_path
+                  <> cache_key
+                then raise (Sys_error "source changed during observation") ;
+                let facts = extracted.facts in
                 module_aliases := List.rev_append facts.aliases !module_aliases ;
-                ( match cmt.Cmt_format.cmt_annots with
-                | Cmt_format.Implementation s when alias_only_structure s ->
-                    alias_only_units := unit_canonical :: !alias_only_units
-                | _ -> () ) ;
+                if extracted.alias_only
+                then alias_only_units := unit_canonical :: !alias_only_units ;
                 if not generated
                 then (
                   defined_values :=
@@ -1367,42 +1527,16 @@ let observe
                     ; artifact_path= artifact
                     ; fresh= true }
                     :: !units ) ;
-                match cmt.Cmt_format.cmt_annots with
-                | Cmt_format.Implementation structure -> (
-                  try
-                    let fns, mgaps =
-                      Measurement.measure
-                        ~project_root
-                        ~source_path
-                        ~unit_canonical
-                        structure
-                    in
-                    functions := List.rev_append fns !functions ;
-                    measure_gaps := List.rev_append mgaps !measure_gaps ;
-                    measured_paths := source_path :: !measured_paths
-                  with
-                  | exn ->
-                      measure_gaps :=
-                        { Observation.gap_code= "GAP-UNMEASURABLE"
-                        ; gap_path= source_path
-                        ; gap_detail=
-                            "complexity walk failed: " ^ Printexc.to_string exn
-                        }
-                        :: !measure_gaps )
-                | Cmt_format.Interface _
-                 |Cmt_format.Partial_implementation _
-                 |Cmt_format.Partial_interface _
-                 |Cmt_format.Packed _ ->
-                    (* A partial typedtree means the source did not
-                       type-check. Inventing an empty inventory would
-                       report that file as measured. *)
-                    measure_gaps :=
-                      { Observation.gap_code= "GAP-UNMEASURABLE"
-                      ; gap_path= source_path
-                      ; gap_detail= "typedtree is not a complete implementation"
-                      }
-                      :: !measure_gaps ) )
+                functions := List.rev_append extracted.functions !functions ;
+                measure_gaps :=
+                  List.rev_append extracted.measure_gaps !measure_gaps ;
+                if extracted.measured
+                then measured_paths := source_path :: !measured_paths )
     read_infos ;
+  Observation_cache.finish
+    cache
+    ~scanned:(List.length artifacts)
+    ~selected:!selected ;
   (* sources without artifacts *)
   List.iter
     (fun source ->
@@ -1690,10 +1824,14 @@ let observe
   ; type_refs= List.sort by_tref !trefs
   ; functions
   ; coverage=
-      List.sort
-        (fun a b -> compare a.Observation.cov_path b.Observation.cov_path)
-        (source_coverage @ extra_coverage)
+      ( if not measurement
+        then []
+        else
+          List.sort
+            (fun a b -> compare a.Observation.cov_path b.Observation.cov_path)
+            (source_coverage @ extra_coverage) )
   ; source_files
   ; snapshot_digest
   ; gaps= List.sort_uniq by_gap !gaps
-  ; measure_gaps= List.sort_uniq by_gap !measure_gaps }
+  ; measure_gaps=
+      (if measurement then List.sort_uniq by_gap !measure_gaps else []) }

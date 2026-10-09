@@ -8,6 +8,42 @@ InterpretationEngine and ConformanceEngine; the OCaml types in
 `lib/model` are the authoritative definition. This document fixes the
 meaning of the facts.
 
+## Requested evidence and acquisition
+
+InspectionManager requests `Architecture`, `Measurement`, or `All` evidence.
+Architecture retains units, aliases, calls, references and all execution views;
+Measurement retains unit, alias, call and reference facts needed for ownership
+attribution and measures every in-scope function, including generated wrappers;
+it omits execution-context and ordered-flow extraction. `All` retains both. Omitted
+measurement fields in Architecture and omitted execution fields in Measurement
+are unrequested evidence, not a successful empty inventory. Suggestions request
+Architecture for their dependency catalog and perform their own source extraction.
+Compiler, source, interface and transformation validation applies in every mode.
+
+ProgramAccess scans all current artifacts on every invocation. It reads metadata
+one artifact at a time, retaining metadata without typed trees, then processes
+selected artifacts one at a time. Existing deterministic selection and unreadable
+artifact gaps remain binding. Filename alone never proves exclusion or provenance.
+
+### Local observation cache
+
+ProgramAccess may reuse normalized per-artifact extraction only after current
+freshness validation. The local cache lives at `_build/.szaniec-observations`;
+`SZANIEC_OBSERVATION_CACHE=off` disables reads and writes. Deleting that directory
+is safe when no check is running. It contains application facts and must not be
+committed or published. Source discovery, snapshot construction, alias resolution,
+current policy, contract interpretation and conformance evaluation always run.
+
+The entry identity includes artifact bytes, artifact path, project root, source
+path and bytes, compiler version, observation schema, adapter version and requested
+evidence. Interface/import/transformation freshness is revalidated before every
+hit. Only successful complete extraction is stored; failures and incomplete
+entries are re-extracted. Corrupt, incompatible or interrupted entries are misses.
+Entries use a versioned payload and integrity digest, atomic rename and private
+file permissions. Concurrent invocations may duplicate extraction; each publishes
+a complete entry through a unique temporary file, without shared mutable state.
+Cache I/O failures leave acquisition available and never suppress analysis gaps.
+
 ## Snapshot identity
 
 - `projectRoot` — the directory the check ran against.

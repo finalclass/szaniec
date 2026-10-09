@@ -601,7 +601,12 @@ let collect
     ~(assume_fresh : bool)
     () : Function_def.catalog =
   let obs =
-    Ocaml_adapter.observe ~project_root ~program_roots ~assume_fresh ()
+    Ocaml_adapter.observe
+      ~evidence:Ocaml_adapter.Architecture
+      ~project_root
+      ~program_roots
+      ~assume_fresh
+      ()
   in
   let gaps =
     List.map

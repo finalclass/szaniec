@@ -1,0 +1,39 @@
+(executable
+ (name evaluation)
+ (modules evaluation)
+ (libraries
+  unix
+  szaniec_model
+  szaniec_config
+  szaniec_inspection_manager
+  szaniec_conformance_engine))
+
+(executable
+ (name acquisition)
+ (modules acquisition)
+ (libraries szaniec_program_access szaniec_model))
+
+(executable
+ (name resolver)
+ (modules resolver)
+ (libraries szaniec_model))
+
+(rule
+ (target callgraph_render.ml)
+ (deps ../../bin/callgraph_render.ml)
+ (action (copy %{deps} %{target})))
+
+(executable
+ (name rendering)
+ (modules rendering callgraph_render)
+ (libraries yojson))
+
+(rule
+ (target projection.ml)
+ (deps ../unit/callgraph_indexes.ml)
+ (action (copy %{deps} %{target})))
+
+(executable
+ (name projection)
+ (modules projection)
+ (libraries szaniec_inspection_manager szaniec_architecture_access szaniec_model))

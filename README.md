@@ -336,6 +336,20 @@ Once artifacts are fresh, omit `--rebuild`:
 szaniec check --json
 ```
 
+ProgramAccess caches current per-artifact extraction under
+`_build/.szaniec-observations`. Every run discovers the current program and
+validates source, interface and compiler evidence before reuse. Policy and
+contracts are evaluated again. Set `SZANIEC_OBSERVATION_CACHE=off` for an
+uncached comparison; deleting the cache directory when no check is running is
+safe. The cache contains application facts and belongs outside version control.
+
+Checks use one evaluation domain by default. Set `SZANIEC_DOMAINS=2`, `4` or
+`8` to evaluate sufficiently large independent path inventories in parallel.
+This helps some branching workloads and can slow simple ones; reports, graph
+bytes and exit statuses remain the same. `SZANIEC_ACQUISITION_STATS=1` writes
+artifact-selection, typed-read and cache counters to stderr. See the
+[performance decisions and measurements](docs/decisions/full-program-performance.md).
+
 Configuration comes from the selected root's `szaniec.toml`. `--rebuild` runs
 `dune build` before extraction.
 Missing, stale, unreadable, or unsupported artifacts produce gaps.
@@ -841,3 +855,4 @@ This README is the usage guide. Detailed formats and accepted design live in:
   [don'ts-based rules decision](docs/decisions/donts-based-rules.md), and
   [agent instructions](AGENTS.md).
 - [Interaction grouping, path lookup and large-observation regressions](docs/decisions/interaction-grouping.md).
+- [Conformance indexes, regression coverage and full-check benchmarks](docs/decisions/conformance-indexes.md).

@@ -53,12 +53,16 @@ let run_dune_build (project_root : string) : int =
   | Sys_error _ -> () ) ;
   code
 
-let observe_program (req : request) (policy : Policy.t) =
+let observe_program
+    ?(evidence = Szaniec_program_access.Ocaml_adapter.All)
+    (req : request)
+    (policy : Policy.t) =
   let build_code =
     if req.rebuild then Some (run_dune_build req.project_root) else None
   in
   let observation =
     Szaniec_program_access.Ocaml_adapter.observe
+      ~evidence
       ~project_root:req.project_root
       ~program_roots:policy.program_roots
       ~assume_fresh:(build_code = Some 0)
@@ -126,59 +130,39 @@ let build_callgraph
      module nesting, so the unit is the longest owned prefix and the
      method is the symbol's last segment. Only a declared rpc method of
      that service is a callgraph node. *)
-  let starts_with (s : string) (prefix : string) : bool =
-    let n = String.length prefix in
-    String.length s >= n && String.sub s 0 n = prefix
-  in
-  let method_of_symbol (symbol : string) : (string * string) option =
-    let owners =
-      List.filter
-        (fun (own : Interpretation.ownership) ->
-          own.Interpretation.owner_service <> ""
-          && ( String.equal symbol own.Interpretation.owner_module
-             || starts_with symbol (own.Interpretation.owner_module ^ ".") ) )
-        interpretation.Interpretation.ownerships
-      |> List.sort (fun a b ->
-          compare
-            (String.length b.Interpretation.owner_module)
-            (String.length a.Interpretation.owner_module) )
-    in
-    match owners with
-    | [] -> None
-    | own :: _ ->
-        let prefix = own.Interpretation.owner_module ^ "." in
-        let rest =
-          if starts_with symbol prefix
-          then
-            String.sub
-              symbol
-              (String.length prefix)
-              (String.length symbol - String.length prefix)
-          else ""
+  let owner_prefixes = Hashtbl.create 64 in
+  List.iter
+    (fun (own : Interpretation.ownership) ->
+      if
+        own.owner_service <> ""
+        && not (Hashtbl.mem owner_prefixes own.owner_module)
+      then Hashtbl.add owner_prefixes own.owner_module own )
+    interpretation.ownerships ;
+  let origin_cache = Hashtbl.create 128 in
+  let method_of_symbol symbol =
+    match Hashtbl.find_opt origin_cache symbol with
+    | Some result -> result
+    | None ->
+        let rec owner candidate =
+          match Hashtbl.find_opt owner_prefixes candidate with
+          | Some own -> Some own
+          | None -> (
+            match String.rindex_opt candidate '.' with
+            | None -> None
+            | Some i -> owner (String.sub candidate 0 i) )
         in
-        let method_name =
-          match List.rev (String.split_on_char '.' rest) with
-          | name :: _ when name <> "" -> name
-          | _ -> ""
+        let result =
+          Option.bind (owner symbol) (fun own ->
+              let method_name =
+                if symbol = own.Interpretation.owner_module
+                then ""
+                else List.hd (List.rev (String.split_on_char '.' symbol))
+              in
+              let key = (own.owner_service, method_name) in
+              if Hashtbl.mem idx key then Some key else None )
         in
-        let declared =
-          List.exists
-            (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-              String.equal
-                s.Szaniec_architecture_access.Cyrograf.svc_name
-                own.Interpretation.owner_service
-              && List.exists
-                   (fun (m : Szaniec_architecture_access.Cyrograf.method_decl)
-                      ->
-                     String.equal
-                       m.Szaniec_architecture_access.Cyrograf.m_name
-                       method_name )
-                   s.Szaniec_architecture_access.Cyrograf.svc_methods )
-            cy.Szaniec_architecture_access.Cyrograf.services
-        in
-        if declared
-        then Some (own.Interpretation.owner_service, method_name)
-        else None
+        Hashtbl.replace origin_cache symbol result ;
+        result
   in
   let method_of_origin (_owner : string) (evidence : string list) :
       (string * string) option =
@@ -186,52 +170,33 @@ let build_callgraph
     | origin :: _ -> method_of_symbol origin
     | [] -> None
   in
+  let edges = Hashtbl.create 128 in
+  let reverse = Hashtbl.create 128 in
+  let accumulate table key target sites contexts =
+    match Hashtbl.find_opt table key with
+    | None ->
+        Hashtbl.add table key (ref ({Callgraph.target; sites; contexts}, false))
+    | Some value ->
+        let edge, _ = !value in
+        value :=
+          ( { edge with
+              sites= List.rev_append sites edge.sites
+            ; contexts= List.rev_append contexts edge.contexts }
+          , true )
+  in
+  let finish ((edge : Callgraph.edge), merged) =
+    if merged
+    then
+      { edge with
+        Callgraph.sites= List.sort_uniq compare edge.sites
+      ; contexts= List.sort_uniq compare edge.contexts }
+    else edge
+  in
   let add_edge src tgt sites contexts =
-    match Hashtbl.find_opt idx src with
-    | None -> ()
-    | Some r -> (
-        let mi = !r in
-        match
-          List.find_opt
-            (fun (e : Callgraph.edge) ->
-              Callgraph.compare_target e.Callgraph.target tgt = 0 )
-            mi.Callgraph.mi_calls
-        with
-        | Some e ->
-            r :=
-              { mi with
-                Callgraph.mi_calls=
-                  List.sort
-                    Callgraph.compare_edge
-                    ( { e with
-                        Callgraph.sites=
-                          List.sort_uniq compare (e.Callgraph.sites @ sites)
-                      ; contexts= List.sort_uniq compare (e.contexts @ contexts)
-                      }
-                    :: List.filter
-                         (fun x ->
-                           Callgraph.compare_target x.Callgraph.target tgt <> 0 )
-                         mi.Callgraph.mi_calls ) }
-        | None ->
-            r :=
-              { mi with
-                Callgraph.mi_calls=
-                  List.sort
-                    Callgraph.compare_edge
-                    ( {Callgraph.target= tgt; sites; contexts}
-                    :: mi.Callgraph.mi_calls ) } )
+    if Hashtbl.mem idx src then accumulate edges (src, tgt) tgt sites contexts
   in
   let add_called_by tgt src =
-    match Hashtbl.find_opt idx tgt with
-    | None -> ()
-    | Some r ->
-        let mi = !r in
-        if not (List.mem src mi.Callgraph.mi_called_by)
-        then
-          r :=
-            { mi with
-              Callgraph.mi_called_by=
-                List.sort compare (src :: mi.Callgraph.mi_called_by) }
+    if Hashtbl.mem idx tgt then Hashtbl.replace reverse (tgt, src) ()
   in
   List.iter
     (fun (i : Interpretation.interaction) ->
@@ -274,6 +239,7 @@ let build_callgraph
       | _ -> () )
     interpretation.Interpretation.interactions ;
   let entries = Hashtbl.create 32 in
+  let entry_edges = Hashtbl.create 128 in
   List.iter
     (fun (execution : Interpretation.execution_interaction) ->
       let i = execution.execution_interaction in
@@ -311,31 +277,44 @@ let build_callgraph
                             , origin.definition_site ) ] } }
               (Hashtbl.find_opt entries origin.symbol)
           in
-          let edge =
-            List.find_opt
-              (fun (e : Callgraph.edge) -> e.target = target)
-              entry.calls
-          in
-          let edge =
-            match edge with
-            | None -> {Callgraph.target; sites= i.sites; contexts}
-            | Some e ->
-                { e with
-                  sites= List.sort_uniq compare (e.sites @ i.sites)
-                ; contexts= List.sort_uniq compare (e.contexts @ contexts) }
-          in
-          Hashtbl.replace
-            entries
-            origin.symbol
-            { entry with
-              calls=
-                List.sort
-                  Callgraph.compare_edge
-                  ( edge
-                  :: List.filter
-                       (fun (e : Callgraph.edge) -> e.target <> target)
-                       entry.calls ) } )
+          Hashtbl.replace entries origin.symbol entry ;
+          accumulate entry_edges (origin.symbol, target) target i.sites contexts )
     interpretation.execution_interactions ;
+  Hashtbl.iter
+    (fun (source, _) value ->
+      match Hashtbl.find_opt idx source with
+      | None -> ()
+      | Some r -> r := {!r with Callgraph.mi_calls= finish !value :: !r.mi_calls} )
+    edges ;
+  Hashtbl.iter
+    (fun (target, source) () ->
+      match Hashtbl.find_opt idx target with
+      | None -> ()
+      | Some r ->
+          r := {!r with Callgraph.mi_called_by= source :: !r.mi_called_by} )
+    reverse ;
+  Hashtbl.iter
+    (fun _ (r : Callgraph.method_info ref) ->
+      r :=
+        { !r with
+          Callgraph.mi_calls= List.sort Callgraph.compare_edge !r.mi_calls
+        ; mi_called_by= List.sort compare !r.mi_called_by } )
+    idx ;
+  Hashtbl.iter
+    (fun (symbol, _) value ->
+      let entry = Hashtbl.find entries symbol in
+      Hashtbl.replace
+        entries
+        symbol
+        {entry with Callgraph.calls= finish !value :: entry.calls} )
+    entry_edges ;
+  Hashtbl.iter
+    (fun symbol (entry : Callgraph.entry_point) ->
+      Hashtbl.replace
+        entries
+        symbol
+        {entry with calls= List.sort Callgraph.compare_edge entry.calls} )
+    entries ;
   let flow_sources = Hashtbl.create 32 in
   List.iter
     (fun (execution : Interpretation.execution_flow) ->
@@ -466,7 +445,12 @@ let check (req : request) : Finding.report =
   (* 2. observe the program; a successful rebuild guarantees that dune's
      content-tracked artifacts are current, so freshness is assumed for
      them; without a rebuild freshness is verified by mtimes *)
-  let observation = observe_program req policy in
+  let observation =
+    observe_program
+      ~evidence:Szaniec_program_access.Ocaml_adapter.Architecture
+      req
+      policy
+  in
   (* 3. interpret *)
   let interpretation =
     Szaniec_interpretation_engine.Well_adapter.interpret
@@ -579,7 +563,9 @@ let evidence_gap (g : Observation.gap) : bool =
       true
   | _ -> false
 
-let prepare (req : request) :
+let prepare
+    ?(evidence = Szaniec_program_access.Ocaml_adapter.All)
+    (req : request) :
     Policy.t
     * Szaniec_architecture_access.Architecture_access.resolution
     * Szaniec_architecture_access.Cyrograf.t
@@ -604,7 +590,7 @@ let prepare (req : request) :
     | Ok cy -> cy
     | Error e -> raise (Policy_error e)
   in
-  let observation = observe_program req policy in
+  let observation = observe_program ~evidence req policy in
   let interpretation =
     Szaniec_interpretation_engine.Well_adapter.interpret
       ~approved:
@@ -616,7 +602,9 @@ let prepare (req : request) :
   (policy, resolution, cy, observation, interpretation)
 
 let complexity (req : request) ~(sort : string) : Complexity.t =
-  let policy, resolution, cy, observation, interpretation = prepare req in
+  let policy, resolution, cy, observation, interpretation =
+    prepare ~evidence:Szaniec_program_access.Ocaml_adapter.Measurement req
+  in
   let owner_of (unit_name : string) : Interpretation.ownership option =
     List.find_opt
       (fun (o : Interpretation.ownership) ->

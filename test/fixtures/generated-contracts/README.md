@@ -68,7 +68,7 @@ libraries. All generated directories remain in `roots = ["lib"]`.
 no generated unit is added to the shared whitelist.
 
 After review, `approve` records this exact policy. The current checkout uses
-OCaml adapter **1.5.0**, Well adapter **3.4.0** and rules **3.1.0**. The original
+OCaml adapter **1.5.0**, Well adapter **3.4.1** and rules **3.1.0**. The original
 unconstrained-alias scenarios were also verified with adapters 1.4.0/3.3.0.
 The runner checks these identities against the checkout so an older packaged
 binary cannot pass unnoticed. It prints the approved digest and source snapshot.
