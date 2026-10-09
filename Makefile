@@ -14,7 +14,7 @@ release:
 
 verify:
 	dune exec ocamlformat -- --check $$(git ls-files '*.ml')
-	dune build @test/unit/runtest test/acceptance/contract_bindings_probe.exe
+	dune build @test/unit/runtest test/acceptance/contract_bindings_probe.exe test/performance/evaluation.exe
 	deno fmt --check test/performance/conformance.ts
 	deno check test/performance/conformance.ts
 	deno fmt --check test/config/run.ts

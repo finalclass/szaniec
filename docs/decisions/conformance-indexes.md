@@ -52,6 +52,12 @@ When the checkout has an `_build` tree, its artifacts seed the temporary builds;
 Dune still verifies and rebuilds changed inputs. Set `TMPDIR` to a disk-backed
 directory if the default temporary filesystem cannot hold these builds. GNU `time`
 must be on `PATH`, or selected with `--time-command <executable>`.
+For memory-constrained investigations, `--collect-between-stages` performs a full
+major collection after observation, interpretation, evaluation and callgraph
+construction in both copies. This is benchmark instrumentation, not a product GC
+change. Its cost is included in full-check time, while the evaluation timer excludes
+collections outside `evaluate`. Record this option and any `OCAMLRUNPARAM` settings
+alongside results; those full-check times do not describe the default runtime.
 
 The synthetic fixture extends the public tasks application with `--size` independent
 entries, each invoking three private helper levels and one Manager request. It is
@@ -73,3 +79,106 @@ approximately 63-second invocation cited by the issue used `2cb177e` and older
 adapters and callgraph projection. It is not a same-input performance comparison
 with current versions. Select `--baseline 2cb177e` to investigate that evaluator
 with current adapters; a diagnostic mismatch must still fail the comparison.
+
+`--evaluation-only` runs the native OCaml measurement executable instead of the
+CLI. It observes the same complete source scope and prepares ownership, bindings,
+interactions and gaps. In these temporary copies only, the two graph-only context
+and ordered-flow projections receive empty execution input; ConformanceEngine
+does not consume those projections. It evaluates the complete observed call/path
+inventories and compares fingerprints of its inputs and the ordered JSON of every
+finding field. Input fingerprints omit the unused execution/measurement projections
+and retain physical sharing in the OCaml serialization. This mode reports
+`processSeconds` for preparation, evaluation and fingerprinting, not full-check
+time. It produces no callgraph. The ordinary full-check mode retains both graph
+projections and compares the complete CLI artifacts.
+
+## Recorded comparison
+
+Local Linux x86_64 measurements on 2026-10-09 used the locked toolchain and GNU
+Time 1.9. The synthetic fixture had 22 units, 8,080 execution-path entries and
+8,137 calls. Three alternating runs against `baf52b9c` produced these medians:
+
+| Measurement | Baseline | Indexed |
+|---|---:|---:|
+| Evaluation elapsed time | 0.709 s | 0.026 s |
+| Full check elapsed time | 2.449 s | 2.341 s |
+| Evaluation allocation | 34.21 MiB | 25.11 MiB |
+| Full-check peak RSS | 135.38 MiB | 136.20 MiB |
+
+Reports and `/3` callgraphs were byte-identical in all six runs, with exit 0.
+The report SHA-256 was
+`dba6cb4d6e314e9bb856e64770dc4bbcc5f8fbc7001f403b510b1d0e77f31ed2`;
+the graph SHA-256 was
+`92fab609e439a997570fe46385f655e98bff07876d4da1b830f14c60e629f968`.
+The evaluation reduction isolates the changed lookups; the remaining full-check
+stages are unchanged. These short runs shared the host with other work, so the
+full-check medians are observations rather than a statistically established speedup.
+
+The same three-run synthetic comparison using the issue's `2cb177e` evaluator and
+current adapters also preserved both artifacts and exit status. Its evaluation
+median was 0.576 s versus 0.027 s; full-check medians were 2.884 s versus 1.507 s.
+One full-check sample took 100 s under memory pressure, reinforcing the limitation
+of full-check timing on this shared host.
+
+The 40,000-path/40,000-unit regression took 0.061 CPU seconds and allocated
+98,920,064 bytes with indexes. Running its evaluator-independent fixtures against
+the prior evaluator preserved their semantic assertions, then failed the five-second
+performance guard at 16.715 CPU seconds. The prior module was supplied the new
+standalone index helpers only so the direct prefix-equivalence assertions could
+compile; its `evaluate` implementation retained the original list scans.
+
+An initial existing-application attempt evaluated 451 units, 24,072 path entries and
+155,591 calls. Its baseline evaluation took 15.507 s, but the full process exited
+137 after 531 s at 5,750,660 KiB peak RSS. This is a failed analysis, excluded from
+successful full-check comparisons. The helper rejects exit codes above 2 and parses
+both output documents before accepting a sample.
+
+Two further full-check attempts with `OCAMLRUNPARAM=o=20`, then `o=5` plus
+`--collect-between-stages`, also exited 137. Their baseline evaluations took
+16.006 s and 24.477 s, with process peaks of 6,509,432 KiB and 4,967,672 KiB.
+The complete current application callgraph could not be compared in this environment.
+This validation remains outstanding; neither a full-check speedup nor byte identity
+of that application's complete CLI artifacts is claimed.
+
+A one-pair `--evaluation-only` comparison with `OCAMLRUNPARAM=o=20` completed on
+the same 451-unit application, retaining all 24,072 paths and 155,591 calls:
+
+| Component measurement | Baseline | Indexed |
+|---|---:|---:|
+| Evaluation elapsed time | 15.810 s | 6.142 s |
+| Evaluation allocation | 4,407,538,984 bytes | 4,247,730,416 bytes |
+| Preparation/evaluation/fingerprint process | 114.609 s | 104.166 s |
+| Component process peak RSS | 4,111,332 KiB | 4,110,872 KiB |
+
+Input and diagnostic fingerprints were identical. This isolates the lookup change
+on the application without claiming a complete CLI comparison. The native driver
+uses the product's OCaml contracts; Deno remains the orchestration runtime. The
+application, its configuration and raw facts remain local.
+
+The sanitized command shape for this completed component comparison was:
+
+```sh
+TMPDIR=<disk-temporary-directory> OCAMLRUNPARAM=o=20 \
+  deno run --allow-read --allow-write --allow-run \
+  test/performance/conformance.ts --baseline baf52b9c --runs 1 --size 2000 \
+  --project-root <application> --config <temporary-toml> \
+  --time-command <gnu-time-1.9> --evaluation-only
+```
+
+Verification commands completed successfully:
+
+```sh
+make build
+dune build @test/unit/runtest
+dune build test/performance/evaluation.exe
+deno fmt --check test/performance/conformance.ts
+deno check test/performance/conformance.ts
+make verify
+```
+
+`make verify` was rerun with `TMPDIR` on disk after a temporary-filesystem quota
+failure. It passed formatting, unit tests, configuration, repetition and ordered
+flow integration, public/generated contracts, architecture and complexity
+acceptance, recorded suggestions, and coverage acceptance. The benchmark helper's
+subsequent GC instrumentation passed formatting, type checking and a synthetic
+full-check comparison with identical artifacts.

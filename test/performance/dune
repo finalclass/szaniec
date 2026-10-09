@@ -1,0 +1,9 @@
+(executable
+ (name evaluation)
+ (modules evaluation)
+ (libraries
+  unix
+  szaniec_model
+  szaniec_config
+  szaniec_inspection_manager
+  szaniec_conformance_engine))

@@ -18,6 +18,7 @@ if (!baseline) {
 const runs = Number(option("--runs", "3"));
 const size = Number(option("--size", "2000"));
 const timeCommand = option("--time-command", "time")!;
+const evaluationOnly = Deno.args.includes("--evaluation-only");
 if (
   !Number.isInteger(runs) || runs < 1 || !Number.isInteger(size) || size < 1
 ) {
@@ -49,16 +50,29 @@ function replaceOnce(source: string, from: string, to: string) {
 }
 
 function instrument(source: string) {
+  if (Deno.args.includes("--collect-between-stages")) {
+    for (const marker of ["  (* 3. interpret *)\n", "  (* 4. evaluate *)\n"]) {
+      source = replaceOnce(source, marker, `  Gc.full_major () ;\n${marker}`);
+    }
+  }
   source = replaceOnce(
     source,
     "  let violations =\n",
     "  let benchmark_started = Unix.gettimeofday () in\n  let benchmark_allocated = Gc.allocated_bytes () in\n  let violations =\n",
   );
-  return replaceOnce(
+  source = replaceOnce(
     source,
     "  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n",
     '  Printf.eprintf "SZANIEC_BENCH evaluation=%.9f allocation=%.0f units=%d paths=%d calls=%d\\n%!"\n    (Unix.gettimeofday () -. benchmark_started)\n    (Gc.allocated_bytes () -. benchmark_allocated)\n    (List.length observation.Observation.units)\n    (List.length observation.Observation.exec_paths)\n    (List.length observation.Observation.calls) ;\n  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n',
   );
+  if (Deno.args.includes("--collect-between-stages")) {
+    source = replaceOnce(
+      source,
+      "  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n",
+      "  Gc.full_major () ;\n  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n  Gc.full_major () ;\n",
+    );
+  }
+  return source;
 }
 
 async function copySources(destination: string) {
@@ -145,7 +159,22 @@ try {
       `${build}/${managerPath}`,
       instrument(await Deno.readTextFile(`${build}/${managerPath}`)),
     );
-    await required("dune", ["build", "bin/szaniec.exe"], build);
+    if (evaluationOnly) {
+      const adapterPath = `${build}/lib/interpretation_engine/well_adapter.ml`;
+      const adapter = await Deno.readTextFile(adapterPath);
+      const marker = "~execution:obs.execution";
+      if (adapter.split(marker).length !== 3) {
+        throw new Error("Expected two graph execution projections");
+      }
+      await Deno.writeTextFile(
+        adapterPath,
+        adapter.replaceAll(marker, "~execution:Observation.empty_execution"),
+      );
+    }
+    await required("dune", [
+      "build",
+      evaluationOnly ? "test/performance/evaluation.exe" : "bin/szaniec.exe",
+    ], build);
   }
 
   const fixture = `${temporary}/fixture`;
@@ -187,18 +216,27 @@ try {
       for (const i of order) {
         const graphPath = `${temporary}/graph.json`;
         const started = performance.now();
+        const args = evaluationOnly
+          ? [
+            `${builds[i]}/_build/default/test/performance/evaluation.exe`,
+            project.root,
+            project.config,
+          ]
+          : [
+            `${builds[i]}/_build/default/bin/szaniec.exe`,
+            "check",
+            "--project-root",
+            project.root,
+            "--config",
+            project.config,
+            "--json",
+            "--out",
+            graphPath,
+          ];
         const result = await command(timeCommand, [
           "-f",
           "SZANIEC_PEAK %M",
-          `${builds[i]}/_build/default/bin/szaniec.exe`,
-          "check",
-          "--project-root",
-          project.root,
-          "--config",
-          project.config,
-          "--json",
-          "--out",
-          graphPath,
+          ...args,
         ]);
         const fullSeconds = (performance.now() - started) / 1000;
         const stderr = decoder.decode(result.stderr);
@@ -215,19 +253,25 @@ try {
         const output: Output = {
           code: result.code,
           report: result.stdout,
-          graph: await Deno.readFile(graphPath),
+          graph: evaluationOnly
+            ? new Uint8Array()
+            : await Deno.readFile(graphPath),
         };
         const report = JSON.parse(decoder.decode(output.report));
-        const graph = JSON.parse(decoder.decode(output.graph));
+        const graph = evaluationOnly
+          ? {}
+          : JSON.parse(decoder.decode(output.graph));
         if (
-          report.format !== "szaniec-report/1" ||
-          !graph.format?.startsWith("szaniec-callgraph/")
+          evaluationOnly
+            ? report.format !== "szaniec-evaluation-benchmark/1"
+            : report.format !== "szaniec-report/1" ||
+              !graph.format?.startsWith("szaniec-callgraph/")
         ) {
           throw new Error(
             `${project.label}: missing complete report or callgraph`,
           );
         }
-        await Deno.remove(graphPath);
+        if (!evaluationOnly) await Deno.remove(graphPath);
         if (reference) {
           if (
             reference.code !== output.code ||
@@ -248,13 +292,19 @@ try {
         samples[i].push(sample);
         console.log(JSON.stringify({
           project: project.label,
+          evaluationOnly,
           evaluator: i === 0 ? "baseline" : "indexed",
           run: run + 1,
           units: Number(timing[3]),
           paths: Number(timing[4]),
           calls: Number(timing[5]),
           exit: result.code,
-          ...sample,
+          evaluationSeconds: sample.evaluationSeconds,
+          ...(evaluationOnly
+            ? { processSeconds: sample.fullSeconds }
+            : { fullSeconds: sample.fullSeconds }),
+          peakKiB: sample.peakKiB,
+          evaluationAllocatedBytes: sample.evaluationAllocatedBytes,
         }));
       }
     }
@@ -267,13 +317,18 @@ try {
         .map((byte) => byte.toString(16).padStart(2, "0")).join("");
     console.log(JSON.stringify({
       project: project.label,
+      evaluationOnly,
       byteIdentical: true,
       reportDigest: await digest(reference!.report),
-      graphDigest: await digest(reference!.graph),
+      ...(evaluationOnly
+        ? {}
+        : { graphDigest: await digest(reference!.graph) }),
       medians: samples.map((set, i) => ({
         evaluator: i === 0 ? "baseline" : "indexed",
         evaluationSeconds: median(set.map((s) => s.evaluationSeconds)),
-        fullSeconds: median(set.map((s) => s.fullSeconds)),
+        ...(evaluationOnly
+          ? { processSeconds: median(set.map((s) => s.fullSeconds)) }
+          : { fullSeconds: median(set.map((s) => s.fullSeconds)) }),
         peakKiB: median(set.map((s) => s.peakKiB)),
         evaluationAllocatedBytes: median(
           set.map((s) => s.evaluationAllocatedBytes),
