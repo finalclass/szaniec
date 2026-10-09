@@ -145,6 +145,14 @@ service name suffix (`manager`, `client`, `engine`, `access`; any other
 name is a Utility) — see
 [the decision record](docs/decisions/donts-based-rules.md).
 
+Data-only contracts establish public data ownership without declaring a
+service. Approved generated bindings preserve that ownership through native
+and browser projections. An explicitly owned in-process facet identifies
+exact members and consumers; it remains part of its service boundary and is
+subject to structural rules. These declarations belong to approved policy,
+not to the shared implementation whitelist; see
+[public contracts](docs/contracts/policy-format.md#public-contracts).
+
 A private helper belongs to a service family only when its source path
 lies in that family's directory tree (nested directories and nested
 modules included) or compiler evidence binds the unit to the service.

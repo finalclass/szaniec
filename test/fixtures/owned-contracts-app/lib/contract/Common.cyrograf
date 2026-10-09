@@ -1,0 +1,3 @@
+struct Message {
+  value: String
+}

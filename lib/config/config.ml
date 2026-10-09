@@ -112,9 +112,75 @@ let paths path values = List.map (relative path) (nonempty path values)
 
 let section name document = optional "config" table name document
 
+let symbol_path path value =
+  let value = string path value in
+  if
+    List.exists (( = ) "") (String.split_on_char '.' value)
+    || not
+         (String.for_all
+            (function
+              | 'a' .. 'z'
+               |'A' .. 'Z'
+               |'0' .. '9'
+               |'_'
+               |'\''
+               |'.' ->
+                  true
+              | _ -> false )
+            value )
+  then invalid path "expected an exact OCaml symbol path (no wildcards)" ;
+  value
+
+let table_list path decode fields =
+  match List.assoc_opt path fields with
+  | None -> []
+  | Some (Otoml.TomlTableArray xs | Otoml.TomlArray xs) ->
+      List.map (fun x -> decode (table ("policy." ^ path) x)) xs
+  | _ -> invalid ("policy." ^ path) "expected an array of tables"
+
 let parse_policy fields =
   let p = "policy" in
-  keys p ["name"; "roots"; "approved_shared_modules"; "resources"] fields ;
+  keys
+    p
+    [ "name"
+    ; "roots"
+    ; "approved_shared_modules"
+    ; "resources"
+    ; "contract_bindings"
+    ; "public_contracts" ]
+    fields ;
+  let contract_bindings =
+    table_list
+      "contract_bindings"
+      (fun f ->
+        let p = "policy.contract_bindings" in
+        keys p ["source"; "module"] f ;
+        let source = required p string "source" f |> relative (p ^ ".source") in
+        if not (Filename.check_suffix source ".cyrograf")
+        then invalid (p ^ ".source") "expected a .cyrograf source" ;
+        { Policy.contract_source= source
+        ; contract_module= required p symbol_path "module" f } )
+      fields
+  in
+  let public_contracts =
+    table_list
+      "public_contracts"
+      (fun f ->
+        let p = "policy.public_contracts" in
+        keys p ["service"; "module"; "members"; "consumers"] f ;
+        let members =
+          required p strings "members" f |> nonempty (p ^ ".members")
+        in
+        List.iter
+          (fun v -> ignore (symbol_path (p ^ ".members") (Otoml.TomlString v)))
+          members ;
+        { Policy.public_service= required p string "service" f
+        ; public_module= required p symbol_path "module" f
+        ; public_members= members
+        ; public_consumers=
+            required p strings "consumers" f |> nonempty (p ^ ".consumers") } )
+      fields
+  in
   let resources =
     match List.assoc_opt "resources" fields with
     | None -> []
@@ -134,6 +200,8 @@ let parse_policy fields =
   ; program_roots= required p strings "roots" fields |> paths "policy.roots"
   ; approved_shared_modules=
       default p strings "approved_shared_modules" [] fields
+  ; contract_bindings
+  ; public_contracts
   ; resources }
 
 let decode ~project_root ~path document =

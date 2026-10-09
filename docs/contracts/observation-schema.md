@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/2`.
+Format identifier (conceptual): `szaniec-observation/3`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -46,10 +46,20 @@ One entry per observed compilation unit (implementation module):
   are excluded from rules and diagnostics.
 
 Dune wrapper units (`.ml-gen`) are observed for completeness but carry no
-ownership or findings. `.mli` interfaces are not analyzed in this profile.
+ownership or findings; their aliases are retained. `.mli` interfaces contribute
+snapshot and freshness evidence, not executable bodies.
 `.mlx` view files are not in the supported profile.
 
 ## Symbols, calls, references
+
+`moduleAliases` records each structure-level module alias with its full source
+and resolved target path, including Dune wrappers. Alias resolution uses the
+longest module prefix across compilation units; cycles remain unsupported
+evidence. Alias-only units carry a neutral compiler fact, not an architectural
+approval. `definedValues` records full paths of typed structure values for
+validating exact owned-contract members. The source snapshot includes in-scope
+`.cyrograf` and `.mli` inputs as well as implementation sources. An interface
+newer than its implementation artifact makes that implementation stale.
 
 - `symbols` — values and modules defined per unit, with kind and
   definition location. Names are relative to the unit (`Impl.list`).
@@ -124,6 +134,8 @@ from the conformance unit list.
 - Artifact compiler series outside the adapter's supported series →
   `GAP-UNSUPPORTED-COMPILER`; the unit is not analyzed.
 - Unreadable artifact → `GAP-ARTIFACT-READ`; the unit is not analyzed.
+- An unsuccessful requested rebuild → `GAP-BUILD`; any retained findings
+  accompany incomplete analysis, never a successful report.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.

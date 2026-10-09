@@ -116,6 +116,9 @@ type t =
   ; calls: call list (* sorted *)
   ; exec_paths: exec_paths list (* sorted by unit, caller *)
   ; value_refs: value_ref list (* sorted *)
+  ; module_aliases: (string * string) list
+  ; alias_only_units: string list
+  ; defined_values: string list
   ; type_refs: type_ref list (* sorted *)
   ; functions: function_def list (* sorted by source, then id *)
   ; coverage: file_coverage list (* sorted by path *)

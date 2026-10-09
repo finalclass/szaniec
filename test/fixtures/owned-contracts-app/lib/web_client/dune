@@ -1,0 +1,3 @@
+(library
+ (name web_client_lib)
+ (libraries app_contract app_browser))

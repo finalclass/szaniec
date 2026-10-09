@@ -1,0 +1,6 @@
+(lang dune 3.17)
+(name owned_contracts_app)
+(package
+ (name owned_contracts_app)
+ (allow_empty)
+ (depends (ocaml (and (>= 5.4) (< 5.5)))))

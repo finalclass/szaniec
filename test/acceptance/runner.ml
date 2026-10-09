@@ -931,6 +931,8 @@ let verify_generated_contracts work name =
     { name= "tasks-app"
     ; program_roots= ["lib"]
     ; approved_shared_modules= ["App.Clock"]
+    ; contract_bindings= []
+    ; public_contracts= []
     ; resources= [] }
   in
   let observation =
@@ -1106,7 +1108,13 @@ let verify_generated_contracts work name =
       "codec callback must remain executable dependency evidence" ;
     check
       (interpretation.gaps = [])
-      "generated conversions must have complete interpretation" )
+      ( "generated conversions must have complete interpretation: "
+      ^ String.concat
+          "; "
+          (List.map
+             (fun (gap : Observation.gap) ->
+               gap.gap_code ^ ": " ^ gap.gap_detail )
+             interpretation.gaps ) ) )
 
 let run_scenario (exe : string) (fixture : string) (s : scenario) : string =
   let work = prepare_work fixture in

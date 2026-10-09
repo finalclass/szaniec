@@ -190,6 +190,7 @@ type facts =
   ; mutable vrefs: Observation.value_ref list
   ; mutable trefs: Observation.type_ref list
   ; mutable symbols: (string * string) list
+  ; mutable aliases: (string * string) list
   ; mutable unsupported: Observation.site list
   ; mutable flows: Observation.exec_paths list }
 
@@ -297,8 +298,8 @@ type ctx =
   { project_root: string
   ; unit_canonical: string
   ; lib_cap: string
-  ; defined: (Ident.t, unit) Hashtbl.t
-  ; aliases: (string, string) Hashtbl.t
+  ; defined: (Ident.t, string) Hashtbl.t
+  ; aliases: (Ident.t, string) Hashtbl.t
   ; mutable def_loc: Location.t }
 
 type resolution =
@@ -324,21 +325,14 @@ let canonicalize (c : ctx) (p : Path.t) : resolution =
           (* Structure-level [module Alias = Path] resolves to Path.
              A nested alias recorded on a later segment resolves the same
              way. Anything else stays a member of this compilation unit. *)
-          let name = Ident.name root in
           let aliased target more =
             if more = []
             then `Canonical target
             else `Canonical (target ^ "." ^ String.concat "." more)
           in
-          if Hashtbl.mem c.aliases name
-          then aliased (Hashtbl.find c.aliases name) rest
-          else
-            match rest with
-            | name2 :: more when Hashtbl.mem c.aliases name2 ->
-                aliased (Hashtbl.find c.aliases name2) more
-            | _ ->
-                `Canonical
-                  (String.concat "." (c.unit_canonical :: name :: rest))
+          match Hashtbl.find_opt c.aliases root with
+          | Some target -> aliased target rest
+          | None -> aliased (Hashtbl.find c.defined root) rest
         else `LocalVar
       else
         `Canonical
@@ -349,7 +343,7 @@ let canonicalize (c : ctx) (p : Path.t) : resolution =
 
 let add_defined (c : ctx) (id : Ident.t) =
   if (not (Ident.persistent id)) && not (Ident.global id)
-  then Hashtbl.replace c.defined id ()
+  then Hashtbl.replace c.defined id (c.unit_canonical ^ "." ^ Ident.name id)
 
 let rec collect_pat_vars
     (p : 'k Typedtree.general_pattern)
@@ -395,7 +389,7 @@ let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
             match canonicalize c p with
             | `Canonical target -> (
               match mb.Typedtree.mb_id with
-              | Some id -> Hashtbl.replace c.aliases (Ident.name id) target
+              | Some id -> Hashtbl.replace c.aliases id target
               | None -> () )
             | _ -> () )
           | Tmod_structure s -> (
@@ -910,6 +904,14 @@ and walk_structure
           in
           let sub = if outer = "" then name else outer ^ "." ^ name in
           facts.symbols <- (sub, "module") :: facts.symbols ;
+          ( match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+          | Tmod_ident (p, _) -> (
+            match canonicalize c p with
+            | `Canonical target ->
+                facts.aliases <-
+                  (c.unit_canonical ^ "." ^ sub, target) :: facts.aliases
+            | _ -> () )
+          | _ -> () ) ;
           walk_module_expr c facts sub mb.Typedtree.mb_expr
       | Tstr_recmodule mbs ->
           List.iter
@@ -1001,6 +1003,23 @@ let in_scope (roots : string list) (path : string) : bool =
          && String.sub path 0 (String.length root + 1) = root // "" )
     roots
 
+let rec alias_only_structure (s : Typedtree.structure) =
+  let rec module_alias (m : Typedtree.module_expr) =
+    match m.mod_desc with
+    | Tmod_ident _ -> true
+    | Tmod_structure s -> alias_only_structure s
+    | Tmod_constraint (m, _, _, _) -> module_alias m
+    | _ -> false
+  in
+  s.str_items <> []
+  && List.for_all
+       (fun (i : Typedtree.structure_item) ->
+         match i.str_desc with
+         | Tstr_module mb -> module_alias mb.mb_expr
+         | Tstr_attribute _ -> true
+         | _ -> false )
+       s.str_items
+
 (* [assume_fresh] marks every existing artifact as current: the caller
    performed a successful rebuild, and dune guarantees content freshness of
    its outputs. Without it, freshness is verified by comparing mtimes. *)
@@ -1047,6 +1066,9 @@ let observe
   let units = ref [] in
   let calls = ref [] in
   let vrefs = ref [] in
+  let module_aliases = ref [] in
+  let alias_only_units = ref [] in
+  let defined_values = ref [] in
   let trefs = ref [] in
   let functions = ref [] in
   let measure_gaps = ref [] in
@@ -1062,7 +1084,7 @@ let observe
       in
       match real_source recorded with
       | None -> () (* .mlx-derived unit: declared profile exclusion *)
-      | Some source_path ->
+      | Some source_path -> (
           let generated = Filename.check_suffix source_path ".ml-gen" in
           if source_path = "" || not (in_scope program_roots source_path)
           then ()
@@ -1089,6 +1111,7 @@ let observe
             else
               let source_abs = project_root // source_path in
               let source_exists = Sys.file_exists source_abs in
+              let interface = Filename.remove_extension source_abs ^ ".mli" in
               (* Dune's wrapped-library stub is often recorded as
                  [lib/name.ml-gen] but kept only inside [_build]. There is
                  no project source to go stale against, so the artifact is
@@ -1099,6 +1122,10 @@ let observe
                 || source_exists
                    && ( assume_fresh
                       || fresher_or_equal source_abs (project_root // artifact)
+                      )
+                   && ( assume_fresh
+                      || (not (Sys.file_exists interface))
+                      || fresher_or_equal interface (project_root // artifact)
                       )
               in
               let unit_canonical =
@@ -1136,18 +1163,33 @@ let observe
                     ; artifact_path= artifact
                     ; fresh= false }
                     :: !units )
-              else (
+              else
+                let facts =
+                  { calls= []
+                  ; vrefs= []
+                  ; trefs= []
+                  ; symbols= []
+                  ; aliases= []
+                  ; unsupported= []
+                  ; flows= [] }
+                in
+                walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+                module_aliases := List.rev_append facts.aliases !module_aliases ;
+                ( match cmt.Cmt_format.cmt_annots with
+                | Cmt_format.Implementation s when alias_only_structure s ->
+                    alias_only_units := unit_canonical :: !alias_only_units
+                | _ -> () ) ;
                 if not generated
                 then (
-                  let facts =
-                    { calls= []
-                    ; vrefs= []
-                    ; trefs= []
-                    ; symbols= []
-                    ; unsupported= []
-                    ; flows= [] }
-                  in
-                  walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
+                  defined_values :=
+                    List.rev_append
+                      (List.filter_map
+                         (fun (name, kind) ->
+                           if kind = "value"
+                           then Some (unit_canonical ^ "." ^ name)
+                           else None )
+                         facts.symbols )
+                      !defined_values ;
                   gaps :=
                     List.map
                       (fun site ->
@@ -1231,13 +1273,73 @@ let observe
           ; gap_detail= "no build artifact found for this source file" }
           :: !gaps )
     sources ;
+  let inputs = ref sources in
+  List.iter
+    (fun root ->
+      scan
+        project_root
+        root
+        (fun e ->
+          Filename.check_suffix e ".mli" || Filename.check_suffix e ".cyrograf" )
+        inputs
+        false )
+    program_roots ;
   let source_files =
-    List.map (fun s -> (s, sha256_hex (read_file (project_root // s)))) sources
+    List.sort_uniq compare !inputs
+    |> List.map (fun s -> (s, sha256_hex (read_file (project_root // s))))
   in
   let snapshot_digest =
     sha256_hex
       (String.concat "\n" (List.map (fun (p, d) -> p ^ ":" ^ d) source_files))
   in
+  let module_aliases =
+    List.filter (fun (a, b) -> a <> b) !module_aliases |> List.sort_uniq compare
+  in
+  let resolve_alias = Canonical.alias_resolver module_aliases in
+  let resolve path =
+    match resolve_alias path with
+    | Some resolved -> resolved
+    | None ->
+        gaps :=
+          { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
+          ; gap_path= path
+          ; gap_detail= "cyclic module alias" }
+          :: !gaps ;
+        path
+  in
+  let resolve_args args =
+    List.map
+      (fun (a : Observation.call_arg) ->
+        {a with arg_target= resolve a.arg_target} )
+      args
+  in
+  calls :=
+    List.map
+      (fun (c : Observation.call) ->
+        {c with callee= resolve c.callee; args= resolve_args c.args} )
+      !calls ;
+  vrefs :=
+    List.map
+      (fun (v : Observation.value_ref) ->
+        {v with ref_target= resolve v.ref_target} )
+      !vrefs ;
+  trefs :=
+    List.map
+      (fun (v : Observation.type_ref) ->
+        {v with tref_target= resolve v.tref_target} )
+      !trefs ;
+  flows :=
+    List.map
+      (fun (p : Observation.exec_paths) ->
+        { p with
+          alternatives=
+            List.map
+              (List.map (fun (s : Observation.path_step) ->
+                   { s with
+                     step_callee= resolve s.step_callee
+                   ; step_args= resolve_args s.step_args } ) )
+              p.alternatives } )
+      !flows ;
   let site_key s =
     (s.Observation.site_path, s.Observation.line, s.Observation.col)
   in
@@ -1344,7 +1446,7 @@ let observe
   in
   let source_coverage =
     List.map
-      (fun (path, _digest) ->
+      (fun path ->
         let status =
           match gap_status path with
           | Some s -> s
@@ -1352,7 +1454,7 @@ let observe
           | None -> "measured"
         in
         coverage_of path status (Measurement.file_provenance path) )
-      source_files
+      sources
   in
   let extra_coverage =
     List.sort_uniq
@@ -1394,6 +1496,9 @@ let observe
             (b.Observation.paths_unit, b.Observation.paths_caller) )
         !flows
   ; value_refs= List.sort by_ref !vrefs
+  ; module_aliases
+  ; alias_only_units= List.sort_uniq compare !alias_only_units
+  ; defined_values= List.sort_uniq compare !defined_values
   ; type_refs= List.sort by_tref !trefs
   ; functions
   ; coverage=

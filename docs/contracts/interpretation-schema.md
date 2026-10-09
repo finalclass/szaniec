@@ -1,13 +1,49 @@
 # Contract: interpretation (Well adapter)
 
-Format identifier (conceptual): `szaniec-interpretation/2`.
+## Owned public surfaces
+
+The Well adapter distinguishes service contracts from data contracts. Source
+pairs, recognized generator provenance, and the approved declarations in
+[the policy contract](policy-format.md#public-contracts) bind generated units.
+`contract data` ownership carries the source contract identity without
+inventing a Utility service. Pure compiler-observed alias
+aggregators of public contracts inherit contract-data ownership. An aggregator
+with executable values does not receive this exemption.
+
+Calls to declared message `make`/codec members are data use, including nested
+messages, nested `Storage` conversions, and server/browser projections. Fresh
+generator-marked units also expose their generated message modules without
+requiring a separate policy declaration. RPC calls (including `Proxy.method`)
+are service requests; unknown members of generator-marked service contracts
+remain checked against their RPC declarations. Other members of contract units
+remain implementation access across families, and their bodies are inspected. Only the generated
+members' dispatch/conversion bodies are excluded from application call analysis.
+Application extraction gaps and stale evidence are preserved.
+
+An approved in-process facet grants access only to exact declared values and
+consumers. Its implementation body is still analyzed in the owning service;
+public declarations cannot hide private dependencies or resource access.
+Foreign consumers or undeclared members produce implementation access.
+
+Acceptance uses a redistributable, compiled fixture with several service
+families, a data-only Common contract, native/browser bindings, nested aliases,
+prefixed modules and an owned server API with an `.mli`. With an empty shared
+whitelist, valid data/codec/API use passes and repeated reports are identical.
+Controlled private Store and lock access (including aliases/callbacks), generic
+helper sharing, extra executable aggregator values, an undeclared API member,
+an unlisted consumer, unrelated initialization references beside registration,
+edited policy, stale artifacts, missing members and
+ambiguous ownership retain violations or gaps. Browser RPC calls retain layer
+checks. Data-only contracts are absent from the service graph.
+
+Format identifier (conceptual): `szaniec-interpretation/3`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.1.1`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.2.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -50,7 +86,8 @@ in-scope, non-generated unit is classified exactly once:
 
 | Class | Source |
 |---|---|
-| `contract of service S` | the canonical path lies on S's contract surface (a segment matches S's stem) and the source path is not inside S's implementation directory |
+| `contract of service S` | a fresh source pair or approved generated binding connects the unit to S's `.cyrograf` contract |
+| `contract data` | a data-only contract binding or a pure alias aggregator of contract modules |
 | `implementation of service S` | source layout, compiler evidence or the canonical path binds the unit to S, and it is not S's contract surface. Private helpers in that directory tree use this class |
 | `composition root` | unit calling `Well.Service.register`/`register_drut`/`expose` |
 | `external library` | `Well.*` (framework knowledge) and any target not observed in the build tree |
@@ -88,7 +125,8 @@ Derived from calls and value references, with helper paths:
 - `service-request` — caller boundary calls a contract module of another
   service: a request/response interaction via the public contract,
   carrying the called method name (the final member of the callee path)
-  validated against the service's declared rpc methods. The caller-side
+  validated against the service's declared rpc methods or exact approved
+  in-process facet. The caller-side
   path through private helpers of the same boundary is resolved by
   walking the per-value call graph inside the boundary from boundary
   origins (values with no in-boundary callers, e.g. route handlers).
@@ -106,7 +144,9 @@ Derived from calls and value references, with helper paths:
   M.spec`, and references to implementation values passed to route
   registration calls (`Well.get`, `Well.post`, `Well.live`) or exposed
   (`Well.Service.expose`). Registrations produce no conformance
-  interactions by themselves.
+  interactions by themselves. Only the values actually passed as resolved
+  arguments to those APIs receive the wiring exception; other references in
+  the same initialization function remain ordinary implementation access.
 - `external-call` — call into an external library unit. Recorded for
   evidence; library approval does not grant resource access.
 - `queued-command` — a call to `Well.request`. The topic is the
@@ -131,17 +171,12 @@ the APIs above is `GAP-UNRESOLVED-CALL`, not a guessed kind.
 
 ## Suppression rules (framework-generated mechanics)
 
-- Calls and unresolved calls *inside* a policy-declared contract module
-  are framework proxy mechanics (the `_service_ref` dispatch in generated
-  code). They produce neither interactions nor `GAP-UNRESOLVED-CALL`.
-- Calls from a contract module to other contract modules (generated wire
-  conversion) produce no interactions.
+- Calls and unresolved calls inside recognized generated members are
+  framework mechanics, as defined under Owned public surfaces above.
 - Calls from a service implementation to its own contract module
   (`make_spec`) are binding evidence, not interactions.
-- Generated-code mechanic members of contract units (wire codecs, `make`,
-  `spec`, `_service_ref` and friends — see the rule catalog) produce no
-  interactions; calls to any other contract member are checked against
-  the declared rpc methods.
+- Contract module aliases and message-module references are public data
+  dependencies. A private nested Store module is not a message module.
   Contract targets come from the resolved compilation-unit owner, including
   nested message and storage modules and aliases. An application implementation
   helper named `to_drut` retains ordinary implementation-access semantics.
@@ -157,7 +192,7 @@ the APIs above is `GAP-UNRESOLVED-CALL`, not a guessed kind.
 
 - `GAP-UNRESOLVED-CALL` — application of a locally bound variable, record
   field, or other dynamic callee inside in-scope application code
-  (contract modules and external units excluded). Blocks verification of
+  (recognized generated members and external units excluded). Blocks verification of
   rules that need the call's target.
 - `GAP-UNSUPPORTED-CONSTRUCT` — constructs the adapter cannot follow
   inside in-scope code: object method calls (`Texp_send`), first-class
@@ -165,6 +200,8 @@ the APIs above is `GAP-UNRESOLVED-CALL`, not a guessed kind.
   a resolved dependency.
 - `GAP-AMBIGUOUS-OWNERSHIP` — source layout and compiler evidence name
   different families, or one directory name matches several services.
+- `GAP-PUBLIC-CONTRACT` — an approved generated binding or owned public
+  facet lacks a consistent source, owner, member or fresh compiler evidence.
 
 Interpretation output is deterministic: interactions and gaps are sorted
 by participants and site locations before evaluation.

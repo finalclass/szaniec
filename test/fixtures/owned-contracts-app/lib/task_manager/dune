@@ -1,0 +1,3 @@
+(library
+ (name task_manager_lib)
+ (libraries app_contract task_access_lib))

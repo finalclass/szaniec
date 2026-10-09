@@ -454,7 +454,8 @@ let evaluate
           match (owner_of caller_unit).Interpretation.owner_class with
           | Interpretation.ExternalLibrary _
            |Interpretation.CompositionRoot
-           |Interpretation.Contract_of _ ->
+           |Interpretation.Contract_of _
+           |Interpretation.Contract_data _ ->
               ()
           | _ ->
               let caller = owner_of caller_unit in
@@ -767,6 +768,7 @@ let evaluate
         let owner = owner_of p.Observation.paths_unit in
         match owner.Interpretation.owner_class with
         | Interpretation.Contract_of _
+         |Interpretation.Contract_data _
          |Interpretation.ExternalLibrary _ ->
             ()
         | _ -> (
