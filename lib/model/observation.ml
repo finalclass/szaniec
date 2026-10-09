@@ -5,11 +5,43 @@ type site =
   ; line: int
   ; col: int }
 
+type loop =
+  { loop_kind: string
+  ; loop_site: site }
+
+type execution_arg =
+  { position: int
+  ; label: string
+  ; target: string }
+
+type execution_definition =
+  { symbol: string
+  ; definition_site: site
+  ; definition_arity: int
+  ; definition_initializer: bool }
+
 type resolution =
   | Resolved
   | Unresolved_local
   | Unresolved_field
   | Unresolved_dynamic
+
+type execution_call =
+  { execution_caller: string
+  ; execution_callee: string
+  ; execution_resolution: resolution
+  ; execution_site: site
+  ; execution_loops: loop list
+  ; execution_partial: bool
+  ; execution_resumed: bool
+  ; execution_supplied: int
+  ; execution_args: execution_arg list }
+
+type execution =
+  { definitions: execution_definition list
+  ; invocations: execution_call list }
+
+let empty_execution = {definitions= []; invocations= []}
 
 type call_arg =
   { arg_label: string (* "" for a positional argument *)
@@ -114,6 +146,7 @@ type t =
   ; units: unit_info list
         (* sorted by canonical path; generated units excluded *)
   ; calls: call list (* sorted *)
+  ; execution: execution
   ; exec_paths: exec_paths list (* sorted by unit, caller *)
   ; value_refs: value_ref list (* sorted *)
   ; module_aliases: (string * string) list

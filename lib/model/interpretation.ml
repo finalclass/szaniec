@@ -41,6 +41,25 @@ type binding =
   ; binding_kind: string (* "registration" | "route-handler" | "make-spec" *)
   ; binding_module: string }
 
+type repetition =
+  { kind: string
+  ; site: Observation.site
+  ; api: string }
+
+type execution_context =
+  { origin: string
+  ; site: Observation.site
+  ; context_path: string list
+  ; loops: repetition list
+  ; activations: repetition list
+  ; unknown_reasons: string list }
+
+type execution_interaction =
+  { execution_origin: Observation.execution_definition
+  ; execution_owner: string
+  ; execution_interaction: interaction
+  ; execution_context: execution_context }
+
 let kind_name = function
   | ServiceRequest -> "service-request"
   | ImplementationAccess -> "implementation-access"
@@ -64,4 +83,5 @@ type t =
   { ownerships: ownership list (* sorted by module path *)
   ; bindings: binding list (* sorted *)
   ; interactions: interaction list (* sorted, deduplicated *)
+  ; execution_interactions: execution_interaction list
   ; gaps: Observation.gap list }

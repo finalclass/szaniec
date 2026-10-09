@@ -407,9 +407,19 @@ severity, participants, locations, and evidence path. Inputs identify the
 policy and approved digest, source snapshot, compiler, adapters, and rules.
 A report can contain both confirmed violations and analysis gaps.
 
-The separate `szaniec-callgraph/1` artifact lists services, declared methods,
+The separate `szaniec-callgraph/2` artifact lists services, declared methods,
 observed outgoing/incoming calls, unresolved calls, and unclassified units.
 It is a projection of this run, not a hand-maintained architecture allowlist.
+
+Each call edge retains execution `contexts`: syntactic `for`/`while` loops,
+recognized `Stdlib.List`/`Stdlib.Array` iterator callbacks, recursive cycles,
+and paths through private helpers. Nested loops stay visible; defining a
+function inside a loop does not execute its body. Non-RPC origins appear in
+`entryPoints`. `Well.every` and subscriptions carry separate `activations`,
+so recurring listeners can be distinguished from repeated calls within one
+operation. Unknown callback semantics and traversal limits remain explicit.
+These annotations do not add a conformance rule or configuration exemptions.
+See [the graph contract](docs/contracts/inspection-contract.md#call-network-artifact-szaniecjson).
 
 ## Inspect function complexity
 
@@ -757,6 +767,7 @@ make verify                         # formatter, unit tests, integration suites
 dune exec ocamlformat -- --check $(git ls-files '*.ml')
 dune build @test/unit/runtest
 deno test --allow-read --allow-write --allow-run test/config/run.ts
+deno test --allow-read --allow-write --allow-run test/loops/run.ts
 deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
 test/acceptance/run.sh               # architecture and complexity
 test/acceptance/suggestions.sh       # fixture replay; check stays unchanged

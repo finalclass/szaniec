@@ -37,7 +37,7 @@ first rule catalog).
    methods that is never registered in the composition root is a
    `SPEC-UNREGISTERED-SERVICE` violation.
 5. **Call network artifact.** Szaniec writes `szaniec.json`
-   (`szaniec-callgraph/1`) into the checked project: per service and per
+   (`szaniec-callgraph/2`) into the checked project: per service and per
    method, the outgoing and incoming call edges with sites, resource and
    external accesses, unresolved calls and unclassified units. It is a
    deterministic projection of one check run, intended as a base for

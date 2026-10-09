@@ -127,6 +127,12 @@ Stop collapsing the path at a real approved service boundary: legitimate
 `Client -> Manager -> Access` does not imply a prohibited direct Client–Access edge.
 Do not treat the transitive closure of all calls as direct architectural calls.
 
+Repetition is execution evidence owned by ProgramAccess and interpreted by
+InterpretationEngine. Keep loops within an operation distinct from recurring
+activations of independent work (timers and listeners). Retain per-path context
+in the call graph, including origins outside RPC methods. Recording this fact
+does not itself establish a conformance violation or authorize an exception.
+
 Keep publication, channel and subscription separate; do not turn an event into a
 direct call from its publisher to each subscriber. Commands and events can use the
 same transport while having different architectural meaning.

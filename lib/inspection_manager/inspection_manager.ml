@@ -179,7 +179,7 @@ let build_callgraph
     | origin :: _ -> method_of_symbol origin
     | [] -> None
   in
-  let add_edge src tgt sites =
+  let add_edge src tgt sites contexts =
     match Hashtbl.find_opt idx src with
     | None -> ()
     | Some r -> (
@@ -198,7 +198,9 @@ let build_callgraph
                     Callgraph.compare_edge
                     ( { e with
                         Callgraph.sites=
-                          List.sort_uniq compare (e.Callgraph.sites @ sites) }
+                          List.sort_uniq compare (e.Callgraph.sites @ sites)
+                      ; contexts= List.sort_uniq compare (e.contexts @ contexts)
+                      }
                     :: List.filter
                          (fun x ->
                            Callgraph.compare_target x.Callgraph.target tgt <> 0 )
@@ -209,8 +211,8 @@ let build_callgraph
                 Callgraph.mi_calls=
                   List.sort
                     Callgraph.compare_edge
-                    ({Callgraph.target= tgt; sites} :: mi.Callgraph.mi_calls) }
-        )
+                    ( {Callgraph.target= tgt; sites; contexts}
+                    :: mi.Callgraph.mi_calls ) } )
   in
   let add_called_by tgt src =
     match Hashtbl.find_opt idx tgt with
@@ -255,7 +257,7 @@ let build_callgraph
             i.Interpretation.evidence_path )
       with
       | Some tgt, Some src -> (
-          add_edge src tgt i.Interpretation.sites ;
+          add_edge src tgt i.Interpretation.sites [] ;
           (* calledBy is the reverse projection over service methods
              only; a client page is not a cyrograf method *)
           match tgt with
@@ -264,6 +266,63 @@ let build_callgraph
           | _ -> () )
       | _ -> () )
     interpretation.Interpretation.interactions ;
+  let entries = Hashtbl.create 32 in
+  List.iter
+    (fun (execution : Interpretation.execution_interaction) ->
+      let i = execution.execution_interaction in
+      let target =
+        match i.kind with
+        | Interpretation.ServiceRequest ->
+            Callgraph.Service_method (i.to_service, i.to_method)
+        | ResourceAccess -> Callgraph.Resource_target i.resource
+        | _ when i.api = "" ->
+            Callgraph.Unresolved_target "unresolved execution target"
+        | _ -> Callgraph.External_target i.api
+      in
+      let contexts = [execution.execution_context] in
+      let origin = execution.execution_origin in
+      match method_of_symbol origin.symbol with
+      | Some source -> (
+          add_edge source target i.sites contexts ;
+          match target with
+          | Callgraph.Service_method (service, name) ->
+              add_called_by (service, name) source
+          | _ -> () )
+      | None ->
+          let entry =
+            Option.value
+              ~default:
+                { Callgraph.symbol= origin.symbol
+                ; owner= execution.execution_owner
+                ; site= origin.definition_site
+                ; calls= [] }
+              (Hashtbl.find_opt entries origin.symbol)
+          in
+          let edge =
+            List.find_opt
+              (fun (e : Callgraph.edge) -> e.target = target)
+              entry.calls
+          in
+          let edge =
+            match edge with
+            | None -> {Callgraph.target; sites= i.sites; contexts}
+            | Some e ->
+                { e with
+                  sites= List.sort_uniq compare (e.sites @ i.sites)
+                ; contexts= List.sort_uniq compare (e.contexts @ contexts) }
+          in
+          Hashtbl.replace
+            entries
+            origin.symbol
+            { entry with
+              calls=
+                List.sort
+                  Callgraph.compare_edge
+                  ( edge
+                  :: List.filter
+                       (fun (e : Callgraph.edge) -> e.target <> target)
+                       entry.calls ) } )
+    interpretation.execution_interactions ;
   let services =
     List.map
       (fun (si : Callgraph.service_info) ->
@@ -301,6 +360,10 @@ let build_callgraph
       interpretation.Interpretation.ownerships
   in
   { Callgraph.services
+  ; entry_points=
+      Hashtbl.fold (fun _ entry entries -> entry :: entries) entries []
+      |> List.sort (fun (a : Callgraph.entry_point) b ->
+          compare a.symbol b.symbol )
   ; unresolved
   ; unclassified_units= List.sort_uniq compare unclassified }
 

@@ -1,5 +1,5 @@
 (* Call network model: per service and per method, the observed call
-   edges. CheckClient renders it as szaniec-callgraph/1 JSON. *)
+   edges. CheckClient renders it as szaniec-callgraph/2 JSON. *)
 
 type target =
   | Service_method of string (* service *) * string (* method *)
@@ -9,7 +9,14 @@ type target =
 
 type edge =
   { target: target
-  ; sites: Observation.site list }
+  ; sites: Observation.site list
+  ; contexts: Interpretation.execution_context list }
+
+type entry_point =
+  { symbol: string
+  ; owner: string
+  ; site: Observation.site
+  ; calls: edge list }
 
 type method_info =
   { mi_name: string
@@ -25,6 +32,7 @@ type service_info =
 
 type t =
   { services: service_info list
+  ; entry_points: entry_point list
   ; unresolved: (string * string * Observation.site) list
   ; (* unit, caller, site *)
     unclassified_units: string list }
