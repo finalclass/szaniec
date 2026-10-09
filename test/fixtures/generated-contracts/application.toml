@@ -1,0 +1,90 @@
+format = "szaniec-config/1"
+
+[policy]
+name = "tasks-app"
+roots = ["lib"]
+approved_shared_modules = ["App.Clock"]
+
+[[policy.resources]]
+name = "database"
+api_prefixes = ["Well.Db.", "Sqlite3."]
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Contract_data.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Contract_data_browser.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Project_native.Nested.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Project_browser.Nested.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_access.cyrograf"
+module = "Contract_data.Task_access"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_access.cyrograf"
+module = "Contract_data_browser.Task_access"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_access.cyrograf"
+module = "Project_native.Nested.Task_access"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_access.cyrograf"
+module = "Project_browser.Nested.Task_access"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Notification_manager.cyrograf"
+module = "Contract_data.Notification_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Notification_manager.cyrograf"
+module = "Contract_data_browser.Notification_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Notification_manager.cyrograf"
+module = "Project_native.Nested.Notification_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Notification_manager.cyrograf"
+module = "Project_browser.Nested.Notification_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Template_engine.cyrograf"
+module = "Contract_data.Template_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Template_engine.cyrograf"
+module = "Contract_data_browser.Template_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Template_engine.cyrograf"
+module = "Project_native.Nested.Template_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Template_engine.cyrograf"
+module = "Project_browser.Nested.Template_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Formatting_engine.cyrograf"
+module = "Contract_data.Formatting_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Formatting_engine.cyrograf"
+module = "Contract_data_browser.Formatting_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Formatting_engine.cyrograf"
+module = "Project_native.Nested.Formatting_engine"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Formatting_engine.cyrograf"
+module = "Project_browser.Nested.Formatting_engine"

@@ -14,13 +14,15 @@ release:
 
 verify:
 	dune exec ocamlformat -- --check $$(git ls-files '*.ml')
-	dune build @test/unit/runtest
+	dune build @test/unit/runtest test/acceptance/contract_bindings_probe.exe
 	deno fmt --check test/config/run.ts
 	deno test --allow-read --allow-write --allow-run test/config/run.ts
 	deno fmt --check test/loops/run.ts
 	deno test --allow-read --allow-write --allow-run test/loops/run.ts
 	deno fmt --check test/acceptance/public_contracts.ts
 	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
+	deno fmt --check test/acceptance/application_contracts.ts
+	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/application_contracts.ts
 	test/acceptance/run.sh
 	test/acceptance/suggestions.sh
 	test/coverage/run.sh
