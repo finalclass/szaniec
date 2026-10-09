@@ -54,3 +54,8 @@
  (name path_interactions)
  (modules path_interactions)
  (libraries szaniec_conformance_engine szaniec_model))
+
+(test
+ (name conformance_indexes)
+ (modules conformance_indexes)
+ (libraries szaniec_conformance_engine szaniec_model))

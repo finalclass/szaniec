@@ -27,6 +27,28 @@ let role_of_name = Szaniec_architecture_access.Cyrograf.role_of_suffix
 
 let site_key (site : Observation.site) = (site.site_path, site.line, site.col)
 
+let index_first key entries =
+  let index = Hashtbl.create (List.length entries) in
+  List.iter
+    (fun entry ->
+      let k = key entry in
+      if not (Hashtbl.mem index k) then Hashtbl.add index k entry )
+    entries ;
+  index
+
+let unit_prefix unit_index path =
+  let rec find candidate =
+    if candidate = ""
+    then None
+    else if Hashtbl.mem unit_index candidate
+    then Some candidate
+    else
+      match String.rindex_opt candidate '.' with
+      | None -> None
+      | Some i -> find (String.sub candidate 0 i)
+  in
+  find (Canonical.join_dots (Canonical.split_dots path))
+
 let index_interaction_sites (interactions : Interpretation.interaction list) =
   let index = Hashtbl.create 128 in
   List.iteri
@@ -71,6 +93,31 @@ let evaluate
     ~(interpretation : Interpretation.t) : Finding.t list =
   let findings = ref [] in
   let add f = findings := f :: !findings in
+  let unit_index =
+    index_first
+      (fun (u : Observation.unit_info) -> u.canonical)
+      observation.units
+  in
+  let ownership_index =
+    index_first
+      (fun (o : Interpretation.ownership) -> o.owner_module)
+      interpretation.ownerships
+  in
+  let path_index =
+    index_first
+      (fun (p : Observation.exec_paths) -> (p.paths_unit, p.paths_caller))
+      observation.exec_paths
+  in
+  let owner_of canonical : Interpretation.ownership =
+    match Hashtbl.find_opt ownership_index canonical with
+    | Some o -> o
+    | None ->
+        { owner_module= canonical
+        ; owner_class= Interpretation.Unclassified
+        ; owner_service= "" }
+  in
+  let paths_of unit caller = Hashtbl.find_opt path_index (unit, caller) in
+  let unit_prefix = unit_prefix unit_index in
   (* Whitelist exceptions belong to the selected approved policy. An
      edited file is still checked, but its list does not grant them. *)
   let shared_modules =
@@ -425,24 +472,6 @@ let evaluate
   (* shared consumption of unclassified repository-local modules.
      Calls and value references count; type references do not. A module
      owned by one family is not generic sharing. *)
-  let unit_paths =
-    List.map
-      (fun (u : Observation.unit_info) -> u.Observation.canonical)
-      observation.Observation.units
-  in
-  let owner_of (canonical : string) : Interpretation.ownership =
-    match
-      List.find_opt
-        (fun (o : Interpretation.ownership) ->
-          String.equal o.Interpretation.owner_module canonical )
-        interpretation.Interpretation.ownerships
-    with
-    | Some o -> o
-    | None ->
-        { owner_module= canonical
-        ; owner_class= Interpretation.Unclassified
-        ; owner_service= "" }
-  in
   let consumers : (string, string list) Hashtbl.t = Hashtbl.create 32 in
   let consumer_sites : (string, Observation.site list) Hashtbl.t =
     Hashtbl.create 32
@@ -464,7 +493,7 @@ let evaluate
     if String.length target_path = 0
     then ()
     else
-      match Canonical.unit_prefix unit_paths target_path with
+      match unit_prefix target_path with
       | None -> ()
       | Some target_unit when Hashtbl.mem unavailable_units target_unit -> ()
       | Some target_unit -> (
@@ -570,29 +599,16 @@ let evaluate
       match o.Interpretation.owner_class with
       | Interpretation.Unclassified ->
           let fresh =
-            match
-              List.find_opt
-                (fun (u : Observation.unit_info) ->
-                  String.equal
-                    u.Observation.canonical
-                    o.Interpretation.owner_module )
-                observation.Observation.units
-            with
+            match Hashtbl.find_opt unit_index o.Interpretation.owner_module with
             | Some u -> u.Observation.fresh
             | None -> true
           in
           (* A stale unit was not read, so "no owner" is not established.
              Ambiguous family evidence is a gap, not an unowned unit. *)
           let source_path =
-            List.find_map
-              (fun (u : Observation.unit_info) ->
-                if
-                  String.equal
-                    u.Observation.canonical
-                    o.Interpretation.owner_module
-                then Some u.Observation.source_path
-                else None )
-              observation.Observation.units
+            Option.map
+              (fun (u : Observation.unit_info) -> u.source_path)
+              (Hashtbl.find_opt unit_index o.Interpretation.owner_module)
           in
           let ambiguous =
             match source_path with
@@ -630,19 +646,6 @@ let evaluate
     interpretation.Interpretation.ownerships ;
   (* Use-case and queue fan-out. Alternatives come from ProgramAccess;
      helpers are inlined only inside one boundary. *)
-  let owner_of (module_path : string) : Interpretation.ownership =
-    match
-      List.find_opt
-        (fun (o : Interpretation.ownership) ->
-          String.equal o.Interpretation.owner_module module_path )
-        interpretation.Interpretation.ownerships
-    with
-    | Some o -> o
-    | None ->
-        { owner_module= module_path
-        ; owner_class= Interpretation.Unclassified
-        ; owner_service= "" }
-  in
   let boundary_name (o : Interpretation.ownership) : string =
     if o.Interpretation.owner_service = ""
     then o.Interpretation.owner_module
@@ -657,7 +660,7 @@ let evaluate
     || String.equal a.Interpretation.owner_module b.Interpretation.owner_module
   in
   let target_of (callee : string) : (string * string) option =
-    match Canonical.unit_prefix unit_paths callee with
+    match unit_prefix callee with
     | Some u ->
         let pl = String.length u + 1 in
         let rel =
@@ -667,14 +670,6 @@ let evaluate
         in
         Some (u, rel)
     | None -> None
-  in
-  let paths_of (unit : string) (caller : string) : Observation.exec_paths option
-      =
-    List.find_opt
-      (fun (p : Observation.exec_paths) ->
-        String.equal p.Observation.paths_unit unit
-        && String.equal p.Observation.paths_caller caller )
-      observation.Observation.exec_paths
   in
   let max_alts = 48 in
   let rec expand
@@ -756,12 +751,7 @@ let evaluate
         | _ -> () )
     observation.Observation.calls ;
   let source_of unit =
-    match
-      List.find_opt
-        (fun (u : Observation.unit_info) ->
-          String.equal u.Observation.canonical unit )
-        observation.Observation.units
-    with
+    match Hashtbl.find_opt unit_index unit with
     | Some u -> u.Observation.source_path
     | None -> unit
   in

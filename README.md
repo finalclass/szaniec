@@ -841,3 +841,4 @@ This README is the usage guide. Detailed formats and accepted design live in:
   [don'ts-based rules decision](docs/decisions/donts-based-rules.md), and
   [agent instructions](AGENTS.md).
 - [Interaction grouping, path lookup and large-observation regressions](docs/decisions/interaction-grouping.md).
+- [Conformance indexes, regression coverage and full-check benchmarks](docs/decisions/conformance-indexes.md).
