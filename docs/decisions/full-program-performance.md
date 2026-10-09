@@ -103,9 +103,11 @@ renderer. The corruption fixture replaces a deliberately read-only CMT instead
 of modifying Dune's potentially hard-linked output in place; this fixes the
 first CI run's test-environment permission failure.
 
-`make build` and `make verify` completed successfully. After the final metadata-kind
-correction, the package was rebuilt, all unit tests reran, and the following
-targeted compiled suites passed again:
+The final `make build` and full `make verify` completed successfully, including
+unit, acquisition, configuration, loop/flow, public/application-generated
+contract, architecture, complexity, suggestion and coverage acceptance. The
+packaged CLI also retained the write-error diagnostic when writing to `/dev/full`.
+The metadata-kind correction additionally received targeted compiled reruns:
 
 ```sh
 dune build @test/unit/runtest test/performance/acquisition.exe
@@ -308,6 +310,58 @@ deno run --allow-read --allow-write --allow-run test/performance/conformance.ts 
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component rendering --runs 3 --size 2000 \
   --project-root . --config <temporary-unapproved-lib-policy> --timeout-seconds 120
+```
+
+## Large application follow-up
+
+The 451-unit application from the original #14 investigation was retested with
+24,072 paths and 155,591 calls. The isolated ConformanceEngine rollback used the
+current acquisition, interpretation, projection and streaming CLI on both sides.
+Both complete checks returned exit 2 under the same unapproved temporary lib
+policy. Reports and all 3,321,235,829 callgraph bytes were identical; freshness,
+unknown evidence and violations remained present. No application source, build
+or approval was changed. This completes the previously missing full comparison
+recorded in [conformance indexes](conformance-indexes.md).
+
+One pair, with extraction caching disabled and one evaluation domain, measured:
+
+| Metric | Baseline evaluator | Indexed evaluator |
+|---|---:|---:|
+| Evaluation | 15.311 s | 5.465 s |
+| Full native check | 137.471 s | 129.251 s |
+| Total CPU | 128.349 s | 120.186 s |
+| Process peak RSS | 4,588.8 MiB | 4,585.0 MiB |
+| Evaluation allocation | 4,407,538,984 bytes | 4,062,976,584 bytes |
+| Observation | 67.448 s | 69.219 s |
+| Interpretation | 7.860 s | 8.094 s |
+| Projection | 0.316 s | 0.350 s |
+| Rendering | 21.253 s | 20.584 s |
+
+Both runs scanned 561 artifacts, selected 485 and performed 994 counted typed
+reads. They used `OCAMLRUNPARAM=o=20` and `--collect-between-stages` equally.
+Full-check timings include those collections; they do not describe default GC.
+JSON validation, file comparison and hashing run afterward and are outside native
+check timings. This is one completed comparison, not a latency guarantee or a
+claim that the exploratory 5–10-second target has been reached. Acquisition and
+the complete retained flow model still dominate this application's costs.
+
+Before streaming, an instrumented full attempt timed out after 180 seconds during
+rendering, at 6,634,644 KiB peak RSS, after observation 40.233 s, interpretation
+5.704 s, evaluation 12.923 s and projection 0.339 s. Another 180-second streaming
+attempt under concurrent compiler/renderer memory pressure did not finish
+evaluation. A tuned attempt then exposed the benchmark helper's eager
+multi-gigabyte graph read and ended with exit 137. None of these attempts counts
+as a completed comparison. Streaming rendering plus file-based validation made
+the final full comparison possible without reducing graph scope.
+
+The completed command was:
+
+```sh
+OCAMLRUNPARAM=o=20 deno run --allow-read --allow-write --allow-run \
+  test/performance/conformance.ts --baseline baf52b9c --component conformance \
+  --runs 1 --size 2000 --project-root <application> \
+  --config <temporary-unapproved-lib-policy> --timeout-seconds 300 \
+  --collect-between-stages
 ```
 
 The temporary policy selects `roots = ["lib"]` and

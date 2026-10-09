@@ -241,3 +241,12 @@ disabling only the two unused graph projections, as in `--evaluation-only` above
 the separate timed-out run retained both projections. Temporary diagnostic sources
 and raw application findings were removed after inspection. This documentation
 update does not change the product implementation or its previous verification.
+
+The aggregate performance follow-up subsequently completed a full comparison on
+this 451-unit application, preserving report bytes, all 3.3 GB of callgraph and
+exit 2. Evaluation measured 15.311/5.465 seconds and complete checks
+137.471/129.251 seconds with equal, explicitly recorded GC settings. See
+[large application follow-up](full-program-performance.md#large-application-follow-up)
+for the current implementation, exact scope, memory, failed attempts and limits.
+This supersedes the missing full-comparison result above; it does not approve the
+application or establish the exploratory 5–10-second target.
