@@ -409,6 +409,7 @@ A report can contain both confirmed violations and analysis gaps.
 
 The separate `szaniec-callgraph/1` artifact lists services, declared methods,
 observed outgoing/incoming calls, unresolved calls, and unclassified units.
+It is written as pretty-printed JSON with indentation and a trailing newline.
 It is a projection of this run, not a hand-maintained architecture allowlist.
 
 ## Inspect function complexity
