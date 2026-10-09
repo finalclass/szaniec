@@ -89,8 +89,8 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.3.0",
-      "interpretation": "szaniec-well-adapter/3.2.0",
+      "programAccess": "szaniec-ocaml-adapter/1.4.0",
+      "interpretation": "szaniec-well-adapter/3.3.0",
       "rules": "szaniec-rules/3.1.0"
     },
     "exclusions": ["...", "..."]
@@ -111,13 +111,13 @@ as a request edge in `szaniec.json`.
 
 ## Call network artifact (`szaniec.json`)
 
-Format identifier: `szaniec-callgraph/1`. A deterministic projection of
+Format identifier: `szaniec-callgraph/2`. A deterministic projection of
 one check run: per service and per method, the call edges observed in
 the program. Intended as the base for future diagram tooling.
 
 ```json
 {
-  "format": "szaniec-callgraph/1",
+  "format": "szaniec-callgraph/2",
   "inputs": { "policyName": "...", "policyDigest": "sha256:...",
               "snapshotDigest": "sha256:...",
               "programAccess": "...", "interpretation": "...", "rules": "..." },
@@ -133,9 +133,17 @@ the program. Intended as the base for future diagram tooling.
           "calls": [
             { "to": { "service": "OrgModelAccess", "method": "store" },
               "sites": [ { "path": "lib/security/auth_handler.ml",
-                           "line": 277, "col": 4 } ] },
+                           "line": 277, "col": 4 } ],
+              "contexts": [ {
+                "origin": "Security_impl.Impl.check_access",
+                "site": { "path": "lib/security/auth_handler.ml", "line": 277, "col": 4 },
+                "evidencePath": ["Security_impl.Impl.check_access", "OrgModelAccess.store"],
+                "loops": [ { "kind": "for", "api": "",
+                             "site": { "path": "lib/security/auth_handler.ml", "line": 276, "col": 2 } } ],
+                "activations": [], "unknownReasons": []
+              } ] },
             { "to": { "kind": "resource", "name": "database" },
-              "sites": [] }
+              "sites": [], "contexts": [] }
           ],
           "calledBy": [ { "service": "WorkflowManager",
                           "method": "perform_user_action" } ]
@@ -143,6 +151,7 @@ the program. Intended as the base for future diagram tooling.
       ]
     }
   ],
+  "entryPoints": [],
   "unresolved": [ { "unit": "App.Web_client.Tasks_page",
                     "caller": "tasks_handler",
                     "site": { "path": "...", "line": 8, "col": 14 } } ],
@@ -158,6 +167,27 @@ the program. Intended as the base for future diagram tooling.
   (external packages) carry `kind: "external"` with the resolved API
   path; calls that could not be resolved appear in `unresolved`.
 - `calledBy` is the reverse projection over all methods of all services.
+- Each edge additionally carries `contexts`: distinct invocation contexts with
+  `origin`, `site`, `evidencePath`, `loops`, `activations`, and `unknownReasons`.
+  Loop and activation records carry `kind`, `site`, and `api` (empty for syntax).
+  Metadata belongs to each invocation, not to the merged target: the same helper
+  or service can be called both inside and outside a loop. Nested contexts are
+  retained. Empty lists with no unknown reasons mean no repetition was observed
+  on that supported path, not proof of a runtime execution count.
+  An edge with `contexts: []` has no execution-context evidence; it may still
+  retain a dependency from the existing interaction projection.
+- `entryPoints` retains non-RPC boundary entries, including module initializers
+  and callbacks registered outside service methods. Entries have `symbol`,
+  `owner`, `site`, and `calls` using the same edge format. They are not invented
+  RPC methods and do not become entries in `calledBy`.
+- Syntactic loops and recognized collection iterators are `loops`. A supported
+  `Well.every` or subscription callback is a repeated `activation`, which starts
+  independent work. Activation metadata stops at the next service boundary;
+  another service's method is analyzed under its own origin.
+- Unknown callback invocation semantics, unresolved execution targets and bounded
+  traversal limits stay visible in `unknownReasons`. Existing findings and gaps
+  remain authoritative. Repetition annotations alone do not change check exit
+  status; enforcement and TOML exclusions are separate future work.
 - Determinism rules of the report apply here too: identical inputs and
   versions produce byte-identical `szaniec.json`.
 

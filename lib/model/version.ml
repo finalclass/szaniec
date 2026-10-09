@@ -3,7 +3,7 @@
 
 let report_format = "szaniec-report/1"
 
-let callgraph_format = "szaniec-callgraph/1"
+let callgraph_format = "szaniec-callgraph/2"
 
 let complexity_format = "szaniec-complexity/1"
 
@@ -11,13 +11,13 @@ let complexity_metric = "szaniec-cc/1"
 
 let config_format = "szaniec-config/1"
 
-let observation_format = "szaniec-observation/3"
+let observation_format = "szaniec-observation/4"
 
-let interpretation_format = "szaniec-interpretation/3"
+let interpretation_format = "szaniec-interpretation/4"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.3.0"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.4.0"
 
-let adapter_well = "szaniec-well-adapter/3.2.0"
+let adapter_well = "szaniec-well-adapter/3.3.0"
 
 let rules = "szaniec-rules/3.1.0"
 

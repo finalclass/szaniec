@@ -192,6 +192,7 @@ type facts =
   ; mutable symbols: (string * string) list
   ; mutable aliases: (string * string) list
   ; mutable unsupported: Observation.site list
+  ; mutable execution: Observation.execution
   ; mutable flows: Observation.exec_paths list }
 
 (* Executable alternatives of one expression. Above [max_path_alts] the
@@ -986,7 +987,18 @@ let walk_unit
         ; def_loc= Location.none }
       in
       pre_collect c s.str_items ;
-      walk_structure c facts "" s.str_items
+      walk_structure c facts "" s.str_items ;
+      facts.execution <-
+        Execution.observe
+          ~unit_canonical
+          ~resolve:(fun path ->
+            match canonicalize c path with
+            | `Canonical symbol -> symbol
+            | `LocalVar
+             |`Dynamic ->
+                "" )
+          ~site_of_loc:(site_of_loc ~project_root)
+          s
   | Cmt_format.Interface _
    |Cmt_format.Packed _
    |Cmt_format.Partial_implementation _
@@ -1065,6 +1077,8 @@ let observe
     read_infos ;
   let units = ref [] in
   let calls = ref [] in
+  let execution_definitions = ref [] in
+  let execution_invocations = ref [] in
   let vrefs = ref [] in
   let module_aliases = ref [] in
   let alias_only_units = ref [] in
@@ -1171,6 +1185,7 @@ let observe
                   ; symbols= []
                   ; aliases= []
                   ; unsupported= []
+                  ; execution= Observation.empty_execution
                   ; flows= [] }
                 in
                 walk_unit ~project_root ~lib ~unit_name:modname cmt facts ;
@@ -1203,6 +1218,14 @@ let observe
                       (List.sort_uniq compare facts.unsupported)
                     @ !gaps ;
                   calls := List.rev_append facts.calls !calls ;
+                  execution_definitions :=
+                    List.rev_append
+                      facts.execution.definitions
+                      !execution_definitions ;
+                  execution_invocations :=
+                    List.rev_append
+                      facts.execution.invocations
+                      !execution_invocations ;
                   vrefs := List.rev_append facts.vrefs !vrefs ;
                   trefs := List.rev_append facts.trefs !trefs ;
                   flows := List.rev_append facts.flows !flows ;
@@ -1488,6 +1511,20 @@ let observe
         (fun a b -> compare a.Observation.canonical b.Observation.canonical)
         !units
   ; calls= List.sort by_unit !calls
+  ; execution=
+      { Observation.definitions= List.sort_uniq compare !execution_definitions
+      ; invocations=
+          List.map
+            (fun (c : Observation.execution_call) ->
+              { c with
+                execution_callee= resolve c.execution_callee
+              ; execution_args=
+                  List.map
+                    (fun (a : Observation.execution_arg) ->
+                      {a with target= resolve a.target} )
+                    c.execution_args } )
+            !execution_invocations
+          |> List.sort_uniq compare }
   ; exec_paths=
       List.sort
         (fun a b ->

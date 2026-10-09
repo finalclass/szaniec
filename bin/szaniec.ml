@@ -328,9 +328,26 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
         `Assoc [("kind", `String "unresolved"); ("detail", `String detail)]
   in
   let jedge (e : Callgraph.edge) =
+    let repetition (r : Interpretation.repetition) =
+      `Assoc
+        [ ("kind", `String r.kind)
+        ; ("site", jsite r.site)
+        ; ("api", `String r.api) ]
+    in
+    let context (c : Interpretation.execution_context) =
+      `Assoc
+        [ ("origin", `String c.origin)
+        ; ("site", jsite c.site)
+        ; ("evidencePath", `List (List.map (fun s -> `String s) c.context_path))
+        ; ("loops", `List (List.map repetition c.loops))
+        ; ("activations", `List (List.map repetition c.activations))
+        ; ( "unknownReasons"
+          , `List (List.map (fun s -> `String s) c.unknown_reasons) ) ]
+    in
     `Assoc
       [ ("to", jtarget e.Callgraph.target)
-      ; ("sites", `List (List.map jsite e.Callgraph.sites)) ]
+      ; ("sites", `List (List.map jsite e.Callgraph.sites))
+      ; ("contexts", `List (List.map context e.contexts)) ]
   in
   let jmethod (m : Callgraph.method_info) =
     `Assoc
@@ -371,6 +388,16 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
             ; ("interpretation", `String Version.adapter_well)
             ; ("rules", `String Version.rules) ] )
       ; ("services", `List (List.map jservice cg.Callgraph.services))
+      ; ( "entryPoints"
+        , `List
+            (List.map
+               (fun (entry : Callgraph.entry_point) ->
+                 `Assoc
+                   [ ("symbol", `String entry.symbol)
+                   ; ("owner", `String entry.owner)
+                   ; ("site", jsite entry.site)
+                   ; ("calls", `List (List.map jedge entry.calls)) ] )
+               cg.entry_points ) )
       ; ("unresolved", `List (List.map junresolved cg.Callgraph.unresolved))
       ; ( "unclassifiedUnits"
         , `List (List.map (fun u -> `String u) cg.Callgraph.unclassified_units)
@@ -391,6 +418,7 @@ let write_callgraph (r : Finding.report) (out : string option) (root : string) :
       match cg.Callgraph.services with
       | []
         when cg.Callgraph.unresolved = []
+             && cg.Callgraph.entry_points = []
              && cg.Callgraph.unclassified_units = [] ->
           ()
       | _ -> (

@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/3`.
+Format identifier (conceptual): `szaniec-observation/4`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -103,7 +103,31 @@ newer than its implementation artifact makes that implementation stale.
 Calls, valueRefs and typeRefs are sorted by `(unit, caller, callee, site)`
 before the observation is consumed, so downstream stages are deterministic.
 
-## Functions
+## Execution context
+
+`execution` retains a separate invocation graph without changing the executable
+alternatives used by conformance rules. Definitions have compiler-resolved symbol
+identities and source sites, including local functions, anonymous callbacks and
+module initializers. Anonymous identities include their source position.
+Definitions retain parameter arity (including the final argument bound by
+`function` cases) and whether they are module initializers.
+
+Each invocation retains its caller, resolved target or unresolved status, callee
+site, positional/labeled function arguments, and enclosing syntactic `for`/`while`
+regions. Both a `while` condition and body repeat; `for` bounds do not. Function
+and lazy bodies are deferred: defining them inside a loop does not execute them.
+Compiler-resolved aliases are normalized before interpretation. The language
+adapter records callback arguments without deciding which library invokes them.
+Invocations also retain supplied argument counts, a function-valued result flag,
+and whether they represent a later invocation of that result. Interpretation can
+distinguish partial application from a fully applied function returning a closure;
+an unresolved returned closure must not re-execute its factory in the graph.
+
+This evidence describes possible repetition, not actual execution counts. An
+unsupported callback or recursion traversal remains unknown rather than being
+classified as a single execution.
+
+## Function inventory
 
 `functions` is the syntactic-function inventory measured by
 [szaniec-cc/1](complexity-metric.md). Each entry has a deterministic id,

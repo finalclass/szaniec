@@ -88,6 +88,11 @@ for these observable behaviors:
 | New in-scope code has no declared owner | Explicit diagnostic; no silent exclusion |
 | Violations and analysis gaps coexist | Exit 2; retain both in the report |
 | Identical inputs and versions are checked repeatedly | Identical ordered machine-readable findings |
+| A service call is repeated in `for`, `while`, or a supported iterator callback | Graph context retains the loop site, API and path through local helpers |
+| The same helper is called inside and outside a loop | Distinct graph contexts; ordinary paths do not inherit a different caller's loop |
+| A module initializer registers recurring work with `Well.every` | Non-RPC entry point with activation context; inner loops remain separate |
+| A deferred function or partial iterator is created in a loop | Definition alone does not execute its body or add a looped call |
+| Callback semantics or execution traversal cannot be resolved | Explicit unknown graph evidence; existing findings and gaps remain unchanged |
 
 When adding use-case analysis, verify separate handlers and mutually exclusive
 branches do not produce false multi-Manager findings. When adding messaging, verify

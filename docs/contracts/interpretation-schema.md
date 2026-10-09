@@ -36,14 +36,14 @@ edited policy, stale artifacts, missing members and
 ambiguous ownership retain violations or gaps. Browser RPC calls retain layer
 checks. Data-only contracts are absent from the service graph.
 
-Format identifier (conceptual): `szaniec-interpretation/3`.
+Format identifier (conceptual): `szaniec-interpretation/4`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.2.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.3.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -168,6 +168,49 @@ No other call is given queue or event meaning. `Well.Service.cast`,
 `Well.replay`, `Well.MessageBus.replay` and `Well.topic` stay
 `external-call`. A locally bound function that happens to be one of
 the APIs above is `GAP-UNRESOLVED-CALL`, not a guessed kind.
+
+## Repetition projection
+
+`executionInteractions` projects the observation's separate invocation graph.
+Each interaction retains its originating definition, owner and execution
+context: terminal call site, helper evidence path, `loops`, `activations`, and
+`unknownReasons`. The conformance interaction list and executable alternatives
+remain unchanged. InspectionManager combines the projection with existing
+edges in [the graph contract](inspection-contract.md#call-network-artifact-szaniecjson).
+
+The adapter follows compiler-resolved functions inside one boundary and stops
+at service, resource or external calls. Declared RPCs are independent origins
+even when another local function calls them. Module initializers and functions
+with no local callers are additional possible origins; this is static evidence,
+not proof that every origin runs. Recursion cycles retain `recursion` loop
+context. Traversal is bounded at depth 64 and 4096 visited states per origin;
+a truncated path produces an unresolved edge with an explicit unknown reason.
+
+Compiler-observed `for`/`while` regions are loops. Eager callback APIs recognized
+under the exact resolved `Stdlib.List` and `Stdlib.Array` paths add `iterator`
+regions: iteration, maps, folds, filters, partitions, searches, predicates,
+sorting, merging and `init`. Callback positions are API-specific (`init` uses
+position 1; these other APIs use position 0). User modules named `List` or
+`Array` do not receive these semantics. Known partial applications of local
+functions defer execution until invoked; unknown execution phases stay explicit.
+The resolved `Stdlib.@@` and `Stdlib.|>` operators invoke their function argument
+once; composing an iterator through them preserves its callback loop context.
+
+`Well.every` adds `periodic` activation context. `Well.subscribe`,
+`Well.subscribe_keyed`, and `Well.MessageBus.subscribe` add `subscription`
+activation context; `Well.get`, `Well.post`, and `Well.live` add handler activation
+context. `Well.MessageBus.once` invokes its callback without a repetition
+annotation. `Stdlib.ignore` does not invoke function arguments. Other callback
+APIs retain possible callback paths with unknown invocation semantics. Activation
+context stops at the next service boundary, whose methods are separate origins.
+Starting an independent activation resets loops around its registration; loops
+inside the callback are retained. The registration call itself keeps its original
+loop evidence.
+
+Only function-valued arguments are callback candidates. Dynamic targets and
+unsupported callback expressions retain unknown evidence. Neither this projection
+nor an empty loop list changes a conformance finding or proves a runtime count.
+Policy rules and TOML exemptions for repetition are outside this delivery.
 
 ## Suppression rules (framework-generated mechanics)
 

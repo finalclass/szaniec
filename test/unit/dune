@@ -46,6 +46,11 @@
  (libraries szaniec_interpretation_engine szaniec_model))
 
 (test
+ (name repetition)
+ (modules repetition)
+ (libraries szaniec_interpretation_engine szaniec_model))
+
+(test
  (name path_interactions)
  (modules path_interactions)
  (libraries szaniec_conformance_engine szaniec_model))
