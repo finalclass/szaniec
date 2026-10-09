@@ -127,6 +127,17 @@ This evidence describes possible repetition, not actual execution counts. An
 unsupported callback or recursion traversal remains unknown rather than being
 classified as a single execution.
 
+## Ordered execution evidence
+
+ProgramAccess additionally retains structured execution evidence for each
+definition: ordered execution, separate branch arms, loop condition and
+body execution, invocation occurrences, and return or raise exits.
+It preserves source sites and compiler-resolved identities without assigning
+service or framework meaning. Unsupported ordering and execution constructs
+remain explicit unknown evidence. Source position alone does not establish
+execution order. This evidence supplements `execPaths` and `execution`;
+their existing conformance and repetition semantics remain unchanged.
+
 ## Function inventory
 
 `functions` is the syntactic-function inventory measured by

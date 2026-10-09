@@ -16,13 +16,15 @@ type entry_point =
   { symbol: string
   ; owner: string
   ; site: Observation.site
-  ; calls: edge list }
+  ; calls: edge list
+  ; flow: Interpretation.flow }
 
 type method_info =
   { mi_name: string
   ; mi_request: string
   ; mi_response: string
   ; mi_calls: edge list (* sorted, deduplicated *)
+  ; mi_flow: Interpretation.flow
   ; mi_called_by: (string * string) list (* (service, method) sorted *) }
 
 type service_info =

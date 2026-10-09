@@ -417,7 +417,7 @@ severity, participants, locations, and evidence path. Inputs identify the
 policy and approved digest, source snapshot, compiler, adapters, and rules.
 A report can contain both confirmed violations and analysis gaps.
 
-The separate `szaniec-callgraph/2` artifact lists services, declared methods,
+The separate `szaniec-callgraph/3` artifact lists services, declared methods,
 observed outgoing/incoming calls, unresolved calls, and unclassified units.
 It is written as pretty-printed JSON with indentation and a trailing newline.
 It is a projection of this run, not a hand-maintained architecture allowlist.
@@ -430,6 +430,14 @@ function inside a loop does not execute its body. Non-RPC origins appear in
 so recurring listeners can be distinguished from repeated calls within one
 operation. Unknown callback semantics and traversal limits remain explicit.
 These annotations do not add a conformance rule or configuration exemptions.
+Each method and entry point also has an ordered `flow`. Its steps preserve
+separate call occurrences, expand private helpers, and reference called service
+methods' own flows. A viewer can expand an Engine's flow and then resume the
+Manager's next step. Conditions are separate alternatives; loops retain their
+condition and body. Unsupported ordering, callbacks, exception flow, and
+unavailable bodies produce explicit unknown steps and an incomplete flow.
+These are possible static executions, not traces of actual requests or measured
+execution counts. Dependency `calls` remain merged and sorted by target.
 See [the graph contract](docs/contracts/inspection-contract.md#call-network-artifact-szaniecjson).
 
 ## Inspect function complexity
@@ -779,6 +787,7 @@ dune exec ocamlformat -- --check $(git ls-files '*.ml')
 dune build @test/unit/runtest
 deno test --allow-read --allow-write --allow-run test/config/run.ts
 deno test --allow-read --allow-write --allow-run test/loops/run.ts
+deno test --allow-read --allow-write --allow-run test/flows/run.ts
 deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
 dune build test/acceptance/contract_bindings_probe.exe
 deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/application_contracts.ts

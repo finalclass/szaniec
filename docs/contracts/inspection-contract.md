@@ -111,13 +111,13 @@ as a request edge in `szaniec.json`.
 
 ## Call network artifact (`szaniec.json`)
 
-Format identifier: `szaniec-callgraph/2`. A deterministic projection of
+Format identifier: `szaniec-callgraph/3`. A deterministic projection of
 one check run: per service and per method, the call edges observed in
 the program. Intended as the base for future diagram tooling.
 
 ```json
 {
-  "format": "szaniec-callgraph/2",
+  "format": "szaniec-callgraph/3",
   "inputs": { "policyName": "...", "policyDigest": "sha256:...",
               "snapshotDigest": "sha256:...",
               "programAccess": "...", "interpretation": "...", "rules": "..." },
@@ -190,6 +190,75 @@ the program. Intended as the base for future diagram tooling.
   status; enforcement and TOML exclusions are separate future work.
 - Determinism rules of the report apply here too: identical inputs and
   versions produce byte-identical `szaniec.json`.
+
+### Ordered execution flow
+
+Each service method and non-RPC entry point additionally has a `flow`:
+`{ "status": "complete" | "incomplete", "steps": [...] }`.
+Existing `calls`, `sites`, `contexts`, and `calledBy` retain their meaning.
+The flow describes possible execution from static evidence, not a recorded
+request or a guarantee that every listed call completes successfully.
+
+For StoreManager.place_order, a straight-line flow is:
+
+```json
+{
+  "status": "complete",
+  "steps": [
+    { "kind": "call", "interaction": "service-request",
+      "to": { "service": "WarehouseAccess", "method": "validate" } },
+    { "kind": "call", "interaction": "service-request",
+      "to": { "service": "PaymentEngine", "method": "ensure_paid" } },
+    { "kind": "call", "interaction": "service-request",
+      "to": { "service": "CartAccess", "method": "check" } },
+    { "kind": "call", "interaction": "service-request",
+      "to": { "service": "OrdersAccess", "method": "place_order" } },
+    { "kind": "call", "interaction": "service-request",
+      "to": { "service": "WarehouseAccess", "method": "deduce_items" } }
+  ]
+}
+```
+
+PaymentEngine.ensure_paid has its own flow containing PaymentAccess.check.
+A WebClient entry point has a call to StoreManager.place_order.
+The example omits source evidence for brevity.
+
+- Arrays of `steps` preserve proven execution order, never target-name
+  sorting or an order guessed from source line numbers.
+- Each `call` occurrence carries `to`, `interaction`, `site`, and
+  `evidencePath`. Targets use the existing edge target representation.
+  Repeated calls remain separate occurrences, even with the same target
+  or terminal helper site. Their enclosing step positions distinguish them.
+- Private helper execution is expanded at its invocation position within
+  the owning boundary; deferred function bodies are expanded only when
+  supported evidence establishes invocation.
+- A service call references the target service and method's separate flow.
+  Renderers may expand it beneath the call. For a synchronous request,
+  reaching the normal end of the target flow returns to the next caller
+  step. This does not assert that the call cannot fail.
+- A `choice` has `branches`, each with `label` and `steps`. Its branches
+  are alternatives, not consecutive execution. Labels identify source
+  arms without asserting runtime predicate values.
+- A `loop` has `loopKind`, `site`, `api`, `conditionSteps`, and
+  `bodySteps`. These retain the construct's execution semantics;
+  iteration counts are unknown. For-bound evaluation stays outside
+  the loop; while-condition evaluation remains inside it.
+- An `exit` has `outcome`: `return` or `raise`, and `site`. It terminates
+  its containing method or entry-point execution path.
+- An `unknown` has `reason` and `site`. Unsupported ordering, callback
+  semantics, exception flow, or traversal limits remain explicit;
+  known surrounding steps are retained. No arbitrary order is invented.
+- A flow is `complete` only when all relevant execution and ordering
+  evidence for that origin is represented. An unavailable body has an
+  incomplete flow, not an empty complete flow.
+- Independent activations remain separate entry-point flows. Queued
+  commands and publications do not imply synchronous target execution
+  or a return. Unknown ordering does not become sequential execution.
+- Recursive references are retained without infinite expansion.
+  A renderer must mark recursion or unavailable target flows explicitly.
+- Flow completeness is additional diagram evidence. It neither clears
+  existing findings and gaps nor independently changes check exit status.
+  Flow serialization is deterministic while preserving semantic order.
 
 ## Determinism
 

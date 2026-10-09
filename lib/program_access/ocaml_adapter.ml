@@ -1079,6 +1079,7 @@ let observe
   let calls = ref [] in
   let execution_definitions = ref [] in
   let execution_invocations = ref [] in
+  let execution_ordered = ref [] in
   let vrefs = ref [] in
   let module_aliases = ref [] in
   let alias_only_units = ref [] in
@@ -1226,6 +1227,8 @@ let observe
                     List.rev_append
                       facts.execution.invocations
                       !execution_invocations ;
+                  execution_ordered :=
+                    List.rev_append facts.execution.ordered !execution_ordered ;
                   vrefs := List.rev_append facts.vrefs !vrefs ;
                   trefs := List.rev_append facts.trefs !trefs ;
                   flows := List.rev_append facts.flows !flows ;
@@ -1524,7 +1527,35 @@ let observe
                       {a with target= resolve a.target} )
                     c.execution_args } )
             !execution_invocations
-          |> List.sort_uniq compare }
+          |> List.sort_uniq compare
+      ; ordered=
+          (let rec normalize = function
+             | Observation.Invoke c ->
+                 Observation.Invoke
+                   { c with
+                     execution_callee= resolve c.execution_callee
+                   ; execution_args=
+                       List.map
+                         (fun (a : Observation.execution_arg) ->
+                           {a with target= resolve a.target} )
+                         c.execution_args }
+             | Choose branches ->
+                 Choose
+                   (List.map
+                      (fun (label, steps) -> (label, List.map normalize steps))
+                      branches )
+             | Repeat (kind, site, condition, body) ->
+                 Repeat
+                   ( kind
+                   , site
+                   , List.map normalize condition
+                   , List.map normalize body )
+             | step -> step
+           in
+           List.map
+             (fun (symbol, steps) -> (symbol, List.map normalize steps))
+             !execution_ordered
+           |> List.sort compare ) }
   ; exec_paths=
       List.sort
         (fun a b ->

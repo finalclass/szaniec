@@ -60,6 +60,23 @@ type execution_interaction =
   ; execution_interaction: interaction
   ; execution_context: execution_context }
 
+type flow_step =
+  | Flow_call of interaction
+  | Flow_choice of (string * flow_step list) list
+  | Flow_loop of
+      string * Observation.site * string * flow_step list * flow_step list
+  | Flow_exit of string * Observation.site
+  | Flow_unknown of string * Observation.site
+
+type flow =
+  { complete: bool
+  ; steps: flow_step list }
+
+type execution_flow =
+  { flow_origin: Observation.execution_definition
+  ; flow_owner: string
+  ; flow: flow }
+
 let kind_name = function
   | ServiceRequest -> "service-request"
   | ImplementationAccess -> "implementation-access"
@@ -84,4 +101,5 @@ type t =
   ; bindings: binding list (* sorted *)
   ; interactions: interaction list (* sorted, deduplicated *)
   ; execution_interactions: execution_interaction list
+  ; execution_flows: execution_flow list
   ; gaps: Observation.gap list }

@@ -23,7 +23,9 @@ let call ?(loops = []) caller callee =
 
 let project names invocations =
   let execution =
-    {Observation.definitions= List.map definition names; invocations}
+    { Observation.definitions= List.map definition names
+    ; invocations
+    ; ordered= [] }
   in
   Szaniec_interpretation_engine.Repetition.project
     ~execution
