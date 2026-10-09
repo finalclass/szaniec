@@ -79,3 +79,8 @@
  (name bare_spec)
  (modules bare_spec)
  (libraries szaniec_interpretation_engine szaniec_model))
+
+(test
+ (name alias_memo)
+ (modules alias_memo)
+ (libraries szaniec_model))

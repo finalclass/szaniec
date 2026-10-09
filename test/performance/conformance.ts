@@ -24,6 +24,31 @@ const shape = option("--shape", "helpers");
 const complexityCommand = Deno.args.includes("--complexity");
 const filesystemCache = option("--filesystem-cache", "warm");
 const timeoutSeconds = Number(option("--timeout-seconds", "300"));
+const profileAcquisition = Deno.args.includes("--profile-acquisition");
+const cacheFollowups = Deno.args.includes("--cache-followups");
+const snapshotRoots = option("--snapshot-roots")?.split(",");
+if (snapshotRoots && !option("--project-root")) {
+  throw new Error("--snapshot-roots requires --project-root");
+}
+if (
+  cacheFollowups &&
+  (component === "cache" || option("--project-root") && !snapshotRoots)
+) {
+  throw new Error(
+    "--cache-followups requires an uncached component and a snapshot for existing applications",
+  );
+}
+if (
+  snapshotRoots?.some((root) =>
+    !root || root.startsWith("/") || root.split("/").some((p) =>
+      !p || p === "." || p === ".."
+    ) || root === "_build"
+  )
+) {
+  throw new Error(
+    "--snapshot-roots requires comma-separated relative source roots",
+  );
+}
 const components = [
   "conformance",
   "all",
@@ -35,6 +60,8 @@ const components = [
   "cache",
   "parallel",
   "rendering",
+  "imports",
+  "acquisition",
 ];
 if (!components.includes(component)) throw new Error("Unknown --component");
 const evaluationOnly = Deno.args.includes("--evaluation-only");
@@ -73,6 +100,148 @@ async function required(program: string, args: string[], cwd = repo) {
 function replaceOnce(source: string, from: string, to: string) {
   if (source.split(from).length !== 2) throw new Error(`Expected one ${from}`);
   return source.replace(from, to);
+}
+
+async function addAcquisitionProfile(build: string) {
+  const directory = `${build}/lib/program_access`;
+  await Deno.writeTextFile(
+    `${directory}/acquisition_profile.ml`,
+    `
+type timing = { mutable calls : int; mutable inclusive : float; mutable exclusive : float }
+type frame = { mutable children : float }
+let timings = Hashtbl.create 16
+let stack = ref []
+let reset () = Hashtbl.clear timings; stack := []
+let measure name f =
+  let started = Unix.gettimeofday () in
+  let frame = { children = 0. } in
+  stack := frame :: !stack;
+  Fun.protect ~finally:(fun () ->
+    let elapsed = Unix.gettimeofday () -. started in
+    stack := List.tl !stack;
+    (match !stack with parent :: _ -> parent.children <- parent.children +. elapsed | [] -> ());
+    let timing = match Hashtbl.find_opt timings name with
+      | Some timing -> timing
+      | None -> let timing = { calls = 0; inclusive = 0.; exclusive = 0. } in Hashtbl.add timings name timing; timing in
+    timing.calls <- timing.calls + 1;
+    timing.inclusive <- timing.inclusive +. elapsed;
+    timing.exclusive <- timing.exclusive +. max 0. (elapsed -. frame.children)) f
+let report () =
+  Hashtbl.to_seq timings |> List.of_seq |> List.sort compare
+  |> List.iter (fun (name, timing) ->
+    Printf.eprintf "SZANIEC_ACQUISITION_PROFILE name=%s calls=%d inclusive=%.9f exclusive=%.9f\\n%!"
+      name timing.calls timing.inclusive timing.exclusive)
+`,
+  );
+  const cachePath = `${directory}/observation_cache.ml`;
+  let cache = await Deno.readTextFile(cachePath);
+  cache = replaceOnce(cache, "let digest text =", "let digest_raw text =");
+  cache = replaceOnce(
+    cache,
+    "let read_file path =",
+    `let digest text = Acquisition_profile.measure "cache_hash" (fun () -> digest_raw text)
+
+let read_file_raw path =`,
+  );
+  cache = replaceOnce(
+    cache,
+    "let create ~project_root ~evidence =",
+    `let read_file path = Acquisition_profile.measure "cache_io" (fun () -> read_file_raw path)
+
+let create ~project_root ~evidence =`,
+  );
+  await Deno.writeTextFile(cachePath, cache);
+  const path = `${directory}/ocaml_adapter.ml`;
+  let source = await Deno.readTextFile(path);
+  source = replaceOnce(
+    source,
+    "open Szaniec_model\n",
+    `open Szaniec_model
+module Cmt_format = struct
+  include Cmt_format
+  let read_cmt path = Acquisition_profile.measure "cmt_decode" (fun () -> read_cmt path)
+end
+module Cmi_format = struct
+  include Cmi_format
+  let read_cmi path = Acquisition_profile.measure "cmi_decode" (fun () -> read_cmi path)
+end
+module Observation_cache = struct
+  include Observation_cache
+  let key cache ~kind ~artifact ~source = Acquisition_profile.measure "cache_key" (fun () -> key cache ~kind ~artifact ~source)
+  let read cache key = Acquisition_profile.measure "cache_read" (fun () -> read cache key)
+  let write cache key value = Acquisition_profile.measure "cache_write" (fun () -> write cache key value)
+  let artifact_current cache ~artifact = Acquisition_profile.measure "artifact_recheck" (fun () -> artifact_current cache ~artifact)
+end
+module Execution = struct
+  include Execution
+  let observe ~unit_canonical ~resolve ~site_of_loc structure =
+    Acquisition_profile.measure "execution_extract" (fun () -> observe ~unit_canonical ~resolve ~site_of_loc structure)
+end
+`,
+  );
+  source = replaceOnce(
+    source,
+    "let scan_artifacts (project_root",
+    `let scan_sources project_root roots = Acquisition_profile.measure "scan_sources" (fun () -> scan_sources project_root roots)
+
+let scan_artifacts (project_root`,
+  );
+  source = replaceOnce(
+    source,
+    "let strip_build_prefix (p",
+    `let scan_artifacts project_root = Acquisition_profile.measure "scan_artifacts" (fun () -> scan_artifacts project_root)
+
+let strip_build_prefix (p`,
+  );
+  source = replaceOnce(
+    source,
+    "let interface_crc path name =",
+    `let current_input ~project_root ~source cmt artifact =
+  Acquisition_profile.measure "freshness_source" (fun () -> current_input ~project_root ~source cmt artifact)
+
+let interface_crc path name =`,
+  );
+  source = replaceOnce(
+    source,
+    "let current_imports ~project_root",
+    `let current_interface ~project_root ~source cmt artifact =
+  Acquisition_profile.measure "freshness_interface" (fun () -> current_interface ~project_root ~source cmt artifact)
+
+let current_imports ~project_root`,
+  );
+  source = replaceOnce(
+    source,
+    "let sha256_hex (s",
+    `let current_imports ~project_root ~local_units cmt =
+  Acquisition_profile.measure "freshness_imports" (fun () -> current_imports ~project_root ~local_units cmt)
+
+let sha256_hex (s`,
+  );
+  source = replaceOnce(
+    source,
+    "type evidence =",
+    `let walk_unit ?execution ~project_root ~lib ~unit_name cmt facts =
+  Acquisition_profile.measure "facts_extract" (fun () -> walk_unit ?execution ~project_root ~lib ~unit_name cmt facts)
+
+type evidence =`,
+  );
+  source = replaceOnce(source, "let observe\n", "let observe_raw\n");
+  source = replaceOnce(
+    source,
+    "  let module_aliases =\n",
+    `  Acquisition_profile.measure "normalize_observation" (fun () ->
+  let module_aliases =
+`,
+  );
+  source += ")\n";
+  source += `
+let observe ?evidence ~project_root ~program_roots ~assume_fresh () =
+  Acquisition_profile.reset ();
+  Fun.protect ~finally:Acquisition_profile.report (fun () ->
+    Acquisition_profile.measure "observation" (fun () ->
+      observe_raw ?evidence ~project_root ~program_roots ~assume_fresh ()))
+`;
+  await Deno.writeTextFile(path, source);
 }
 
 function instrument(source: string) {
@@ -135,6 +304,15 @@ function instrument(source: string) {
     "  let projection_started = Unix.gettimeofday () in\n" + projection +
       '  Printf.eprintf "SZANIEC_STAGE projection=%.9f\\n%!" (Unix.gettimeofday () -. projection_started) ;\n',
   );
+  if (profileAcquisition) {
+    source = source.replaceAll(
+      "  Gc.full_major () ;\n",
+      `  let gc_started = Unix.gettimeofday () in
+  Gc.full_major () ;
+  Printf.eprintf "SZANIEC_FORCED_GC seconds=%.9f\\n%!" (Unix.gettimeofday () -. gc_started) ;
+`,
+    );
+  }
   return source;
 }
 
@@ -313,6 +491,46 @@ try {
         Deno.readTextFile(`${build}/${path}`);
       const writeCurrent = (path: string, source: string) =>
         Deno.writeTextFile(`${build}/${path}`, source);
+      if (component === "imports" || component === "acquisition") {
+        const path = "lib/program_access/ocaml_adapter.ml";
+        const source = await readCurrent(path);
+        const original = await required("git", ["show", `${baseline}:${path}`]);
+        const section = (text: string) => {
+          const start = text.indexOf("let current_imports ~project_root");
+          const end = text.indexOf("let sha256_hex", start);
+          if (start < 0 || end < 0) {
+            throw new Error("Missing import-validation section");
+          }
+          return text.slice(start, end);
+        };
+        await writeCurrent(
+          path,
+          replaceOnce(source, section(source), section(original)),
+        );
+      }
+      if (component === "acquisition") {
+        const path = "lib/model/canonical.ml";
+        const source = await readCurrent(path);
+        const original = await required("git", ["show", `${baseline}:${path}`]);
+        const currentStart = source.indexOf("let alias_resolver_cache =");
+        const currentEnd = source.indexOf("let resolve_alias", currentStart);
+        const originalStart = original.indexOf("let alias_resolver aliases =");
+        const originalEnd = original.indexOf(
+          "let resolve_alias",
+          originalStart,
+        );
+        if (
+          [currentStart, currentEnd, originalStart, originalEnd].some((i) =>
+            i < 0
+          )
+        ) throw new Error("Missing alias-resolution section");
+        await writeCurrent(
+          path,
+          source.slice(0, currentStart) +
+            original.slice(originalStart, originalEnd) +
+            source.slice(currentEnd),
+        );
+      }
       const readBaseline = (path: string) =>
         required("git", ["show", `${baseline}:${path}`]);
       if (component === "conformance") {
@@ -420,6 +638,7 @@ try {
         adapter.replaceAll(marker, "~execution:Observation.empty_execution"),
       );
     }
+    if (profileAcquisition) await addAcquisitionProfile(build);
     await required("dune", [
       "build",
       projectionOnly
@@ -469,10 +688,36 @@ try {
   }];
   const projectRoot = option("--project-root");
   if (projectRoot) {
+    let root = await Deno.realPath(projectRoot);
+    let config = option("--config", "szaniec.toml")!;
+    if (snapshotRoots) {
+      const snapshot = `${temporary}/application`;
+      await Deno.mkdir(`${snapshot}/_build`, { recursive: true });
+      for (const path of [...snapshotRoots, "_build"]) {
+        const destination = `${snapshot}/${path}`;
+        await Deno.mkdir(destination, {
+          recursive: true,
+        });
+        await required("cp", [
+          "-a",
+          "--reflink=auto",
+          `${root}/${path}/.`,
+          destination,
+        ]);
+      }
+      await seedBuild(snapshot);
+      const snapshotConfig = `${temporary}/application-config.toml`;
+      await Deno.copyFile(
+        config.startsWith("/") ? config : `${root}/${config}`,
+        snapshotConfig,
+      );
+      config = snapshotConfig;
+      root = snapshot;
+    }
     projects.push({
       label: "application",
-      root: await Deno.realPath(projectRoot),
-      config: option("--config", "szaniec.toml")!,
+      root,
+      config,
     });
   }
   if (component === "cache") {
@@ -504,9 +749,24 @@ try {
     }
     let reference: Output | undefined;
     const samples: Sample[][] = [[], []];
-    for (let run = 0; run < runs; run++) {
-      const order = run % 2 ? [1, 0] : [0, 1];
+    const rounds: {
+      run: number;
+      order: number[];
+      cacheFollowup?: "cold" | "warm";
+    }[] = Array.from(
+      { length: runs },
+      (_, run) => ({ run, order: run % 2 ? [1, 0] : [0, 1] }),
+    );
+    if (cacheFollowups) {
+      rounds.push(
+        { run: runs, order: [1], cacheFollowup: "cold" },
+        { run: runs + 1, order: [1], cacheFollowup: "warm" },
+      );
+    }
+    for (const { run, order, cacheFollowup } of rounds) {
       for (const i of order) {
+        const cacheEnabled = component === "cache" && i === 1 ||
+          !!cacheFollowup;
         if (filesystemCache === "cold") {
           if (selectedTime) {
             throw new Error(
@@ -557,9 +817,7 @@ try {
           ],
           repo,
           {
-            SZANIEC_OBSERVATION_CACHE: component === "cache" && i === 1
-              ? "on"
-              : "off",
+            SZANIEC_OBSERVATION_CACHE: cacheEnabled ? "on" : "off",
             SZANIEC_DOMAINS: String(
               component === "parallel" && i === 1 ? domains : 1,
             ),
@@ -586,6 +844,31 @@ try {
             : { graphPath }),
         };
         const report = JSON.parse(decoder.decode(output.report));
+        const acquisitionProfile = [...stderr.matchAll(
+          /SZANIEC_ACQUISITION_PROFILE name=(\S+) calls=(\d+) inclusive=([\d.]+) exclusive=([\d.]+)/g,
+        )].map((match) => ({
+          name: match[1],
+          calls: Number(match[2]),
+          inclusiveSeconds: Number(match[3]),
+          exclusiveSeconds: Number(match[4]),
+        }));
+        if (profileAcquisition) {
+          const observation = acquisitionProfile.find((p) =>
+            p.name === "observation"
+          );
+          const exclusive = acquisitionProfile.reduce(
+            (sum, p) => sum + p.exclusiveSeconds,
+            0,
+          );
+          if (
+            !observation || observation.calls !== 1 ||
+            Math.abs(exclusive - observation.inclusiveSeconds) > 0.001
+          ) {
+            throw new Error(
+              `${project.label}: missing or overlapping acquisition timings`,
+            );
+          }
+        }
         if (
           complexityCommand
             ? report.format !== "szaniec-complexity/1"
@@ -647,13 +930,15 @@ try {
           ),
           evaluationAllocatedBytes: Number(timing[2]),
         };
-        samples[i].push(sample);
+        if (!cacheFollowup) samples[i].push(sample);
         console.log(JSON.stringify({
           project: project.label,
           component,
           filesystemCache,
           evaluationOnly,
           evaluator: i === 0 ? "baseline" : "indexed",
+          cacheEnabled,
+          ...(cacheFollowup ? { cacheFollowup } : {}),
           run: run + 1,
           units: Number(timing[3]),
           paths: Number(timing[4]),
@@ -670,7 +955,15 @@ try {
           peakKiB: sample.peakKiB,
           cpuSeconds: sample.cpuSeconds,
           acquisition: stderr.match(/SZANIEC_ACQUISITION[^\n]*/)?.[0],
-          ...(component === "cache"
+          ...(profileAcquisition
+            ? {
+              acquisitionProfile,
+              forcedGcSeconds: [
+                ...stderr.matchAll(/SZANIEC_FORCED_GC seconds=([\d.]+)/g),
+              ].reduce((sum, match) => sum + Number(match[1]), 0),
+            }
+            : {}),
+          ...(component === "cache" || cacheFollowup
             ? {
               cache: await cacheSize(
                 `${project.root}/_build/.szaniec-observations`,

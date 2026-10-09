@@ -366,3 +366,8 @@ OCAMLRUNPARAM=o=20 deno run --allow-read --allow-write --allow-run \
 
 The temporary policy selects `roots = ["lib"]` and
 `approved_shared_modules = []`. No policy approval is created for that application.
+
+The [acquisition profiling follow-up](acquisition-profiling.md) separates remaining
+freshness, compiler, cache and normalization costs, measures first/warm cache use
+on a temporary application snapshot, and validates on-demand compiler import-path
+construction and inventory-scoped alias memoization against this implementation.

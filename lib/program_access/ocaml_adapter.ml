@@ -237,11 +237,11 @@ let current_imports ~project_root ~local_units (cmt : Cmt_format.cmt_infos) =
       | Some _ -> (
           let file = String.uncapitalize_ascii name ^ ".cmi" in
           let path =
-            List.find_opt
-              Sys.file_exists
-              (List.map
-                 (fun dir -> compiler_path ~project_root cmt (dir // file))
-                 directories )
+            List.find_map
+              (fun dir ->
+                let path = compiler_path ~project_root cmt (dir // file) in
+                if Sys.file_exists path then Some path else None )
+              directories
           in
           match path with
           | Some path -> interface_crc path name = expected
