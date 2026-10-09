@@ -59,3 +59,23 @@
  (name conformance_indexes)
  (modules conformance_indexes)
  (libraries szaniec_conformance_engine szaniec_model))
+
+(test
+ (name parallel_paths)
+ (modules parallel_paths)
+ (libraries szaniec_conformance_engine))
+
+(test
+ (name callgraph_indexes)
+ (modules callgraph_indexes)
+ (libraries szaniec_inspection_manager szaniec_architecture_access szaniec_model))
+
+(test
+ (name observation_cache)
+ (modules observation_cache)
+ (libraries szaniec_program_access unix))
+
+(test
+ (name bare_spec)
+ (modules bare_spec)
+ (libraries szaniec_interpretation_engine szaniec_model))

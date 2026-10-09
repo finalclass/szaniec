@@ -79,7 +79,13 @@ let policy =
   ; public_contracts= []
   ; resources= [] }
 
-let evaluate ?units ?ownerships ?(gaps = []) exec_paths interactions =
+let evaluate
+    ?(parallel = true)
+    ?units
+    ?ownerships
+    ?(gaps = [])
+    exec_paths
+    interactions =
   let canonical_units =
     List.map (fun (p : Observation.exec_paths) -> p.paths_unit) exec_paths
     |> List.sort_uniq compare
@@ -90,18 +96,37 @@ let evaluate ?units ?ownerships ?(gaps = []) exec_paths interactions =
   let ownerships =
     Option.value ownerships ~default:(List.map owner canonical_units)
   in
-  Engine.evaluate
-    ~approved:true
-    ~policy
-    ~cy:{services= []; contracts= []}
-    ~observation:(observation exec_paths units)
-    ~interpretation:
-      { ownerships
-      ; bindings= []
-      ; interactions
-      ; execution_interactions= []
-      ; execution_flows= []
-      ; gaps }
+  let interpretation =
+    { Interpretation.ownerships
+    ; bindings= []
+    ; interactions
+    ; execution_interactions= []
+    ; execution_flows= []
+    ; gaps }
+  in
+  let run domains observation =
+    Engine.evaluate_with_domains
+      ~domains
+      ~approved:true
+      ~policy
+      ~cy:{services= []; contracts= []}
+      ~observation
+      ~interpretation
+  in
+  let reference = run 1 (observation exec_paths units) in
+  ( if parallel && exec_paths <> []
+    then
+      let repeated =
+        List.concat
+          (List.init ((256 / List.length exec_paths) + 1) (fun _ -> exec_paths))
+      in
+      List.iter
+        (fun domains ->
+          check
+            (run domains (observation repeated units) = reference)
+            "parallel paths must retain sequential findings" )
+        [1; 2; 4; 8] ) ;
+  reference
 
 let rules findings = List.map (fun (f : Finding.t) -> f.rule) findings
 
@@ -262,13 +287,14 @@ let () =
     (evaluate [unknown] [] = [])
     "unresolved steps are retained without invented fan-out" ;
   let units = List.map unit_info ["App"; "App.Helper"; "App.Helper.Nested"] in
-  let index =
-    Engine.index_first (fun (u : Observation.unit_info) -> u.canonical) units
+  let resolve =
+    Canonical.unit_resolver
+      (List.map (fun (u : Observation.unit_info) -> u.canonical) units)
   in
   List.iter
     (fun path ->
       check
-        ( Engine.unit_prefix index path
+        ( resolve path
         = Canonical.unit_prefix
             (List.map (fun u -> u.Observation.canonical) units)
             path )
@@ -285,6 +311,25 @@ let () =
   check
     (evaluate [paths "entry" [[]]] requests = [])
     "indexes are scoped to one evaluation" ;
+  let inventory = List.init 2000 (fun n -> "Root.Unit" ^ string_of_int n) in
+  let resolve = Canonical.unit_resolver inventory in
+  List.iter
+    (fun n ->
+      let path =
+        (if n mod 3 = 0 then "Missing" else "Root")
+        ^ ".Unit"
+        ^ string_of_int n
+        ^ ".Nested.run"
+      in
+      let expected = Canonical.unit_prefix inventory path in
+      check
+        (resolve path = expected && resolve path = expected)
+        "cached resolver corpus agrees" )
+    (List.init 3000 Fun.id) ;
+  check
+    ( Canonical.unit_resolver ["Missing.Unit0"] "Missing.Unit0.run"
+    = Some "Missing.Unit0" )
+    "new inventory cannot reuse a cached miss" ;
   let count = 40_000 in
   let large_paths = List.init count (fun n -> paths (string_of_int n) [[]]) in
   let large_units =
@@ -300,6 +345,7 @@ let () =
   let before = Gc.allocated_bytes () in
   let fs =
     evaluate
+      ~parallel:false
       ~units:(unit_info "App.Page" :: large_units)
       ~ownerships:(ownerships @ [owner "App.Page"])
       large_paths

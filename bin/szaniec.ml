@@ -1200,6 +1200,9 @@ let main () =
 
 let () =
   try main () with
+  | Invalid_argument e ->
+      prerr_endline ("szaniec: " ^ e) ;
+      exit 2
   | Sys_error e ->
       prerr_endline ("szaniec: " ^ e) ;
       exit 2

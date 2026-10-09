@@ -36,19 +36,6 @@ let index_first key entries =
     entries ;
   index
 
-let unit_prefix unit_index path =
-  let rec find candidate =
-    if candidate = ""
-    then None
-    else if Hashtbl.mem unit_index candidate
-    then Some candidate
-    else
-      match String.rindex_opt candidate '.' with
-      | None -> None
-      | Some i -> find (String.sub candidate 0 i)
-  in
-  find (Canonical.join_dots (Canonical.split_dots path))
-
 let index_interaction_sites (interactions : Interpretation.interaction list) =
   let index = Hashtbl.create 128 in
   List.iteri
@@ -85,7 +72,8 @@ let interactions_on index (steps : Observation.path_step list) :
   |> List.sort (fun (a, _) (b, _) -> compare a b)
   |> List.map snd
 
-let evaluate
+let evaluate_with_domains
+    ~domains
     ~(approved : bool)
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
@@ -97,6 +85,12 @@ let evaluate
     index_first
       (fun (u : Observation.unit_info) -> u.canonical)
       observation.units
+  in
+  let resolve_unit =
+    Canonical.unit_resolver
+      (List.map
+         (fun (u : Observation.unit_info) -> u.canonical)
+         observation.units )
   in
   let ownership_index =
     index_first
@@ -117,7 +111,7 @@ let evaluate
         ; owner_service= "" }
   in
   let paths_of unit caller = Hashtbl.find_opt path_index (unit, caller) in
-  let unit_prefix = unit_prefix unit_index in
+  let unit_prefix = resolve_unit in
   (* Whitelist exceptions belong to the selected approved policy. An
      edited file is still checked, but its list does not grant them. *)
   let shared_modules =
@@ -759,20 +753,26 @@ let evaluate
     interactions_on
       (index_interaction_sites interpretation.Interpretation.interactions)
   in
-  let gap_path unit caller =
-    add
-      { Finding.rule= "GAP-AMBIGUOUS-PATH"
-      ; severity= Finding.GapFinding
-      ; message=
-          Printf.sprintf "executable paths of %s.%s cannot be built" unit caller
-      ; participants= []
-      ; locations= [{Finding.loc_path= source_of unit; loc_line= 0; loc_col= 0}]
-      ; evidence_path= [] }
-  in
-  List.iter
-    (fun (p : Observation.exec_paths) ->
-      let key = p.Observation.paths_unit ^ "\n" ^ p.Observation.paths_caller in
-      if Hashtbl.mem targeted key
+  let evaluate_path (p : Observation.exec_paths) =
+    let findings = ref [] in
+    let add f = findings := f :: !findings in
+    let gap_path unit caller =
+      add
+        { Finding.rule= "GAP-AMBIGUOUS-PATH"
+        ; severity= Finding.GapFinding
+        ; message=
+            Printf.sprintf
+              "executable paths of %s.%s cannot be built"
+              unit
+              caller
+        ; participants= []
+        ; locations=
+            [{Finding.loc_path= source_of unit; loc_line= 0; loc_col= 0}]
+        ; evidence_path= [] }
+    in
+
+    let key = p.Observation.paths_unit ^ "\n" ^ p.Observation.paths_caller in
+    ( if Hashtbl.mem targeted key
       then ()
       else
         let owner = owner_of p.Observation.paths_unit in
@@ -869,9 +869,21 @@ let evaluate
                          (boundary :: queued)
                          (locs_of Interpretation.QueuedCommand is_q)
                          (evidence_of Interpretation.QueuedCommand is_q) ) ) )
-                alts ) )
-    observation.Observation.exec_paths ;
+                alts ) ) ;
+    !findings
+  in
+  Parallel_paths.map ~domains evaluate_path observation.Observation.exec_paths
+  |> List.iter (fun local -> findings := local @ !findings) ;
   List.sort Finding.compare (Finding.dedupe !findings)
+
+let evaluate ~approved ~policy ~cy ~observation ~interpretation =
+  evaluate_with_domains
+    ~domains:(Parallel_paths.configured_domains ())
+    ~approved
+    ~policy
+    ~cy
+    ~observation
+    ~interpretation
 
 let gap_finding (g : Observation.gap) : Finding.t =
   { Finding.rule= g.Observation.gap_code

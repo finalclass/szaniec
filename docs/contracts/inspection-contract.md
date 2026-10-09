@@ -55,6 +55,17 @@ run conformance rules and it does not require an approved policy.
   [suggestion contract](suggestion-contract.md). It does not change the
   check exit status and does not add findings to the check report.
 
+## Deterministic parallel evaluation
+
+`SZANIEC_DOMAINS` selects 1 through 8 evaluation domains (default 1).
+Small workloads remain sequential. ConformanceEngine prepares read-only lookup
+data and evaluates independent root execution paths with local finding lists;
+global rules still see the entire program and run once. Workers never access
+compiler trees or mutate shared lookup tables. Findings are deduplicated and
+sorted using the same comparator as sequential evaluation. Exceptions propagate
+after all started workers are joined. Domain creation failure falls back to the
+sequential path. Invalid domain settings fail explicitly.
+
 ## Profile
 
 First delivery profile: `well-ocaml-core` — OCaml 5.4.x artifacts
@@ -90,7 +101,7 @@ as a request edge in `szaniec.json`.
     "compiler": "5.4.1",
     "adapters": {
       "programAccess": "szaniec-ocaml-adapter/1.5.0",
-      "interpretation": "szaniec-well-adapter/3.4.0",
+      "interpretation": "szaniec-well-adapter/3.4.1",
       "rules": "szaniec-rules/3.1.0"
     },
     "exclusions": ["...", "..."]

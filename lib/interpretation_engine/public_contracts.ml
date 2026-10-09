@@ -267,17 +267,15 @@ let validate_surfaces
     (obs : Observation.t)
     ownerships =
   let gaps = ref [] in
+  let resolve_unit =
+    Canonical.unit_resolver
+      (List.map (fun (u : Observation.unit_info) -> u.canonical) obs.units)
+  in
   let surfaces = if approved then policy.public_contracts else [] in
   let valid =
     List.filter
       (fun (p : Policy.public_contract) ->
-        let unit =
-          Canonical.unit_prefix
-            (List.map
-               (fun (u : Observation.unit_info) -> u.canonical)
-               obs.units )
-            p.public_module
-        in
+        let unit = resolve_unit p.public_module in
         let owner = Option.bind unit (Hashtbl.find_opt ownerships) in
         let valid =
           List.exists

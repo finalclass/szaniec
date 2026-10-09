@@ -101,6 +101,39 @@ let unit_prefix (units : t list) (c : t) : t option =
   in
   try_n (List.length segs)
 
+let resolver_cache =
+  Domain.DLS.new_key (fun () ->
+      ( (ref None : unit ref option ref)
+      , (Hashtbl.create 128 : (t, t option) Hashtbl.t) ) )
+
+let unit_resolver units =
+  let index = Hashtbl.create (List.length units) in
+  List.iter (fun unit -> Hashtbl.replace index unit ()) units ;
+  let identity = ref () in
+  fun path ->
+    let owner, memo = Domain.DLS.get resolver_cache in
+    ( match !owner with
+    | Some previous when previous == identity -> ()
+    | _ ->
+        Hashtbl.clear memo ;
+        owner := Some identity ) ;
+    match Hashtbl.find_opt memo path with
+    | Some result -> result
+    | None ->
+        let rec find candidate =
+          if candidate = ""
+          then None
+          else if Hashtbl.mem index candidate
+          then Some candidate
+          else
+            match String.rindex_opt candidate '.' with
+            | None -> None
+            | Some i -> find (String.sub candidate 0 i)
+        in
+        let result = find (join_dots (split_dots path)) in
+        Hashtbl.replace memo path result ;
+        result
+
 let alias_resolver aliases =
   let index = Hashtbl.create (List.length aliases) in
   List.iter

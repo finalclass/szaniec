@@ -112,6 +112,10 @@ Do not present a manually supplied graph test as proof of language support.
 - Update README status only as capabilities become executable and verified.
 - Leave editor integration, incremental caches, a plugin marketplace,
   servers and databases outside this delivery. Contract-size heuristics,
-  coverage targets and CRAP remain separate work. Local cyclomatic
+  coverage targets and CRAP remain separate work. The subsequent performance
+  extension accepts the local observation cache and bounded parallel path
+  evaluation defined in the observation and inspection contracts; see
+  [performance decisions](docs/decisions/full-program-performance.md).
+  Local cyclomatic
   complexity is the `szaniec complexity` inventory (`szaniec-cc/1`); it
   is not a conformance gate.

@@ -177,6 +177,10 @@ let classify_ownership
     (cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) :
     ownership_map * Observation.gap list * (string, string) Hashtbl.t =
+  let resolve_unit =
+    Canonical.unit_resolver
+      (List.map (fun (u : Observation.unit_info) -> u.canonical) obs.units)
+  in
   let map : ownership_map = Hashtbl.create 64 in
   let gaps = ref [] in
   (* implementation binding from compiler evidence: a unit calling
@@ -188,13 +192,7 @@ let classify_ownership
       match List.rev (Canonical.split_dots c.Observation.callee) with
       | "make_spec" :: prev :: _ -> (
           let bound_contract =
-            Option.bind
-              (Canonical.unit_prefix
-                 (List.map
-                    (fun (u : Observation.unit_info) -> u.canonical)
-                    obs.units )
-                 c.callee )
-              (Hashtbl.find_opt contracts)
+            Option.bind (resolve_unit c.callee) (Hashtbl.find_opt contracts)
           in
           let svc =
             List.find_opt
@@ -220,8 +218,7 @@ let classify_ownership
   List.iter
     (fun (v : Observation.value_ref) ->
       match List.rev (Canonical.split_dots v.Observation.ref_target) with
-      | "spec" :: mod_segs_rev -> (
-          let unit_root = List.hd mod_segs_rev in
+      | "spec" :: unit_root :: _ -> (
           let stem_candidates =
             [unit_root]
             @
@@ -249,14 +246,7 @@ let classify_ownership
           match svc with
           | Some s ->
               let target_unit =
-                match
-                  Canonical.unit_prefix
-                    (List.map
-                       (fun (u : Observation.unit_info) ->
-                         u.Observation.canonical )
-                       obs.Observation.units )
-                    v.Observation.ref_target
-                with
+                match resolve_unit v.Observation.ref_target with
                 | Some u -> u
                 | None ->
                     List.hd (Canonical.split_dots v.Observation.ref_target)
@@ -476,13 +466,7 @@ let classify_ownership
               match Canonical.resolve_alias obs.module_aliases target with
               | None -> false
               | Some target -> (
-                match
-                  Canonical.unit_prefix
-                    (List.map
-                       (fun (u : Observation.unit_info) -> u.canonical)
-                       obs.units )
-                    target
-                with
+                match resolve_unit target with
                 | Some target -> (
                   match (Hashtbl.find map target).owner_class with
                   | Interpretation.Contract_of _
@@ -571,11 +555,7 @@ let classify_ownership
       if String.length c.Observation.callee > 0
       then
         match
-          ( Canonical.unit_prefix
-              (List.map
-                 (fun (u : Observation.unit_info) -> u.Observation.canonical)
-                 obs.Observation.units )
-              c.Observation.callee
+          ( resolve_unit c.Observation.callee
           , Hashtbl.find_opt map c.Observation.call_unit )
         with
         | Some target_unit, Some caller -> (
@@ -674,6 +654,7 @@ let interpret
       (fun (u : Observation.unit_info) -> u.Observation.canonical)
       obs.Observation.units
   in
+  let resolve_unit = Canonical.unit_resolver unit_paths in
   let ambiguous_units = Hashtbl.create 16 in
   let ambiguous_paths = Hashtbl.create 16 in
   List.iter
@@ -697,12 +678,12 @@ let interpret
         path = prefix || Canonical.starts_with ~prefix:(prefix ^ ".") path )
       unavailable_contracts
     ||
-    match Canonical.unit_prefix unit_paths path with
+    match resolve_unit path with
     | Some unit -> Hashtbl.mem unavailable_units unit
     | None -> false
   in
   let owner_of_path (path : string) : Interpretation.ownership =
-    match Canonical.unit_prefix unit_paths path with
+    match resolve_unit path with
     | Some u -> Hashtbl.find ownership_map u
     | None ->
         { owner_module= path
@@ -717,14 +698,14 @@ let interpret
       then Hashtbl.replace generated_units u.canonical () )
     obs.units ;
   let generated_path path =
-    match Canonical.unit_prefix unit_paths path with
+    match resolve_unit path with
     | Some unit -> Hashtbl.mem generated_units unit
     | None -> false
   in
   let contract_call_target (callee : string) :
       (Szaniec_architecture_access.Cyrograf.service * string (* method *))
       option =
-    match Canonical.unit_prefix unit_paths callee with
+    match resolve_unit callee with
     | None -> None
     | Some unit when Hashtbl.mem ambiguous_units unit -> None
     | Some unit -> (
@@ -754,7 +735,7 @@ let interpret
       | _ -> None )
   in
   let contract_member path =
-    match Canonical.unit_prefix unit_paths path with
+    match resolve_unit path with
     | Some unit when Hashtbl.mem ambiguous_units unit -> None
     | Some unit -> (
       match
@@ -790,13 +771,13 @@ let interpret
   let serialization_dependency caller target =
     serializer_body caller
     &&
-    match Canonical.unit_prefix unit_paths target with
+    match resolve_unit target with
     | Some unit
       when Hashtbl.mem serialization_runtimes unit
            && unit_owner_class unit
               = Interpretation.Contract_data "serialization runtime" ->
         (* The runtime is private to this projection library. *)
-        let caller_unit = Canonical.unit_prefix unit_paths caller in
+        let caller_unit = resolve_unit caller in
         let prefix =
           String.sub unit 0 (String.length unit - String.length "Drut_runtime")
         in
@@ -811,7 +792,7 @@ let interpret
     | _ -> false
   in
   let public_module_path path =
-    match Canonical.unit_prefix unit_paths path with
+    match resolve_unit path with
     | None -> false
     | Some unit -> (
       match Hashtbl.find_opt contracts unit with
@@ -858,7 +839,7 @@ let interpret
     {n_unit= c.Observation.call_unit; n_symbol= c.Observation.caller}
   in
   let target_of_callee callee =
-    match Canonical.unit_prefix unit_paths callee with
+    match resolve_unit callee with
     | Some u ->
         let pl = String.length u + 1 in
         let rel =
@@ -1319,14 +1300,7 @@ let interpret
               then None
               else
                 let target_unit =
-                  match
-                    Canonical.unit_prefix
-                      (List.map
-                         (fun (u : Observation.unit_info) ->
-                           u.Observation.canonical )
-                         obs.Observation.units )
-                      v.Observation.ref_target
-                  with
+                  match resolve_unit v.Observation.ref_target with
                   | Some u -> u
                   | None -> v.Observation.ref_target
                 in
@@ -1345,7 +1319,7 @@ let interpret
   List.iter
     (fun (v : Observation.value_ref) ->
       let caller_owner = owner_of_path v.Observation.ref_unit in
-      match Canonical.unit_prefix unit_paths v.Observation.ref_target with
+      match resolve_unit v.Observation.ref_target with
       | _ when unavailable_target v.ref_target ->
           unavailable_gap v.ref_target v.ref_site
       | Some target_unit -> (
@@ -1612,7 +1586,11 @@ let interpret
   in
   let entry_point symbol =
     let owner = owner_of_path symbol in
-    let name = List.rev (Canonical.split_dots symbol) |> List.hd in
+    let name =
+      match List.rev (Canonical.split_dots symbol) with
+      | name :: _ -> name
+      | [] -> ""
+    in
     List.exists
       (fun service ->
         service.Szaniec_architecture_access.Cyrograf.svc_name

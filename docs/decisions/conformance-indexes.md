@@ -8,9 +8,10 @@ finding order; hash-table enumeration does not replace them.
 
 The unit table also supplies membership for ConformanceEngine's longest unit-prefix
 lookup. It normalizes dotted paths through the existing Canonical functions and
-checks successively shorter prefixes. This resolver stays inside ConformanceEngine;
-other components retain their existing resolvers. No results or indexes survive
-an evaluation.
+checks successively shorter prefixes. Canonical now owns the reusable resolver
+used by both Engines, with domain-local memoization bounded to the most recently
+used observation resolver. The full performance extension is recorded in
+[full-program performance](full-program-performance.md).
 
 Recursive expansion retains its visiting set, depth limit of eight, alternative
 limit of 48, and ambiguity failures. Expansion results are not memoized: a helper
@@ -33,7 +34,7 @@ exercise actual compiler artifacts and source-to-diagnostic integration.
 
 ## Reproducible full-check comparison
 
-Run from the repository root on Linux with GNU `time`:
+Run from the repository root on Linux:
 
 ```sh
 deno run --allow-read --allow-write --allow-run \
@@ -50,8 +51,10 @@ separately. Compilation is outside the measurement.
 
 When the checkout has an `_build` tree, its artifacts seed the temporary builds;
 Dune still verifies and rebuilds changed inputs. Set `TMPDIR` to a disk-backed
-directory if the default temporary filesystem cannot hold these builds. GNU `time`
-must be on `PATH`, or selected with `--time-command <executable>`.
+directory if the default temporary filesystem cannot hold these builds. The current
+helper builds its native OS measurement probe using `cc`. GNU `time` remains
+available with `--time-command <executable>`. The recorded original #14 measurements
+below used GNU time; the aggregate extension uses the native probe.
 For memory-constrained investigations, `--collect-between-stages` performs a full
 major collection after observation, interpretation, evaluation and callgraph
 construction in both copies. This is benchmark instrumentation, not a product GC

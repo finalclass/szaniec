@@ -69,7 +69,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.4.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.4.1`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).

@@ -72,7 +72,7 @@ Verified with `make build`, `make verify`, and
 `deno check scripts/release.ts test/acceptance/public_contracts.ts test/acceptance/application_contracts.ts test/fixtures/owned-contracts-app/lib/generated/preprocessed/transform.ts`.
 The packaged base observes **18 units, 78 calls, 4 type references, 0 violations
 and 0 gaps**, using OCaml **5.4.1**, Dune **3.24.2**, OCaml adapter **1.5.0**, Well
-adapter **3.4.0** and rules **3.1.0**. The full verification also covers the
+adapter **3.4.1** and rules **3.1.0**. The full verification also covers the
 application-generated fixture with development and packaged executables,
 architecture/complexity goldens, repetition, configuration, suggestions and
 coverage. Private callbacks, serializer/runtime resources, unsupported
