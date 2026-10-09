@@ -1,6 +1,6 @@
 open Szaniec_model
 
-let project ~execution ~owner_of ~eligible ~entry_point ~classify =
+let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
   let definitions = Hashtbl.create 64 in
   let bodies = Hashtbl.create 64 in
   let incoming = Hashtbl.create 64 in
@@ -130,6 +130,11 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
           let steps =
             if call.execution_resolution <> Observation.Resolved
             then unknown call.execution_site "unresolved execution target"
+            else if not (available api)
+            then
+              unknown
+                call.execution_site
+                ("target ownership cannot be resolved: " ^ api)
             else if own_body && List.mem api path
             then
               let reference =

@@ -22,6 +22,7 @@ verify:
 	deno fmt --check test/flows/run.ts
 	deno test --allow-read --allow-write --allow-run test/flows/run.ts
 	deno fmt --check test/acceptance/public_contracts.ts
+	dune build test/acceptance/contract_observation.exe
 	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
 	deno fmt --check test/acceptance/application_contracts.ts
 	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/application_contracts.ts

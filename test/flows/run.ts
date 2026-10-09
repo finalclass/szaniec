@@ -333,6 +333,7 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
     );
     const sourcePath =
       `${project}/lib/order_app/store_manager/store_manager_impl.ml`;
+    const original = await Deno.stat(sourcePath);
     const future = new Date(Date.now() + 60_000);
     await Deno.utime(sourcePath, future, future);
     const stale = await run(project, "check", "--json");
@@ -348,6 +349,28 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
       unavailable.status === "incomplete" &&
         unavailable.steps.some((s) => s.kind === "unknown"),
       "unavailable implementation is not an empty complete flow",
+    );
+    await Deno.utime(sourcePath, original.atime!, original.mtime!);
+    await Deno.utime(
+      `${project}/lib/contract/WarehouseAccess.ml`,
+      future,
+      future,
+    );
+    const staleTarget = await run(project, "check", "--json");
+    assert(staleTarget.code === 2, "stale generated target stays unresolved");
+    const targetGraph: Graph = JSON.parse(
+      await Deno.readTextFile(`${project}/szaniec.json`),
+    );
+    const targetFlow = targetGraph.services.find((s) =>
+      s.name === "StoreManager"
+    )!
+      .methods.find((m) => m.name === "place_order")!.flow;
+    assert(
+      targetFlow.status === "incomplete" && targetFlow.steps.some((s) =>
+        s.kind === "unknown" &&
+        s.reason?.includes("target ownership cannot be resolved")
+      ),
+      "unavailable contract ownership is preserved in ordered flows",
     );
   } finally {
     await Deno.remove(project, { recursive: true });

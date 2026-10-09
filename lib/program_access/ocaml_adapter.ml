@@ -127,12 +127,8 @@ let compiler_series_of_args (args : string array) : string =
         | major :: minor :: _ -> major ^ "." ^ minor
         | _ -> "unknown" )
 
-(* [true] when the source file is not older than the artifact. The typed
-   tree records the preprocessed source (pp.ml), so content digests cannot
-   verify freshness against the original source; dune's dependency tracking
-   plus an mtime comparison give the safe direction: an artifact older than
-   its source is stale, a touch without content change reports stale too
-   (rebuild clears it) and stale evidence is never used as current. *)
+(* Timestamp evidence is needed for transformations whose input digest is
+   not the original source digest. Plain inputs are checked by content below. *)
 let fresher_or_equal (source : string) (artifact : string) : bool =
   try
     (Unix.stat source).Unix.st_mtime <= (Unix.stat artifact).Unix.st_mtime
@@ -151,6 +147,106 @@ let real_source (sourcefile : string) : string option =
   else if Filename.check_suffix sourcefile ".pp.ml"
   then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
   else Some sourcefile
+
+let compiler_path ~project_root (cmt : Cmt_format.cmt_infos) path =
+  let build_root = project_root // "_build/default" in
+  if Filename.is_relative path
+  then build_root // path
+  else if Sys.file_exists path
+  then path
+  else
+    let prefix = cmt.cmt_builddir ^ "/" in
+    if Canonical.starts_with ~prefix path
+    then
+      build_root
+      // String.sub
+           path
+           (String.length prefix)
+           (String.length path - String.length prefix)
+    else path
+
+let digest_matches path expected =
+  try Some (Digest.file path) = expected with
+  | Sys_error _ -> false
+
+let current_input ~project_root ~source (cmt : Cmt_format.cmt_infos) artifact =
+  match cmt.cmt_sourcefile with
+  | None -> false
+  | Some recorded ->
+      let input = compiler_path ~project_root cmt recorded in
+      let compiler_transform =
+        Array.exists (fun arg -> arg = "-pp" || arg = "-ppx") cmt.cmt_args
+      in
+      let transformed =
+        List.exists
+          (fun suffix -> Filename.check_suffix recorded suffix)
+          [".pp.ml"; ".pp.mli"]
+      in
+      if compiler_transform || cmt.cmt_source_digest = None
+      then
+        false
+        (* No digest of the compiler-applied transformation is recorded. *)
+      else
+        digest_matches input cmt.cmt_source_digest
+        &&
+        if transformed
+        then fresher_or_equal source input && fresher_or_equal source artifact
+        else digest_matches source cmt.cmt_source_digest
+
+let interface_crc path name =
+  try
+    List.assoc_opt name (Cmi_format.read_cmi path).Cmi_format.cmi_crcs
+    |> Option.join
+  with
+  | _ -> None
+
+let current_interface
+    ~project_root
+    ~source
+    (cmt : Cmt_format.cmt_infos)
+    artifact =
+  let interface = Filename.remove_extension source ^ ".mli" in
+  if not (Sys.file_exists interface)
+  then
+    match cmt.cmt_annots with
+    | Cmt_format.Partial_implementation _ -> true
+    | _ -> cmt.cmt_interface_digest <> None
+  else
+    let base = Filename.remove_extension artifact in
+    try
+      let cmti = Cmt_format.read_cmt (base ^ ".cmti") in
+      (* An implementation with an explicit interface does not embed its
+         CMI. Its interface identity is the self import, not the optional
+         digest of an embedded interface. *)
+      let expected =
+        List.assoc_opt cmt.cmt_modname cmt.cmt_imports |> Option.join
+      in
+      current_input ~project_root ~source:interface cmti (base ^ ".cmti")
+      && expected <> None
+      && cmti.cmt_interface_digest = expected
+      && interface_crc (base ^ ".cmi") cmt.cmt_modname = expected
+    with
+    | _ -> false
+
+let current_imports ~project_root ~local_units (cmt : Cmt_format.cmt_infos) =
+  let directories = cmt.cmt_loadpath.visible @ cmt.cmt_loadpath.hidden in
+  List.for_all
+    (fun (name, expected) ->
+      match expected with
+      | None -> true
+      | Some _ -> (
+          let file = String.uncapitalize_ascii name ^ ".cmi" in
+          let path =
+            List.find_opt
+              Sys.file_exists
+              (List.map
+                 (fun dir -> compiler_path ~project_root cmt (dir // file))
+                 directories )
+          in
+          match path with
+          | Some path -> interface_crc path name = expected
+          | None -> not (Hashtbl.mem local_units name) ) )
+    cmt.cmt_imports
 
 let sha256_hex (s : string) : string =
   Digestif.SHA256.to_hex (Digestif.SHA256.digest_string s)
@@ -370,6 +466,11 @@ let rec collect_pat_vars
       collect_pat_vars b acc
   | _ -> ()
 
+let rec module_body (m : Typedtree.module_expr) =
+  match m.mod_desc with
+  | Tmod_constraint (body, _, _, _) -> module_body body
+  | _ -> m
+
 let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
   List.iter
     (fun (i : Typedtree.structure_item) ->
@@ -385,7 +486,7 @@ let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
           ( match mb.Typedtree.mb_id with
           | Some id -> add_defined c id
           | None -> () ) ;
-          match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+          match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
           | Tmod_ident (p, _) -> (
             match canonicalize c p with
             | `Canonical target -> (
@@ -408,7 +509,7 @@ let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
               ( match mb.Typedtree.mb_id with
               | Some id -> add_defined c id
               | None -> () ) ;
-              match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+              match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
               | Tmod_structure s -> (
                 match mb.Typedtree.mb_id with
                 | Some id ->
@@ -422,7 +523,7 @@ let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
               | _ -> () )
             mbs
       | Tstr_include inc -> (
-        match inc.incl_mod.Typedtree.mod_desc with
+        match (module_body inc.incl_mod).Typedtree.mod_desc with
         | Tmod_structure s -> pre_collect c s.str_items
         | _ -> () )
       | _ -> () )
@@ -905,7 +1006,7 @@ and walk_structure
           in
           let sub = if outer = "" then name else outer ^ "." ^ name in
           facts.symbols <- (sub, "module") :: facts.symbols ;
-          ( match mb.Typedtree.mb_expr.Typedtree.mod_desc with
+          ( match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
           | Tmod_ident (p, _) -> (
             match canonicalize c p with
             | `Canonical target ->
@@ -1034,7 +1135,9 @@ let rec alias_only_structure (s : Typedtree.structure) =
 
 (* [assume_fresh] marks every existing artifact as current: the caller
    performed a successful rebuild, and dune guarantees content freshness of
-   its outputs. Without it, freshness is verified by comparing mtimes. *)
+   its outputs. Otherwise check compiler input digests, interface CRCs and
+   transformation timestamp evidence; an unchanged plain-source rewrite is
+   current even if Dune did not rewrite its artifact. *)
 let observe
     ~(project_root : string)
     ~(program_roots : string list)
@@ -1126,7 +1229,6 @@ let observe
             else
               let source_abs = project_root // source_path in
               let source_exists = Sys.file_exists source_abs in
-              let interface = Filename.remove_extension source_abs ^ ".mli" in
               (* Dune's wrapped-library stub is often recorded as
                  [lib/name.ml-gen] but kept only inside [_build]. There is
                  no project source to go stale against, so the artifact is
@@ -1136,12 +1238,20 @@ let observe
                 (generated && not source_exists)
                 || source_exists
                    && ( assume_fresh
-                      || fresher_or_equal source_abs (project_root // artifact)
-                      )
-                   && ( assume_fresh
-                      || (not (Sys.file_exists interface))
-                      || fresher_or_equal interface (project_root // artifact)
-                      )
+                      || current_input
+                           ~project_root
+                           ~source:source_abs
+                           cmt
+                           (project_root // artifact)
+                         && current_interface
+                              ~project_root
+                              ~source:source_abs
+                              cmt
+                              (project_root // artifact)
+                         && current_imports
+                              ~project_root
+                              ~local_units:units_tbl
+                              cmt )
               in
               let unit_canonical =
                 Canonical.of_unit_name ~library:lib ~unit_name:modname
@@ -1150,7 +1260,9 @@ let observe
               then
                 let detail =
                   if source_exists
-                  then "source changed after the artifact was built"
+                  then
+                    "compiler input, transformation or interface evidence is \
+                     not current"
                   else "source file missing"
                 in
                 (* Wrapper units stay out of the conformance unit list.
@@ -1174,7 +1286,11 @@ let observe
                     ; canonical= unit_canonical
                     ; source_path
                     ; source_header= ""
-                    ; source_digest= ""
+                    ; source_digest=
+                        Option.fold
+                          ~none:""
+                          ~some:Digest.to_hex
+                          cmt.cmt_source_digest
                     ; artifact_path= artifact
                     ; fresh= false }
                     :: !units )
@@ -1243,7 +1359,11 @@ let observe
                            (fun () ->
                              try input_line ic with
                              | End_of_file -> "" ) )
-                    ; source_digest= ""
+                    ; source_digest=
+                        Option.fold
+                          ~none:""
+                          ~some:Digest.to_hex
+                          cmt.cmt_source_digest
                     ; artifact_path= artifact
                     ; fresh= true }
                     :: !units ) ;

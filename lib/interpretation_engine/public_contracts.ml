@@ -19,6 +19,7 @@ let bind ~approved ~(policy : Policy.t) ~(cy : Cy.t) (obs : Observation.t) =
   let bindings = Hashtbl.create 32 in
   let rejected = Hashtbl.create 8 in
   let gaps = ref [] in
+  let unavailable = ref [] in
   let gap code path detail =
     gaps :=
       {Observation.gap_code= code; gap_path= path; gap_detail= detail} :: !gaps
@@ -31,7 +32,10 @@ let bind ~approved ~(policy : Policy.t) ~(cy : Cy.t) (obs : Observation.t) =
           "GAP-AMBIGUOUS-OWNERSHIP"
           u.source_path
           ("conflicting contracts for " ^ u.canonical)
-    | _ -> if u.fresh then Hashtbl.replace bindings u.canonical c
+    | _ ->
+        if u.fresh
+        then Hashtbl.replace bindings u.canonical c
+        else unavailable := u.canonical :: !unavailable
   in
   List.iter
     (fun (u : Observation.unit_info) ->
@@ -59,31 +63,43 @@ let bind ~approved ~(policy : Policy.t) ~(cy : Cy.t) (obs : Observation.t) =
             then add u c )
           cy.contracts )
     obs.units ;
-  if approved
-  then
-    List.iter
-      (fun (b : Policy.contract_binding) ->
-        let canonical =
-          Canonical.resolve_alias obs.module_aliases b.contract_module
-        in
-        match
-          ( List.find_opt
-              (fun (c : Cy.contract) -> c.contract_source = b.contract_source)
-              cy.contracts
-          , List.find_opt
-              (fun (u : Observation.unit_info) -> Some u.canonical = canonical)
-              obs.units )
-        with
-        | Some c, Some u when u.fresh -> add u c
-        | _ ->
-            gap
-              "GAP-PUBLIC-CONTRACT"
-              b.contract_source
-              ( "contract binding lacks a fresh source/unit: "
-              ^ b.contract_module ) )
-      policy.contract_bindings ;
-  Hashtbl.iter (fun unit () -> Hashtbl.remove bindings unit) rejected ;
-  (bindings, List.sort_uniq compare !gaps)
+  List.iter
+    (fun (b : Policy.contract_binding) ->
+      let canonical =
+        Canonical.resolve_alias obs.module_aliases b.contract_module
+      in
+      match
+        ( List.find_opt
+            (fun (c : Cy.contract) -> c.contract_source = b.contract_source)
+            cy.contracts
+        , List.find_opt
+            (fun (u : Observation.unit_info) -> Some u.canonical = canonical)
+            obs.units )
+      with
+      | Some c, Some u when u.fresh && approved -> add u c
+      | _
+        when (not approved)
+             && Option.fold ~none:false ~some:(Hashtbl.mem bindings) canonical
+        ->
+          ()
+      | _ ->
+          unavailable :=
+            (b.contract_module :: Option.to_list canonical) @ !unavailable ;
+          gap
+            "GAP-PUBLIC-CONTRACT"
+            b.contract_source
+            ( "contract binding requires approved policy and a fresh \
+               source/unit: "
+            ^ b.contract_module
+            ^ "; verify policy.contract_bindings source/module and rebuild \
+               before approving" ) )
+    policy.contract_bindings ;
+  Hashtbl.iter
+    (fun unit () ->
+      Hashtbl.remove bindings unit ;
+      unavailable := unit :: !unavailable )
+    rejected ;
+  (bindings, List.sort_uniq compare !gaps, List.sort_uniq compare !unavailable)
 
 let relative unit path =
   let prefix = unit ^ "." in
@@ -140,6 +156,109 @@ let rpc_member (cy : Cy.t) (c : Cy.contract) member =
 let mechanic ?(generated = false) c member =
   data_member ~generated c member
   || List.mem member ["make_spec"; "spec"; "_service_ref"]
+
+(* Value-level serializer helpers are private, not additional public codecs.
+   Their dependencies need interpretation even when the public conversion
+   wrapper is generated plumbing. *)
+let serializer_body ?(generated = false) c member =
+  data_member ~generated c member
+  ||
+  match Canonical.split_dots member with
+  | [message; ("encode_value" | "decode_value")] ->
+      generated || List.mem message c.Cy.contract_messages
+  | _ -> false
+
+let runtime_member member =
+  List.mem
+    member
+    [ "error"
+    ; "is_finite"
+    ; "utf8_sequence_length"
+    ; "validate_utf8"
+    ; "enc_string"
+    ; "enc_int"
+    ; "enc_float"
+    ; "enc_bool"
+    ; "enc_void"
+    ; "enc_record"
+    ; "enc_list"
+    ; "enc_option"
+    ; "dec_string"
+    ; "dec_int"
+    ; "dec_float"
+    ; "dec_bool"
+    ; "dec_void"
+    ; "dec_record"
+    ; "dec_struct"
+    ; "dec_list"
+    ; "dec_option"
+    ; "field"
+    ; "index"
+    ; "to_string"
+    ; "of_string"
+    ; "Syntax"
+    ; "Syntax.let*"
+    ; "Syntax.let+" ]
+
+let serialization_runtimes contracts (obs : Observation.t) =
+  let runtimes = Hashtbl.create 4 in
+  List.iter
+    (fun (runtime : Observation.unit_info) ->
+      let suffix = ".Drut_runtime" in
+      if runtime.fresh && Filename.check_suffix runtime.canonical suffix
+      then
+        let prefix =
+          String.sub
+            runtime.canonical
+            0
+            (String.length runtime.canonical - String.length "Drut_runtime")
+        in
+        let shape =
+          List.for_all
+            (fun member ->
+              List.mem (runtime.canonical ^ "." ^ member) obs.defined_values )
+            [ "enc_string"
+            ; "dec_string"
+            ; "dec_struct"
+            ; "field"
+            ; "index"
+            ; "to_string"
+            ; "of_string"
+            ; "Syntax.let*"
+            ; "Syntax.let+" ]
+        in
+        let supported_dependency unit caller target =
+          match
+            ( Hashtbl.find_opt contracts unit
+            , List.find_opt
+                (fun (u : Observation.unit_info) -> u.canonical = unit)
+                obs.units
+            , relative runtime.canonical target )
+          with
+          | Some contract, Some u, Some member ->
+              shape
+              && runtime_member member
+              && Canonical.starts_with ~prefix unit
+              && Filename.dirname runtime.source_path
+                 = Filename.dirname u.source_path
+              && serializer_body
+                   ~generated:(generated_contract u)
+                   contract
+                   caller
+          | _ -> false
+        in
+        if
+          List.exists
+            (fun (c : Observation.call) ->
+              supported_dependency c.call_unit c.caller c.callee )
+            obs.calls
+          || List.exists
+               (fun (v : Observation.value_ref) ->
+                 supported_dependency v.ref_unit v.ref_caller v.ref_target )
+               obs.value_refs
+        then Hashtbl.replace runtimes runtime.canonical () )
+    obs.units ;
+  runtimes
 
 let validate_surfaces
     ~approved

@@ -560,6 +560,10 @@ let callback value = List.map Access.Request.to_drut [Access.Request.make value]
       );
       await check();
       const future = new Date(Date.now() + 60_000);
+      await Deno.writeTextFile(
+        `${root}/${wrapper}`,
+        wrapperSource + "\nlet not_built = ()\n",
+      );
       await Deno.utime(`${root}/${wrapper}`, future, future);
       const stale = await check(false);
       assert(

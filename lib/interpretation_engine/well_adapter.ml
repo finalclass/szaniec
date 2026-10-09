@@ -172,6 +172,8 @@ let canonical_family
 
 let classify_ownership
     ~contracts
+    ~unavailable_contracts
+    ~serialization_runtimes
     (cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) :
     ownership_map * Observation.gap list * (string, string) Hashtbl.t =
@@ -337,8 +339,15 @@ let classify_ownership
                     (not generated)
                     && (not (Hashtbl.mem contracts canonical))
                     && wrapper <> last_segment canonical
-                    && services_matching_segment cy wrapper <> []
-                  then
+                    && List.exists
+                         (fun (c : Szaniec_architecture_access.Cyrograf.contract)
+                            ->
+                           Szaniec_architecture_access.Cyrograf
+                           .segment_matches_service
+                             ~service:c.contract_name
+                             wrapper )
+                         cy.contracts
+                  then (
                     gaps :=
                       { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
                       ; gap_path= u.Observation.source_path
@@ -348,6 +357,16 @@ let classify_ownership
                              established for %s"
                             canonical }
                       :: !gaps ;
+                    gaps :=
+                      { Observation.gap_code= "GAP-PUBLIC-CONTRACT"
+                      ; gap_path= u.source_path
+                      ; gap_detail=
+                          "unmarked generated binding requires an approved \
+                           policy.contract_bindings declaration for module "
+                          ^ canonical
+                          ^ "; select its exact .cyrograf source and run \
+                             approve after review" }
+                      :: !gaps ) ;
                   { Interpretation.owner_module= canonical
                   ; owner_class= Interpretation.Unclassified
                   ; owner_service= "" }
@@ -396,6 +415,7 @@ let classify_ownership
       then ()
       else if previous.owner_service <> "" && previous.owner_service <> family
       then (
+        Hashtbl.replace ambiguous_units unit () ;
         Hashtbl.replace
           map
           unit
@@ -424,6 +444,20 @@ let classify_ownership
               | Some s -> Interpretation.Contract_of s.svc_name
               | None -> Interpretation.Contract_data contract.contract_name ) } )
     contracts ;
+  Hashtbl.iter
+    (fun unit () ->
+      match Hashtbl.find_opt map unit with
+      | Some o
+        when o.owner_class = Interpretation.Unclassified
+             && not (Hashtbl.mem ambiguous_units unit) ->
+          Hashtbl.replace
+            map
+            unit
+            { o with
+              owner_class= Interpretation.Contract_data "serialization runtime"
+            }
+      | _ -> () )
+    serialization_runtimes ;
   let rec classify_aggregators () =
     let changed = ref false in
     List.iter
@@ -457,6 +491,25 @@ let classify_ownership
                   | _ -> false )
                 | None -> false )
             in
+            let unavailable_alias (_, target) =
+              match Canonical.resolve_alias obs.module_aliases target with
+              | None -> true
+              | Some target ->
+                  List.exists
+                    (fun prefix ->
+                      target = prefix
+                      || Canonical.starts_with ~prefix:(prefix ^ ".") target )
+                    unavailable_contracts
+                  || List.exists
+                       (fun (u : Observation.unit_info) ->
+                         ( target = u.canonical
+                         || Canonical.starts_with
+                              ~prefix:(u.canonical ^ ".")
+                              target )
+                         && ( (not u.fresh)
+                            || Hashtbl.mem ambiguous_units u.canonical ) )
+                       obs.units
+            in
             if aliases <> [] && List.for_all contract_target aliases
             then (
               changed := true ;
@@ -465,6 +518,23 @@ let classify_ownership
                 unit
                 {o with owner_class= Interpretation.Contract_data "aggregator"}
               )
+            else if List.exists unavailable_alias aliases
+            then (
+              changed := true ;
+              Hashtbl.replace ambiguous_units unit () ;
+              let source =
+                List.find
+                  (fun (u : Observation.unit_info) -> u.canonical = unit)
+                  obs.units
+              in
+              gaps :=
+                { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                ; gap_path= source.source_path
+                ; gap_detail=
+                    "alias aggregator ownership requires fresh, resolved \
+                     contract targets: "
+                    ^ unit }
+                :: !gaps )
         | _ -> () )
       obs.alias_only_units ;
     if !changed then classify_aggregators ()
@@ -582,11 +652,19 @@ let interpret
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) : Interpretation.t =
-  let contracts, contract_gaps =
+  let contracts, contract_gaps, unavailable_contracts =
     Public_contracts.bind ~approved ~policy ~cy obs
   in
+  let serialization_runtimes =
+    Public_contracts.serialization_runtimes contracts obs
+  in
   let ownership_map, ownership_gaps, impl_of =
-    classify_ownership ~contracts cy obs
+    classify_ownership
+      ~contracts
+      ~unavailable_contracts
+      ~serialization_runtimes
+      cy
+      obs
   in
   let surfaces, surface_gaps =
     Public_contracts.validate_surfaces ~approved ~policy ~cy obs ownership_map
@@ -608,6 +686,21 @@ let interpret
       if Hashtbl.mem ambiguous_paths u.source_path
       then Hashtbl.replace ambiguous_units u.canonical () )
     obs.units ;
+  let unavailable_units = Hashtbl.copy ambiguous_units in
+  List.iter
+    (fun (u : Observation.unit_info) ->
+      if not u.fresh then Hashtbl.replace unavailable_units u.canonical () )
+    obs.units ;
+  let unavailable_target path =
+    List.exists
+      (fun prefix ->
+        path = prefix || Canonical.starts_with ~prefix:(prefix ^ ".") path )
+      unavailable_contracts
+    ||
+    match Canonical.unit_prefix unit_paths path with
+    | Some unit -> Hashtbl.mem unavailable_units unit
+    | None -> false
+  in
   let owner_of_path (path : string) : Interpretation.ownership =
     match Canonical.unit_prefix unit_paths path with
     | Some u -> Hashtbl.find ownership_map u
@@ -684,6 +777,38 @@ let interpret
         || Public_contracts.rpc_member cy c member <> None
         || Hashtbl.mem topic_values path
     | None -> false
+  in
+  let serializer_body path =
+    match contract_member path with
+    | Some (c, member) ->
+        Public_contracts.serializer_body
+          ~generated:(generated_path path)
+          c
+          member
+    | None -> false
+  in
+  let serialization_dependency caller target =
+    serializer_body caller
+    &&
+    match Canonical.unit_prefix unit_paths target with
+    | Some unit
+      when Hashtbl.mem serialization_runtimes unit
+           && unit_owner_class unit
+              = Interpretation.Contract_data "serialization runtime" ->
+        (* The runtime is private to this projection library. *)
+        let caller_unit = Canonical.unit_prefix unit_paths caller in
+        let prefix =
+          String.sub unit 0 (String.length unit - String.length "Drut_runtime")
+        in
+        Option.fold
+          ~none:false
+          ~some:(Canonical.starts_with ~prefix)
+          caller_unit
+        && Option.fold
+             ~none:false
+             ~some:Public_contracts.runtime_member
+             (Public_contracts.relative unit target)
+    | _ -> false
   in
   let public_module_path path =
     match Canonical.unit_prefix unit_paths path with
@@ -805,6 +930,13 @@ let interpret
   in
   let interactions : Interpretation.interaction list ref = ref [] in
   let gaps = ref (ownership_gaps @ contract_gaps @ surface_gaps) in
+  let unavailable_gap path site =
+    gaps :=
+      { Observation.gap_code= "GAP-UNRESOLVED-TARGET"
+      ; gap_path= site.Observation.site_path
+      ; gap_detail= "target ownership cannot be resolved: " ^ path }
+      :: !gaps
+  in
   let unresolved_seen : (string, unit) Hashtbl.t = Hashtbl.create 32 in
   let record_interaction
       kind
@@ -837,7 +969,13 @@ let interpret
     let allowed_unit =
       match unit_owner_class c.Observation.call_unit with
       | Interpretation.ExternalLibrary _ -> false
-      | _ -> not (generated_member (c.call_unit ^ "." ^ c.caller))
+      | Interpretation.Contract_data "serialization runtime"
+        when c.resolution = Observation.Unresolved_local
+             && Public_contracts.runtime_member c.caller ->
+          false (* Primitive runtime callbacks stay in the raw observation. *)
+      | _ ->
+          (not (generated_member (c.call_unit ^ "." ^ c.caller)))
+          || serializer_body (c.call_unit ^ "." ^ c.caller)
     in
     if allowed_unit
     then
@@ -885,6 +1023,12 @@ let interpret
         if c.Observation.resolution <> Observation.Resolved
         then unresolved_gap c
         else if String.length c.Observation.callee = 0
+        then ()
+        else if unavailable_target c.callee && resource_of_api c.callee = None
+        then unavailable_gap c.callee site
+        else if
+          serialization_dependency (c.call_unit ^ "." ^ c.caller) c.callee
+          && resource_of_api c.callee = None
         then ()
         else
           let callee = c.Observation.callee in
@@ -1122,7 +1266,9 @@ let interpret
     &&
     match unit_owner_class n.n_unit with
     | Interpretation.ExternalLibrary _ -> false
-    | _ -> not (generated_member (n.n_unit ^ "." ^ n.n_symbol))
+    | _ ->
+        (not (generated_member (n.n_unit ^ "." ^ n.n_symbol)))
+        || serializer_body (n.n_unit ^ "." ^ n.n_symbol)
   in
   let walk_from origin =
     if walkable origin
@@ -1200,6 +1346,8 @@ let interpret
     (fun (v : Observation.value_ref) ->
       let caller_owner = owner_of_path v.Observation.ref_unit in
       match Canonical.unit_prefix unit_paths v.Observation.ref_target with
+      | _ when unavailable_target v.ref_target ->
+          unavailable_gap v.ref_target v.ref_site
       | Some target_unit -> (
           let target_owner = owner_of_path target_unit in
           let is_wiring_ref =
@@ -1227,8 +1375,13 @@ let interpret
             (not is_wiring_ref)
             && (not (Hashtbl.mem ambiguous_units target_unit))
             && (not (Hashtbl.mem ambiguous_units v.ref_unit))
-            && (not (generated_member (v.ref_unit ^ "." ^ v.ref_caller)))
+            && ( (not (generated_member (v.ref_unit ^ "." ^ v.ref_caller)))
+               || serializer_body (v.ref_unit ^ "." ^ v.ref_caller) )
             && (not (generated_member v.ref_target))
+            && (not
+                  (serialization_dependency
+                     (v.ref_unit ^ "." ^ v.ref_caller)
+                     v.ref_target ) )
             && not (public_module_path v.ref_target)
           then
             match public_surface with
@@ -1488,6 +1641,8 @@ let interpret
     in
     if call.execution_resolution <> Observation.Resolved
     then make Interpretation.ExternalCall "" "" ""
+    else if unavailable_target api && resource_of_api api = None
+    then make Interpretation.ExternalCall "" "" ""
     else
       match resource_of_api api with
       | Some resource -> make Interpretation.ResourceAccess "" "" resource
@@ -1550,6 +1705,22 @@ let interpret
       ~eligible
       ~entry_point
       ~classify:classify_execution
+    |> List.map (fun (e : Interpretation.execution_interaction) ->
+        let path = e.execution_interaction.api in
+        if
+          e.execution_interaction.kind = Interpretation.ExternalCall
+          && unavailable_target path
+        then
+          { e with
+            execution_interaction= {e.execution_interaction with api= ""}
+          ; execution_context=
+              { e.execution_context with
+                unknown_reasons=
+                  List.sort_uniq
+                    compare
+                    ( ("target ownership cannot be resolved: " ^ path)
+                    :: e.execution_context.unknown_reasons ) } }
+        else e )
   in
   let flow_interactions = Hashtbl.create 32 in
   List.iter
@@ -1583,6 +1754,8 @@ let interpret
     Ordered_flow.project
       ~execution:obs.execution
       ~owner_of:execution_owner
+      ~available:(fun api ->
+        (not (unavailable_target api)) || resource_of_api api <> None )
       ~eligible
       ~entry_point
       ~classify:classify_flow
