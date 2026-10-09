@@ -280,6 +280,16 @@ members and consumers. Both declarations require policy approval. A directory
 named `api` or an `.mli` alone does not approve executable code. See
 [the declaration syntax and evidence requirements](docs/contracts/policy-format.md#public-contracts).
 
+Application-generated native/browser bindings without recognized generator
+headers require an approved `contract_bindings` entry for each projection.
+Compiler-observed aliases, including aliases with explicit module signatures,
+preserve the exact contract target. Missing or stale targets and alias
+aggregators remain analysis gaps; constructor/codec names alone grant no approval.
+Generated message serializer bodies retain their runtime dependency evidence
+and checks for private/resource access. An unchanged plain-source rewrite followed
+by an incremental build preserves content-current contracts and aliases;
+preprocessed inputs require separate transformation evidence or a successful rebuild.
+
 Private helpers belong in their service's directory tree; nested directories
 and modules are supported. Compiler evidence such as `make_spec` also binds
 ownership. One observed caller does not adopt an outside helper. Naming a

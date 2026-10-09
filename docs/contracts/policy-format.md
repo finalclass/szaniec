@@ -116,6 +116,14 @@ explicit generated binding must reference an in-scope `.cyrograf` contract;
 it does not approve arbitrary code inside that unit. Compiler module aliases
 preserve these identities across library aggregators and projections.
 
+Unmarked application-generated projections require these explicit bindings even
+when their functions are named `make` or `from_drut`. Prefer the exact compiled
+target (for example `App_contract.App_service_common`). A short alias such as
+`App_contract.Common` also works when every alias in its chain has fresh compiler
+evidence, including aliases with explicit signatures. Declare each native/browser
+projection separately. A missing/stale target or alias cannot grant the public
+exemption; rebuild or correct the declaration identified by the gap.
+
 ### Application-generated binding workflow
 
 A generator outside Well/Cyrograf may omit the recognized first-line header

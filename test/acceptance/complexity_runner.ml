@@ -309,7 +309,7 @@ let check_inventory errors (j : Yojson.Safe.t) =
   let inputs = member "inputs" j in
   if jbool inputs "approved"
   then fail errors "approval must stay a recorded flag" ;
-  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.4.0"
+  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.5.0"
   then fail errors "adapter version" ;
   ( match member "programRoots" inputs with
   | `List [`String "metric"; `String "test"] -> ()

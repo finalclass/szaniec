@@ -89,8 +89,8 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.4.0",
-      "interpretation": "szaniec-well-adapter/3.3.0",
+      "programAccess": "szaniec-ocaml-adapter/1.5.0",
+      "interpretation": "szaniec-well-adapter/3.4.0",
       "rules": "szaniec-rules/3.1.0"
     },
     "exclusions": ["...", "..."]

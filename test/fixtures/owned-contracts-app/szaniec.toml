@@ -7,7 +7,7 @@ approved_shared_modules = []
 
 [[policy.contract_bindings]]
 source = "lib/contract/Common.cyrograf"
-module = "App_contract.App_service_common"
+module = "App_contract.Common"
 
 [[policy.contract_bindings]]
 source = "lib/contract/Task_access.cyrograf"
@@ -19,11 +19,11 @@ module = "App_contract.Task_manager"
 
 [[policy.contract_bindings]]
 source = "lib/contract/Common.cyrograf"
-module = "App_browser.App_service_common"
+module = "App_browser.Nested.Common"
 
 [[policy.contract_bindings]]
 source = "lib/contract/Task_manager.cyrograf"
-module = "App_browser.App_service_task_manager"
+module = "App_browser.Nested.Task_manager"
 
 [[policy.public_contracts]]
 service = "Task_access"

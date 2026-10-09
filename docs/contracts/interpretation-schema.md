@@ -16,9 +16,35 @@ generator-marked units also expose their generated message modules without
 requiring a separate policy declaration. RPC calls (including `Proxy.method`)
 are service requests; unknown members of generator-marked service contracts
 remain checked against their RPC declarations. Other members of contract units
-remain implementation access across families, and their bodies are inspected. Only the generated
-members' dispatch/conversion bodies are excluded from application call analysis.
+remain implementation access across families, and their bodies are inspected.
+Generated RPC dispatch is excluded from application call analysis. Message
+conversion bodies, including private `encode_value`/`decode_value` helpers,
+retain inspection for private calls, callbacks and protected resources.
 Application extraction gaps and stale evidence are preserved.
+
+The generated serialization runtime has private contract-data ownership when a
+fresh bound message's serializer references the observed `Drut_runtime` in the
+same compilation library and source directory, and the runtime defines the
+supported primitive and Syntax surface. This combines compiler identity,
+contract provenance and shape evidence; a runtime filename or helper spelling
+alone is insufficient. Supported runtime dependencies from those serializer
+bodies are mechanical data operations. Their calls and module references remain
+in ProgramAccess. Direct application access to runtime members or private
+serializer helpers remains implementation access. Runtime bodies retain checks
+for foreign private dependencies and resources. No shared whitelist entry is
+required or inferred.
+Data-contract and runtime ownership does not declare a Utility service or grant
+its resource permission. Resource performers must be declared Access/Utility
+services or explicitly approved infrastructure under the existing structural rule.
+Locally bound callback/recursion targets inside the supported runtime primitives
+remain raw unresolved compiler facts without becoming unknown application calls.
+Other unresolved calls, including unsupported expressions inside serializers,
+retain their gaps.
+
+An unavailable contract target or alias aggregator records an unresolved-target
+gap for calls and callbacks; it does not establish foreign implementation access.
+Missing bindings for unmarked prefixed projections explain the required approved
+`policy.contract_bindings` declaration. Names alone never approve their members.
 
 An approved in-process facet grants access only to exact declared values and
 consumers. Its implementation body is still analyzed in the owning service;
@@ -43,7 +69,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.3.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.4.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -88,6 +114,7 @@ in-scope, non-generated unit is classified exactly once:
 |---|---|
 | `contract of service S` | a fresh source pair or approved generated binding connects the unit to S's `.cyrograf` contract |
 | `contract data` | a data-only contract binding or a pure alias aggregator of contract modules |
+| `contract data` (private serialization runtime) | fresh sibling runtime with the supported primitive/Syntax surface and compiler-observed use by a proven message serializer; direct application access remains private |
 | `implementation of service S` | source layout, compiler evidence or the canonical path binds the unit to S, and it is not S's contract surface. Private helpers in that directory tree use this class |
 | `composition root` | unit calling `Well.Service.register`/`register_drut`/`expose` |
 | `external library` | `Well.*` (framework knowledge) and any target not observed in the build tree |

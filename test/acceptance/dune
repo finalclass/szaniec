@@ -24,6 +24,11 @@
   szaniec_interpretation_engine
   szaniec_architecture_access))
 
+(executable
+ (name contract_observation)
+ (modules contract_observation)
+ (libraries szaniec_program_access szaniec_model))
+
 (rule
  (alias runtest)
  (package szaniec)

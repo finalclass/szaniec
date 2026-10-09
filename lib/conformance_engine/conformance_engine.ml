@@ -292,9 +292,16 @@ let evaluate
              services (the infrastructure bar) and approved shared
              modules. *)
           let from_role = role_of_name i.Interpretation.from_owner in
+          let declared_service =
+            List.exists
+              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                s.svc_name = i.from_owner )
+              cy.services
+          in
           let allowed =
-            from_role = Szaniec_architecture_access.Cyrograf.Access
-            || from_role = Szaniec_architecture_access.Cyrograf.Utility
+            declared_service
+            && ( from_role = Szaniec_architecture_access.Cyrograf.Access
+               || from_role = Szaniec_architecture_access.Cyrograf.Utility )
             || approved_shared i.Interpretation.from_owner
           in
           if not allowed
@@ -441,12 +448,25 @@ let evaluate
     Hashtbl.create 32
   in
   let ref_paths : (string, string list) Hashtbl.t = Hashtbl.create 32 in
+  let unavailable_units = Hashtbl.create 16 in
+  List.iter
+    (fun (u : Observation.unit_info) ->
+      if
+        (not u.fresh)
+        || List.exists
+             (fun (g : Observation.gap) ->
+               g.gap_code = "GAP-AMBIGUOUS-OWNERSHIP"
+               && g.gap_path = u.source_path )
+             interpretation.gaps
+      then Hashtbl.replace unavailable_units u.canonical () )
+    observation.units ;
   let note_use target_path caller_unit site =
     if String.length target_path = 0
     then ()
     else
       match Canonical.unit_prefix unit_paths target_path with
       | None -> ()
+      | Some target_unit when Hashtbl.mem unavailable_units target_unit -> ()
       | Some target_unit -> (
         match (owner_of target_unit).Interpretation.owner_class with
         | Interpretation.Unclassified when not (approved_shared target_unit)

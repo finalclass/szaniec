@@ -33,15 +33,23 @@ One entry per observed compilation unit (implementation module):
 - `sourcePath` — mapped back from the recorded preprocessed source: dune
   pp targets `x.pp.ml` (from `x.ml`) and `x.mlx.pp.ml` (from `x.mlx`);
   units derived from `.mlx` view files are a declared profile exclusion.
-- `sourceDigest` — reserved metadata; content digests cannot verify
-  freshness for preprocessed sources.
+- `sourceDigest` — hexadecimal compiler-recorded input digest (MD5 in OCaml
+  5.4). It describes the compiler input, which may be preprocessed; it is
+  distinct from the SHA-256 source snapshot.
 - `artifactPath` — the `.cmt` file used.
 - `fresh` — source file exists and is current. With a successful rebuild
   (`--rebuild`, exit 0) freshness is assumed for all artifacts: dune
   guarantees content freshness of its outputs. Without a rebuild,
-  freshness is an mtime comparison (safe direction: an artifact older than
-  its source, or a missing source file, is stale; a touch without content
-  change also reports stale and a rebuild clears it).
+  plain sources and their current build inputs must match the compiler digest.
+  Rewriting or touching identical content does not invalidate those artifacts.
+  Explicit interfaces must match their `.cmti` input digest and the implementation's
+  interface CRC. Resolvable imported interface CRCs must also remain current;
+  missing local dependencies cannot prove freshness. For preprocessed inputs,
+  the adapter additionally requires the original source to precede both the
+  transformed input and artifact. A transformed digest alone never establishes
+  original-source freshness. Unproven transformation evidence requires rebuilding.
+  Compiler-applied `-pp`/`-ppx` transformations require a successful rebuild:
+  their transformation dependencies are not proven by the recorded input digest.
 - `generated` — dune-generated wrapper units (`.ml-gen` sources); they
   are excluded from rules and diagnostics.
 
@@ -53,13 +61,15 @@ snapshot and freshness evidence, not executable bodies.
 ## Symbols, calls, references
 
 `moduleAliases` records each structure-level module alias with its full source
-and resolved target path, including Dune wrappers. Alias resolution uses the
+and resolved target path, including Dune wrappers and aliases with explicit
+module signatures (`module Alias : Signature = Target`). Alias resolution uses the
 longest module prefix across compilation units; cycles remain unsupported
 evidence. Alias-only units carry a neutral compiler fact, not an architectural
 approval. `definedValues` records full paths of typed structure values for
 validating exact owned-contract members. The source snapshot includes in-scope
-`.cyrograf` and `.mli` inputs as well as implementation sources. An interface
-newer than its implementation artifact makes that implementation stale.
+`.cyrograf` and `.mli` inputs as well as implementation sources. A changed
+interface without a matching artifact makes the implementation stale; an
+unchanged plain interface rewrite preserves its compiler identity.
 
 - `symbols` — values and modules defined per unit, with kind and
   definition location. Names are relative to the unit (`Impl.list`).
