@@ -334,10 +334,21 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
     const sourcePath =
       `${project}/lib/order_app/store_manager/store_manager_impl.ml`;
     const original = await Deno.stat(sourcePath);
+    const originalSource = await Deno.readTextFile(sourcePath);
     const future = new Date(Date.now() + 60_000);
+    await Deno.writeTextFile(
+      sourcePath,
+      originalSource + "\nlet not_built = ()\n",
+    );
     await Deno.utime(sourcePath, future, future);
     const stale = await run(project, "check", "--json");
-    assert(stale.code === 2, "stale source remains incomplete analysis");
+    assert(
+      stale.code === 2 &&
+        JSON.parse(stale.out).findings.some((f: { rule: string }) =>
+          f.rule === "GAP-STALE-ARTIFACT"
+        ),
+      "stale source remains incomplete analysis",
+    );
     const staleGraph: Graph = JSON.parse(
       await Deno.readTextFile(`${project}/szaniec.json`),
     );
@@ -350,14 +361,22 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
         unavailable.steps.some((s) => s.kind === "unknown"),
       "unavailable implementation is not an empty complete flow",
     );
+    await Deno.writeTextFile(sourcePath, originalSource);
     await Deno.utime(sourcePath, original.atime!, original.mtime!);
-    await Deno.utime(
-      `${project}/lib/contract/WarehouseAccess.ml`,
-      future,
-      future,
+    const contractPath = `${project}/lib/contract/WarehouseAccess.ml`;
+    await Deno.writeTextFile(
+      contractPath,
+      await Deno.readTextFile(contractPath) + "\nlet not_built = ()\n",
     );
+    await Deno.utime(contractPath, future, future);
     const staleTarget = await run(project, "check", "--json");
-    assert(staleTarget.code === 2, "stale generated target stays unresolved");
+    assert(
+      staleTarget.code === 2 &&
+        JSON.parse(staleTarget.out).findings.some((f: { rule: string }) =>
+          f.rule === "GAP-STALE-ARTIFACT"
+        ),
+      "stale generated target stays unresolved",
+    );
     const targetGraph: Graph = JSON.parse(
       await Deno.readTextFile(`${project}/szaniec.json`),
     );
