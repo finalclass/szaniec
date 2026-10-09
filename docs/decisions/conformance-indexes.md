@@ -182,3 +182,59 @@ flow integration, public/generated contracts, architecture and complexity
 acceptance, recorded suggestions, and coverage acceptance. The benchmark helper's
 subsequent GC instrumentation passed formatting, type checking and a synthetic
 full-check comparison with identical artifacts.
+
+## Follow-up failure diagnosis
+
+Read-only kernel journal inspection confirmed that all three exit-137 processes
+were killed by the global Linux OOM killer. This was an execution failure, not
+the checker's violation exit status. The earlier failures occurred with the
+baseline evaluator, so they do not establish a regression introduced by #14.
+
+Temporary stage instrumentation on the indexed evaluator measured observation at
+67.251 seconds, with a 3,075.7 MiB OCaml heap and 17,944.4 MiB cumulative allocation
+on return. The implementation reads and retains all scanned CMT typed trees in
+`read_infos` before deduplication, source-scope filtering and MLX exclusion. This
+is a concrete memory contributor covered by #19; these stage measurements do not
+attribute the complete later OOM peak to artifact retention alone.
+
+The execution-context projection took another 44.838 seconds. The ordered-flow
+projection had not completed when the diagnostic monitor stopped this separate
+run after 300.681 seconds, at 3,622,904 KiB sampled peak RSS. That stop was an
+explicit diagnostic time budget (SIGTERM, exit 143), not a new OOM event or a
+successful full-check comparison. It occurred before conformance evaluation and
+callgraph assembly in that run. The original OOM runs had completed evaluation;
+their exact later failing operation has not been isolated.
+
+The benchmark's temporary policy was deliberately unapproved, with `roots =
+["lib"]` and no sharing or application-generated binding declarations. No
+project-owned `szaniec.toml` was found. The completed component inspection retained
+52 stale-artifact gaps, 47 unobserved-source gaps and four unsupported-construct
+gaps. It also retained unresolved-call/target and ambiguous-path evidence. Its
+measurement-driver exit 0 means the measurement completed; it is not an
+architectural approval or an exit-0 conformance result.
+
+The engine emitted 1,980 provisional violation findings before final report
+composition. Their count is not a verified count of application defects. Some
+refer to unmarked application-generated proxies without approved binding evidence;
+others depend on sharing/ownership declarations absent from the minimal policy.
+Source inspection nevertheless confirmed authored Manager calls into another
+service's private Store/lock implementation. The service contract keeps storage
+mechanics private. Such a bypass requires a boundary-preserving implementation
+repair rather than approval of private storage internals as shared code.
+
+The appropriate current conformance outcome is incomplete analysis, with confirmed
+violations retained. A complete verdict requires a deliberately selected policy,
+current artifacts for the declared executable scope, supported interpretation and
+completion of the full pipeline. Positive conformance must not be presumed, and
+an invalid application must still produce diagnostics rather than an OOM crash.
+No application source, approval or shared-module policy was changed during this
+investigation.
+
+The follow-up used `journalctl -k --since '2026-10-09 00:00:00' --no-pager -g
+'Killed process|Out of memory|oom-kill'`, a temporary native diagnostic executable
+built with `dune build test/performance/diagnosis.exe bin/szaniec.exe`, and a Deno
+process monitor. The component driver preserved the engine input scope while
+disabling only the two unused graph projections, as in `--evaluation-only` above;
+the separate timed-out run retained both projections. Temporary diagnostic sources
+and raw application findings were removed after inspection. This documentation
+update does not change the product implementation or its previous verification.
