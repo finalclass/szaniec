@@ -61,6 +61,7 @@ const components = [
   "parallel",
   "rendering",
   "imports",
+  "acquisition",
 ];
 if (!components.includes(component)) throw new Error("Unknown --component");
 const evaluationOnly = Deno.args.includes("--evaluation-only");
@@ -490,7 +491,7 @@ try {
         Deno.readTextFile(`${build}/${path}`);
       const writeCurrent = (path: string, source: string) =>
         Deno.writeTextFile(`${build}/${path}`, source);
-      if (component === "imports") {
+      if (component === "imports" || component === "acquisition") {
         const path = "lib/program_access/ocaml_adapter.ml";
         const source = await readCurrent(path);
         const original = await required("git", ["show", `${baseline}:${path}`]);
@@ -505,6 +506,29 @@ try {
         await writeCurrent(
           path,
           replaceOnce(source, section(source), section(original)),
+        );
+      }
+      if (component === "acquisition") {
+        const path = "lib/model/canonical.ml";
+        const source = await readCurrent(path);
+        const original = await required("git", ["show", `${baseline}:${path}`]);
+        const currentStart = source.indexOf("let alias_resolver_cache =");
+        const currentEnd = source.indexOf("let resolve_alias", currentStart);
+        const originalStart = original.indexOf("let alias_resolver aliases =");
+        const originalEnd = original.indexOf(
+          "let resolve_alias",
+          originalStart,
+        );
+        if (
+          [currentStart, currentEnd, originalStart, originalEnd].some((i) =>
+            i < 0
+          )
+        ) throw new Error("Missing alias-resolution section");
+        await writeCurrent(
+          path,
+          source.slice(0, currentStart) +
+            original.slice(originalStart, originalEnd) +
+            source.slice(currentEnd),
         );
       }
       const readBaseline = (path: string) =>

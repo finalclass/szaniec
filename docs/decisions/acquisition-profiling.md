@@ -1,7 +1,8 @@
 # Acquisition profiling
 
 This follow-up measures the remaining cost after the aggregate performance
-implementation and removes eager import-path construction from ProgramAccess.
+implementation, removes eager import-path construction from ProgramAccess and
+memoizes canonical alias resolution within an immutable alias inventory.
 Diagnostic instrumentation is added only to temporary benchmark builds. The
 original policy, observation contract, full-graph scope, freshness gaps, diagnostics
 and exit status are retained.
@@ -25,6 +26,27 @@ The compiled acquisition probe checks first-match rejection, valid first-match
 precedence, visible/hidden fallback and missing-local rejection. Existing cached
 acquisition and public-contract scenarios check current sources, interfaces, import
 identities, artifact corruption and concurrent checks.
+
+## Alias resolution
+
+Observation normalization repeatedly resolves the same canonical symbols while
+rewriting calls, references, arguments and flow steps. Canonical retains the
+existing longest-prefix index and first-match duplicate behavior, and memoizes
+only complete resolutions started with an empty visiting context. Successful
+results and cyclic failures may both be reused. Intermediate recursive results
+are not memoized across visiting contexts. A cached cyclic result still lets each
+caller record its existing unsupported evidence; it is not a successful target.
+
+Each domain owns its memo. A fixed domain-local key retains only the most recently
+used resolver identity and clears entries when that identity changes. The captured
+alias index is immutable. Changing inventories cannot reuse old successes or
+cyclic failures, domains do not mutate a shared memo, and constructing new resolvers
+does not allocate an unbounded sequence of domain-local keys. The primitive remains
+owned by Model and carries no framework or policy interpretation.
+
+The unit fixture checks longest-prefix selection, duplicate aliases, unchanged
+unknown paths, self/mutual cycles, changed inventories, long chains and concurrent
+domains. Compiled comparisons retain all normalization and global interpretation.
 
 ## Method
 
@@ -73,6 +95,8 @@ facts remain temporary; published results contain only aggregate counts and cost
 
 `--component imports` rolls back only the import-validation function in the
 baseline comparison copy. Every other implementation and adapter identity matches.
+`--component acquisition` rolls back that function and canonical alias memoization
+together, preserving the other aggregate optimizations.
 `--cache-followups` adds two current-checker samples after the uncached comparison:
 empty observation cache and reused observation cache. Both must preserve the same
 reference artifacts and exit status. They are reported separately and excluded
@@ -89,6 +113,11 @@ OCAMLRUNPARAM=o=20 deno run --allow-read --allow-write --allow-run \
   --profile-acquisition --collect-between-stages
 OCAMLRUNPARAM=o=20 deno run --allow-read --allow-write --allow-run \
   test/performance/conformance.ts --baseline e0581ff4 --component imports \
+  --runs 1 --size 50 --project-root <application> --snapshot-roots lib \
+  --config <temporary-unapproved-lib-policy> --timeout-seconds 300 \
+  --profile-acquisition --collect-between-stages --cache-followups
+OCAMLRUNPARAM=o=20 deno run --allow-read --allow-write --allow-run \
+  test/performance/conformance.ts --baseline e0581ff4 --component acquisition \
   --runs 1 --size 50 --project-root <application> --snapshot-roots lib \
   --config <temporary-unapproved-lib-policy> --timeout-seconds 300 \
   --profile-acquisition --collect-between-stages --cache-followups

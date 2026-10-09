@@ -134,6 +134,11 @@ let unit_resolver units =
         Hashtbl.replace memo path result ;
         result
 
+let alias_resolver_cache =
+  Domain.DLS.new_key (fun () ->
+      ( (ref None : unit ref option ref)
+      , (Hashtbl.create 128 : (t, t option) Hashtbl.t) ) )
+
 let alias_resolver aliases =
   let index = Hashtbl.create (List.length aliases) in
   List.iter
@@ -163,6 +168,19 @@ let alias_resolver aliases =
           in
           resolve (prefix :: visited) (target ^ suffix)
   in
-  resolve []
+  let identity = ref () in
+  fun path ->
+    let owner, memo = Domain.DLS.get alias_resolver_cache in
+    ( match !owner with
+    | Some previous when previous == identity -> ()
+    | _ ->
+        Hashtbl.clear memo ;
+        owner := Some identity ) ;
+    match Hashtbl.find_opt memo path with
+    | Some result -> result
+    | None ->
+        let result = resolve [] path in
+        Hashtbl.replace memo path result ;
+        result
 
 let resolve_alias aliases path = alias_resolver aliases path
