@@ -349,12 +349,64 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
       ; ("sites", `List (List.map jsite e.Callgraph.sites))
       ; ("contexts", `List (List.map context e.contexts)) ]
   in
+  let rec jsteps steps = `List (List.map jstep steps)
+  and jstep = function
+    | Interpretation.Flow_call i ->
+        let target =
+          match i.Interpretation.kind with
+          | ServiceRequest
+           |QueuedCommand ->
+              Callgraph.Service_method (i.to_service, i.to_method)
+          | ResourceAccess -> Callgraph.Resource_target i.resource
+          | _ -> Callgraph.External_target i.api
+        in
+        `Assoc
+          [ ("kind", `String "call")
+          ; ("interaction", `String (Interpretation.kind_name i.kind))
+          ; ("to", jtarget target)
+          ; ("site", jsite (List.hd i.sites))
+          ; ( "evidencePath"
+            , `List (List.map (fun s -> `String s) i.evidence_path) ) ]
+    | Flow_choice branches ->
+        `Assoc
+          [ ("kind", `String "choice")
+          ; ( "branches"
+            , `List
+                (List.map
+                   (fun (label, steps) ->
+                     `Assoc [("label", `String label); ("steps", jsteps steps)] )
+                   branches ) ) ]
+    | Flow_loop (kind, site, api, condition, body) ->
+        `Assoc
+          [ ("kind", `String "loop")
+          ; ("loopKind", `String kind)
+          ; ("site", jsite site)
+          ; ("api", `String api)
+          ; ("conditionSteps", jsteps condition)
+          ; ("bodySteps", jsteps body) ]
+    | Flow_exit (outcome, site) ->
+        `Assoc
+          [ ("kind", `String "exit")
+          ; ("outcome", `String outcome)
+          ; ("site", jsite site) ]
+    | Flow_unknown (reason, site) ->
+        `Assoc
+          [ ("kind", `String "unknown")
+          ; ("reason", `String reason)
+          ; ("site", jsite site) ]
+  in
+  let jflow (flow : Interpretation.flow) =
+    `Assoc
+      [ ("status", `String (if flow.complete then "complete" else "incomplete"))
+      ; ("steps", jsteps flow.steps) ]
+  in
   let jmethod (m : Callgraph.method_info) =
     `Assoc
       [ ("name", `String m.Callgraph.mi_name)
       ; ("request", `String m.Callgraph.mi_request)
       ; ("response", `String m.Callgraph.mi_response)
       ; ("calls", `List (List.map jedge m.Callgraph.mi_calls))
+      ; ("flow", jflow m.mi_flow)
       ; ( "calledBy"
         , `List
             (List.map
@@ -396,7 +448,8 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
                    [ ("symbol", `String entry.symbol)
                    ; ("owner", `String entry.owner)
                    ; ("site", jsite entry.site)
-                   ; ("calls", `List (List.map jedge entry.calls)) ] )
+                   ; ("calls", `List (List.map jedge entry.calls))
+                   ; ("flow", jflow entry.flow) ] )
                cg.entry_points ) )
       ; ("unresolved", `List (List.map junresolved cg.Callgraph.unresolved))
       ; ( "unclassifiedUnits"

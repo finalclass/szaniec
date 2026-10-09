@@ -3,7 +3,7 @@
 
 let report_format = "szaniec-report/1"
 
-let callgraph_format = "szaniec-callgraph/2"
+let callgraph_format = "szaniec-callgraph/3"
 
 let complexity_format = "szaniec-complexity/1"
 

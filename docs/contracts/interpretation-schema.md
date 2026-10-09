@@ -239,6 +239,20 @@ unsupported callback expressions retain unknown evidence. Neither this projectio
 nor an empty loop list changes a conformance finding or proves a runtime count.
 Policy rules and TOML exemptions for repetition are outside this delivery.
 
+## Ordered flow projection
+
+InterpretationEngine projects ordered execution evidence using the existing
+ownership, interaction, suppression, and callback rules. It expands private
+helpers at their invocation positions and stops at real service boundaries.
+Each service method and non-RPC entry point retains its own flow; calls
+reference target methods instead of flattening their bodies into the caller.
+Branch, loop, exit, and unknown structure survives projection. Repeated
+occurrences are not deduplicated. Framework mechanics may be suppressed,
+but relevant application execution and unknown evidence remain visible.
+InspectionManager assembles these flows with the call network;
+CheckClient serializes them according to the
+[inspection contract](inspection-contract.md#ordered-execution-flow).
+
 ## Suppression rules (framework-generated mechanics)
 
 - Calls and unresolved calls inside recognized generated members are

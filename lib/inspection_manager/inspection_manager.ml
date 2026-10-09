@@ -99,6 +99,13 @@ let build_callgraph
                 ; mi_request= m.Szaniec_architecture_access.Cyrograf.m_request
                 ; mi_response= m.Szaniec_architecture_access.Cyrograf.m_response
                 ; mi_calls= []
+                ; mi_flow=
+                    { Interpretation.complete= false
+                    ; steps=
+                        [ Interpretation.Flow_unknown
+                            ( "execution body unavailable"
+                            , {Observation.site_path= ""; line= 0; col= 0} ) ]
+                    }
                 ; mi_called_by= [] } )
               s.Szaniec_architecture_access.Cyrograf.svc_methods } )
       cy.Szaniec_architecture_access.Cyrograf.services
@@ -295,7 +302,13 @@ let build_callgraph
                 { Callgraph.symbol= origin.symbol
                 ; owner= execution.execution_owner
                 ; site= origin.definition_site
-                ; calls= [] }
+                ; calls= []
+                ; flow=
+                    { Interpretation.complete= false
+                    ; steps=
+                        [ Interpretation.Flow_unknown
+                            ( "execution flow unavailable"
+                            , origin.definition_site ) ] } }
               (Hashtbl.find_opt entries origin.symbol)
           in
           let edge =
@@ -323,6 +336,52 @@ let build_callgraph
                        (fun (e : Callgraph.edge) -> e.target <> target)
                        entry.calls ) } )
     interpretation.execution_interactions ;
+  let flow_sources = Hashtbl.create 32 in
+  List.iter
+    (fun (execution : Interpretation.execution_flow) ->
+      let origin = execution.flow_origin in
+      match method_of_symbol origin.symbol with
+      | Some source ->
+          let previous =
+            Option.value ~default:[] (Hashtbl.find_opt flow_sources source)
+          in
+          Hashtbl.replace flow_sources source (execution.flow :: previous)
+      | None ->
+          let entry =
+            Option.value
+              ~default:
+                { Callgraph.symbol= origin.symbol
+                ; owner= execution.flow_owner
+                ; site= origin.definition_site
+                ; calls= []
+                ; flow= execution.flow }
+              (Hashtbl.find_opt entries origin.symbol)
+          in
+          Hashtbl.replace entries origin.symbol {entry with flow= execution.flow} )
+    interpretation.execution_flows ;
+  Hashtbl.iter
+    (fun source flows ->
+      match Hashtbl.find_opt idx source with
+      | None -> ()
+      | Some r ->
+          let mi_flow =
+            match flows with
+            | [flow] -> flow
+            | _ ->
+                { Interpretation.complete= false
+                ; steps=
+                    [ Interpretation.Flow_unknown
+                        ( "multiple implementation origins"
+                        , {Observation.site_path= ""; line= 0; col= 0} )
+                    ; Interpretation.Flow_choice
+                        (List.mapi
+                           (fun i flow ->
+                             ( Printf.sprintf "implementation-%d" i
+                             , flow.Interpretation.steps ) )
+                           (List.sort compare flows) ) ] }
+          in
+          r := {!r with mi_flow} )
+    flow_sources ;
   let services =
     List.map
       (fun (si : Callgraph.service_info) ->

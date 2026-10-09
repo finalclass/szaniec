@@ -37,11 +37,19 @@ type execution_call =
   ; execution_supplied: int
   ; execution_args: execution_arg list }
 
+type ordered_step =
+  | Invoke of execution_call
+  | Choose of (string * ordered_step list) list
+  | Repeat of string * site * ordered_step list * ordered_step list
+  | Leave of string * site
+  | Unknown_order of string * site
+
 type execution =
   { definitions: execution_definition list
-  ; invocations: execution_call list }
+  ; invocations: execution_call list
+  ; ordered: (string * ordered_step list) list }
 
-let empty_execution = {definitions= []; invocations= []}
+let empty_execution = {definitions= []; invocations= []; ordered= []}
 
 type call_arg =
   { arg_label: string (* "" for a positional argument *)

@@ -1594,112 +1594,117 @@ let interpret
     let owner = owner_of_path symbol in
     if owner.owner_service = "" then owner.owner_module else owner.owner_service
   in
-  let execution_interactions =
+  let definitions =
     let definitions = Hashtbl.create 64 in
     List.iter
       (fun (d : Observation.execution_definition) ->
         Hashtbl.replace definitions d.symbol () )
       obs.execution.definitions ;
+    definitions
+  in
+  let eligible symbol =
+    match (owner_of_path symbol).owner_class with
+    | Interpretation.Contract_of _
+     |Contract_data _
+     |ExternalLibrary _ ->
+        false
+    | _ -> not (generated_member symbol)
+  in
+  let entry_point symbol =
+    let owner = owner_of_path symbol in
+    let name = List.rev (Canonical.split_dots symbol) |> List.hd in
+    List.exists
+      (fun service ->
+        service.Szaniec_architecture_access.Cyrograf.svc_name
+        = owner.owner_service
+        && List.exists
+             (fun method_ ->
+               method_.Szaniec_architecture_access.Cyrograf.m_name = name )
+             service.svc_methods )
+      cy.Szaniec_architecture_access.Cyrograf.services
+  in
+  let classify_execution origin (call : Observation.execution_call) =
+    let api = call.execution_callee in
+    let from_owner = owner_of_path origin in
+    let target_owner = owner_of_path api in
+    let make kind to_service to_method resource =
+      Some
+        { Interpretation.kind
+        ; from_owner= execution_owner origin
+        ; to_service
+        ; to_method
+        ; target_module= api
+        ; resource
+        ; api
+        ; evidence_path= []
+        ; sites= [call.execution_site] }
+    in
+    if call.execution_resolution <> Observation.Resolved
+    then make Interpretation.ExternalCall "" "" ""
+    else if unavailable_target api && resource_of_api api = None
+    then make Interpretation.ExternalCall "" "" ""
+    else
+      match resource_of_api api with
+      | Some resource -> make Interpretation.ResourceAccess "" "" resource
+      | None -> (
+        match
+          Public_contracts.allowed_surface
+            surfaces
+            ~consumer:(execution_owner origin)
+            api
+        with
+        | Some surface ->
+            if surface.public_service = execution_owner origin
+            then None
+            else
+              make
+                Interpretation.ServiceRequest
+                surface.public_service
+                (last_segment api)
+                ""
+        | None -> (
+          match contract_call_target api with
+          | Some _ when last_segment api = "make_spec" -> None
+          | Some (service, method_name) ->
+              if
+                List.exists
+                  (fun method_ ->
+                    method_.Szaniec_architecture_access.Cyrograf.m_name
+                    = method_name )
+                  service.svc_methods
+              then
+                make
+                  Interpretation.ServiceRequest
+                  service.svc_name
+                  method_name
+                  ""
+              else if generated_member api
+              then None
+              else
+                make Interpretation.ImplementationAccess service.svc_name "" ""
+          | None
+            when Hashtbl.mem definitions api
+                 && same_boundary from_owner target_owner ->
+              None
+          | None when generated_member api -> None
+          | None ->
+              let kind =
+                match target_owner.owner_class with
+                | Interpretation.Implementation_of _
+                 |Helper_of _
+                  when not (same_boundary from_owner target_owner) ->
+                    Interpretation.ImplementationAccess
+                | _ -> Interpretation.ExternalCall
+              in
+              make kind "" "" "" ) )
+  in
+  let execution_interactions =
     Repetition.project
       ~execution:obs.execution
       ~owner_of:execution_owner
-      ~eligible:(fun symbol ->
-        match (owner_of_path symbol).owner_class with
-        | Interpretation.Contract_of _
-         |Contract_data _
-         |ExternalLibrary _ ->
-            false
-        | _ -> not (generated_member symbol) )
-      ~entry_point:(fun symbol ->
-        let owner = owner_of_path symbol in
-        let name = List.rev (Canonical.split_dots symbol) |> List.hd in
-        List.exists
-          (fun service ->
-            service.Szaniec_architecture_access.Cyrograf.svc_name
-            = owner.owner_service
-            && List.exists
-                 (fun method_ ->
-                   method_.Szaniec_architecture_access.Cyrograf.m_name = name )
-                 service.svc_methods )
-          cy.Szaniec_architecture_access.Cyrograf.services )
-      ~classify:(fun origin (call : Observation.execution_call) ->
-        let api = call.execution_callee in
-        let from_owner = owner_of_path origin in
-        let target_owner = owner_of_path api in
-        let make kind to_service to_method resource =
-          Some
-            { Interpretation.kind
-            ; from_owner= execution_owner origin
-            ; to_service
-            ; to_method
-            ; target_module= api
-            ; resource
-            ; api
-            ; evidence_path= []
-            ; sites= [call.execution_site] }
-        in
-        if call.execution_resolution <> Observation.Resolved
-        then make Interpretation.ExternalCall "" "" ""
-        else if unavailable_target api && resource_of_api api = None
-        then make Interpretation.ExternalCall "" "" ""
-        else
-          match resource_of_api api with
-          | Some resource -> make Interpretation.ResourceAccess "" "" resource
-          | None -> (
-            match
-              Public_contracts.allowed_surface
-                surfaces
-                ~consumer:(execution_owner origin)
-                api
-            with
-            | Some surface ->
-                if surface.public_service = execution_owner origin
-                then None
-                else
-                  make
-                    Interpretation.ServiceRequest
-                    surface.public_service
-                    (last_segment api)
-                    ""
-            | None -> (
-              match contract_call_target api with
-              | Some _ when last_segment api = "make_spec" -> None
-              | Some (service, method_name) ->
-                  if
-                    List.exists
-                      (fun method_ ->
-                        method_.Szaniec_architecture_access.Cyrograf.m_name
-                        = method_name )
-                      service.svc_methods
-                  then
-                    make
-                      Interpretation.ServiceRequest
-                      service.svc_name
-                      method_name
-                      ""
-                  else if generated_member api
-                  then None
-                  else
-                    make
-                      Interpretation.ImplementationAccess
-                      service.svc_name
-                      ""
-                      ""
-              | None
-                when Hashtbl.mem definitions api
-                     && same_boundary from_owner target_owner ->
-                  None
-              | None when generated_member api -> None
-              | None ->
-                  let kind =
-                    match target_owner.owner_class with
-                    | Interpretation.Implementation_of _
-                     |Helper_of _
-                      when not (same_boundary from_owner target_owner) ->
-                        Interpretation.ImplementationAccess
-                    | _ -> Interpretation.ExternalCall
-                  in
-                  make kind "" "" "" ) ) )
+      ~eligible
+      ~entry_point
+      ~classify:classify_execution
     |> List.map (fun (e : Interpretation.execution_interaction) ->
         let path = e.execution_interaction.api in
         if
@@ -1717,6 +1722,44 @@ let interpret
                     :: e.execution_context.unknown_reasons ) } }
         else e )
   in
+  let flow_interactions = Hashtbl.create 32 in
+  List.iter
+    (fun (i : Interpretation.interaction) ->
+      if
+        List.mem
+          i.kind
+          [Interpretation.QueuedCommand; Publication; Subscription; Registration]
+      then
+        List.iter
+          (fun site ->
+            let key = (i.api, site) in
+            let rows =
+              Option.value ~default:[] (Hashtbl.find_opt flow_interactions key)
+            in
+            Hashtbl.replace flow_interactions key (i :: rows) )
+          i.sites )
+    !interactions ;
+  let classify_flow origin call =
+    match
+      Option.value
+        ~default:[]
+        (Hashtbl.find_opt
+           flow_interactions
+           (call.Observation.execution_callee, call.execution_site) )
+    with
+    | [] -> Option.to_list (classify_execution origin call)
+    | rows -> List.sort_uniq compare rows
+  in
+  let execution_flows =
+    Ordered_flow.project
+      ~execution:obs.execution
+      ~owner_of:execution_owner
+      ~available:(fun api ->
+        (not (unavailable_target api)) || resource_of_api api <> None )
+      ~eligible
+      ~entry_point
+      ~classify:classify_flow
+  in
   { Interpretation.ownerships
   ; bindings=
       List.sort_uniq
@@ -1731,4 +1774,5 @@ let interpret
         bindings
   ; interactions= merge_interactions !interactions
   ; execution_interactions
+  ; execution_flows
   ; gaps= List.sort_uniq compare !gaps }

@@ -6,6 +6,9 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
   let invocations = ref [] in
   let symbols = Hashtbl.create 32 in
   let functions = Hashtbl.create 32 in
+  let bodies = Hashtbl.create 32 in
+  let applications = Hashtbl.create 32 in
+  let resumed = ref [] in
   let caller = ref (unit_canonical ^ ".<toplevel>") in
   let module_scope = ref unit_canonical in
   let loops = ref [] in
@@ -112,6 +115,7 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
               if !caller = !module_scope ^ ".<toplevel>"
               then (
                 define symbol vb.vb_loc true ;
+                Hashtbl.replace bodies symbol vb.vb_expr ;
                 within symbol [] (fun () -> default.value_binding self vb) )
               else default.value_binding self vb )
     ; expr=
@@ -127,10 +131,12 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
                 | Tfunction_body _ -> 0
               in
               define ~arity symbol e.exp_loc false ;
+              Hashtbl.replace bodies symbol e ;
               within symbol [] (fun () -> default.expr self e)
           | Texp_lazy body ->
               let symbol = !caller ^ ".<lazy@" ^ position e.exp_loc ^ ">" in
               define symbol e.exp_loc false ;
+              Hashtbl.replace bodies symbol body ;
               within symbol [] (fun () -> self.expr self body)
           | Texp_let (_, bindings, _) ->
               List.iter register bindings ;
@@ -206,17 +212,20 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
                 ; execution_args= arguments }
               in
               invocations := invocation :: !invocations ;
+              Hashtbl.replace applications e.exp_loc invocation ;
               if partial
               then begin
                 let symbol = function_symbol e in
                 define symbol e.exp_loc false ;
-                invocations :=
+                let call =
                   { invocation with
                     execution_caller= symbol
                   ; execution_loops= []
                   ; execution_resumed= true
                   ; execution_partial= false }
-                  :: !invocations
+                in
+                invocations := call :: !invocations ;
+                resumed := (symbol, [Observation.Invoke call]) :: !resumed
               end ;
               self.expr self fn ;
               List.iter
@@ -235,4 +244,16 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
     true ;
   iterator.structure iterator structure ;
   { Observation.definitions= List.sort_uniq compare !definitions
-  ; invocations= List.sort_uniq compare !invocations }
+  ; invocations= List.sort_uniq compare !invocations
+  ; ordered=
+      Hashtbl.fold
+        (fun symbol body acc ->
+          ( symbol
+          , Ordered_execution.observe
+              ~site_of_loc
+              ~invocation:(fun e -> Hashtbl.find_opt applications e.exp_loc)
+              body )
+          :: acc )
+        bodies
+        !resumed
+      |> List.sort compare }

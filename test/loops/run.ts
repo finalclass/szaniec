@@ -114,7 +114,7 @@ let shadowed ctx title = List.map (fun () -> fetch ctx title) [()]
     );
     const first = await Deno.readTextFile(`${project}/szaniec.json`);
     const graph = JSON.parse(first);
-    assert(graph.format === "szaniec-callgraph/2", "versioned graph contract");
+    assert(graph.format === "szaniec-callgraph/3", "versioned graph contract");
     const manager = graph.services.find((s: { name: string }) =>
       s.name === "Task_manager"
     );
