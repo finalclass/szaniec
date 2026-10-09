@@ -4,10 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+static volatile sig_atomic_t measured_child = 0;
+static void stop_child(int signal_number) {
+  if (measured_child > 0) kill(measured_child, signal_number);
+}
 
 int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "--evict") == 0) {
@@ -30,6 +36,11 @@ int main(int argc, char **argv) {
     perror("execvp");
     _exit(127);
   }
+  measured_child = child;
+  struct sigaction stop = {0};
+  stop.sa_handler = stop_child;
+  sigemptyset(&stop.sa_mask);
+  sigaction(SIGTERM, &stop, NULL);
   int status;
   struct rusage usage;
   while (wait4(child, &status, 0, &usage) < 0) {

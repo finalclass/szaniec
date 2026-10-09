@@ -29,8 +29,13 @@ execution-context/ordered-flow walker. Architecture skips complexity measurement
 Suggestions retain their dependency catalog and source extraction.
 
 Acquisition retains tree-free CMT metadata, validates the full current inventory,
-and processes selected trees individually. Metadata cold misses require reading
-the compiler's serialized record; its format does not expose independent scope
+and processes selected trees individually. Stripping preserves the original
+annotation kind so
+an incomplete interface identity cannot gain a partial-implementation exemption.
+The compiler fixture checks all five annotation kinds and absent interface digests.
+Metadata caching uses format `/3` to invalidate earlier stripped representations.
+Metadata cold misses require reading the compiler's serialized record; its format
+does not expose independent scope
 metadata before the tree. Selected cold artifacts are read again after inventory
 and freshness validation. This deliberately trades some I/O for lower retained
 memory instead of guessing exclusion from filenames. Persistent metadata hits
@@ -52,6 +57,15 @@ cursor balances roots; joining all workers precedes deterministic merging.
 Worker failures propagate after cleanup. Workloads below 256 path records and
 the default single-domain setting use sequential evaluation. Parallel execution
 is opt-in because domain startup and GC can outweigh benefits on simple inputs.
+
+CLI graph rendering creates lazy JSON collections and writes through a scoped
+formatter/channel. It preserves Yojson's existing pretty layout, escaping, field
+order and final newline. This avoids a second complete JSON tree plus final
+buffer/string copies; one collection's shallow nodes are produced at a time.
+The complete Callgraph model and every flow, site, context and unknown remain
+present. Rendering stays owned by CLI and does not enter either Engine. Channel
+cleanup runs on write failure. This follows the large application's rendering
+failure described below.
 
 ## Verification
 
@@ -83,6 +97,26 @@ compiled acceptance covers interface freshness, preprocessing, missing artifacts
 generated wrappers, native/browser serializers, private/resource access and
 unsupported evidence. The #31 serializer/runtime shape is already implemented
 by PR #29; its packaged acceptance is retained rather than duplicated.
+The renderer compares 1,000 varied JSON layouts, escaping, integer limits and
+100-level nesting against Yojson, then compiled graphs against the former
+renderer. The corruption fixture replaces a deliberately read-only CMT instead
+of modifying Dune's potentially hard-linked output in place; this fixes the
+first CI run's test-environment permission failure.
+
+`make build` and `make verify` completed successfully. After the final metadata-kind
+correction, the package was rebuilt, all unit tests reran, and the following
+targeted compiled suites passed again:
+
+```sh
+dune build @test/unit/runtest test/performance/acquisition.exe
+deno test --allow-read --allow-write --allow-run --allow-env \
+  test/performance/acquisition.ts test/acceptance/public_contracts.ts
+```
+
+Tracked OCaml formatting, both Deno helpers' formatting/type checks, and the final
+cache comparison also passed. Source/interface changes, original annotation kinds,
+current compiler import identities and complete report/graph equivalence are
+covered by the final compiled reruns.
 
 ## Benchmark method
 
@@ -96,6 +130,13 @@ interpretation safety guards described below; all adapter identities match.
 compares 1 against `--domains` using current code. Extraction caches are disabled
 in all other modes. Samples alternate comparison order and require identical
 reports, complete graphs and exit statuses, including nonzero conformance results.
+Full graphs are validated with `jq --stream empty`, compared byte-for-byte with
+`cmp`, and fingerprinted with `sha256sum`. These existing command-line tools are
+required for full-graph benchmarks. The Deno helper retains only the report and a
+graph path, so multi-gigabyte graphs do not become JavaScript strings or objects.
+`rendering` replaces only the CLI with the former eager renderer. The `all`
+rollback also includes the former CLI. Observation, interpretation, evaluation,
+projection and rendering have separate timings in the temporary copies.
 
 The small native Linux `measure.c` helper uses `wait4` for actual child peak RSS
 and total CPU time across domains. Deno remains the automation runtime; C is
@@ -104,6 +145,8 @@ in the temporary directory. `--time-command` can select GNU time instead (CPU
 totals then are unavailable). Each invocation has a 300-second default budget,
 selected by `--timeout-seconds`; timeout/OOM samples fail and are never accepted
 as completed checks. Temporary builds, fixtures and reports are removed.
+On timeout the native helper forwards termination to its child and records the
+child's resource usage before exiting; the timeout remains a failed sample.
 
 The helper also supports `--projection-only`, `--complexity`, and
 `--shape branching` (48 alternatives). Component projection measurements use
@@ -127,16 +170,22 @@ deno run --allow-read --allow-write --allow-run test/performance/conformance.ts 
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component capabilities --complexity --runs 3 --size 2000
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
+  --baseline baf52b9c --component capabilities --runs 3 --size 2000
+deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component selection --filesystem-cache cold --runs 3 --size 2000
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component cache --runs 3 --size 2000
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component parallel --shape branching --domains 4 --runs 3 --size 400
+deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
+  --baseline baf52b9c --component parallel --shape branching --domains 2 --runs 3 --size 400
 ```
 
 The cache mode additionally rebuilds one artifact, then broadly changed sources.
 Its first sample for each state records invalidation; subsequent samples record
-warm reuse. Disk costs can be inspected under the temporary application's cache.
+warm reuse. Temporary copies discard the source checkout's observation cache:
+project-root identity prevents reuse and inherited entries would distort disk costs.
+Disk costs can be inspected under the temporary application's cache.
 Use `--project-root <application> --config <toml>` for an existing application;
 this does not rebuild it or approve its policy. Raw application facts are local.
 
@@ -149,8 +198,10 @@ not statistically established speedup guarantees. Full-check comparisons retaine
 
 | Comparison | Baseline | Optimized |
 |---|---:|---:|
-| All changes, full-check median | 1.798 s | 1.130 s |
-| All changes, process peak RSS median | 136.0 MiB | 100.1 MiB |
+| All changes, full-check median | 1.825 s | 1.145 s |
+| All changes, process peak RSS median | 135.4 MiB | 90.1 MiB |
+| All changes, evaluation median | 0.533 s | 0.015 s |
+| All changes, observation median | 0.798 s | 0.901 s |
 | Resolver rollback, full-check median | 1.445 s | 1.216 s |
 | Resolver rollback, interpretation median | 0.346 s | 0.117 s |
 | Isolated resolver, 12,000 lookups CPU median | 0.786 s | 0.004 s |
@@ -164,6 +215,9 @@ not statistically established speedup guarantees. Full-check comparisons retaine
 | Tree retention rollback, advised-cold observation median | 1.010 s | 0.979 s |
 | Capability selection, full complexity median over lib roots | 1.133 s | 0.974 s |
 | Capability selection, complexity observation median | 0.938 s | 0.864 s |
+| Rendering only, compiled fixture rendering median | 0.118 s | 0.064 s |
+| Rendering only, repository graph rendering median | 9.362 s | 4.585 s |
+| Rendering only, repository process peak RSS median | 2,111.5 MiB | 182.6 MiB |
 
 Attribution and aggregation do not materially improve the small full-check
 fixture: it has few exported edges. The large projection fixture isolates their
@@ -172,25 +226,30 @@ reads (58 versus 84 typed reads, with 58 scanned and 26 selected artifacts);
 advised-cold full-check medians were 1.292 and 1.262 s. These final runs include
 hidden Dune object directories in advised eviction. Earlier exploratory eviction
 runs that missed those directories are excluded. Capability-selection
-check medians (1.060/1.097 s) do not establish an independent check-time gain on
-the straight-line fixture; complexity exercises all lib definitions separately.
+check medians (1.210/1.187 s, observation 0.923/0.920 s) do not establish an
+independent check-time gain on the straight-line fixture; complexity exercises
+all lib definitions separately. The complete uncached extension increases
+acquisition time because selected CMTs are reread and cache identities are hashed;
+its interpretation/evaluation gains and lower retained memory improve the full
+check despite that cost.
 
-Final cache measurements retained identical full outputs:
+Cache measurements before the CLI streaming change retained identical full
+outputs; their full-check timings include the former renderer:
 
 | State | Cache off | Cache on first sample | Cache on subsequent samples |
 |---|---:|---:|---:|
-| Unchanged fixture, full check | 1.215 s median | 1.244 s | 0.716 / 0.739 s |
-| One source rebuilt, full check | 1.239 s median | 1.266 s | 0.714 / 0.747 s |
-| Broad source changes rebuilt, full check | 1.154 s median | 1.240 s | 0.695 / 0.739 s |
+| Unchanged fixture, full check | 1.176 s median | 1.194 s | 0.675 / 0.688 s |
+| One source rebuilt, full check | 1.262 s median | 1.254 s | 0.683 / 0.745 s |
+| Broad source changes rebuilt, full check | 1.206 s median | 1.302 s | 0.753 / 0.839 s |
 
 Initial extraction records 84 misses/typed reads and 0 hits; unchanged repeats
 record 84 hits and no reads. The one-source rebuild records 3 misses/reads and
 55 hits, then 58 hits and no reads; rebuilding changes the byte/native artifact
 inventory from 58 to 32 while retaining all 22 units. Broad invalidation records
 66 misses/reads and 13 hits, then 79 hits and no reads (53 scanned artifacts).
-Warm unchanged RSS is approximately 63.7 MiB versus 103.2 MiB uncached. Cache
-payloads occupy 1,724,392 bytes/84 entries initially, 3,325,473 bytes/87 entries
-after the one-source rebuild and 5,031,233 bytes/153 entries after broad changes.
+Warm unchanged RSS is approximately 63.9 MiB versus 102.9 MiB uncached. Cache
+payloads occupy 1,724,624 bytes/84 entries initially, 3,325,713 bytes/87 entries
+after the one-source rebuild and 5,031,649 bytes/153 entries after broad changes.
 Old content-addressed entries accumulate until explicit cleanup. First runs and
 invalidation can cost more than uncached checks; warm savings do not describe
 every edit.
@@ -207,6 +266,11 @@ One four-domain sample took 5.035 s. A later repeat while acceptance fixtures we
 compiling measured medians 2.878/4.982 s, CPU 2.652/5.827 s and RSS 160.0/166.6 MiB.
 Both comparisons retained identical reports and graphs. This variability and GC/
 host contention prevent claiming reliable four-domain speedup on this host.
+A subsequent three-pair two-domain comparison improved every full-check sample:
+medians 2.553/1.929 s (24% elapsed reduction), evaluation 1.428/0.806 s, total CPU
+2.517/2.677 s and RSS 160.3/162.6 MiB. Its reports and graphs were identical.
+Two domains are therefore the measured useful setting for this branching workload;
+adding domains does not guarantee further improvement.
 The simple straight-line fixture also slows slightly with four domains. The
 single-domain default, opt-in domain selection and sequential comparison remain
 available. Main-domain allocation is not total worker allocation.
@@ -221,14 +285,28 @@ The original baseline crashed on an empty execution symbol before producing a
 report. Both comparison copies therefore receive guards for empty entry symbols
 and bare `spec` references; the product fixes have targeted regression coverage
 and change Well adapter identity to 3.4.1. Nonempty dotted-name normalization is
-preserved. This comparison does not retest or resolve the earlier 451-unit private
-application OOM recorded in `conformance-indexes.md`.
+preserved. These public-repository measurements precede the CLI streaming change.
+
+An isolated `--component conformance` full comparison on the same public
+repository preserved both artifacts and exit 2 with all other optimizations held
+constant. Evaluation was 0.057/0.034 s and allocated 55,187,304/43,287,816 bytes;
+full checks took 10.058/10.431 s at 1,991.0/1,991.8 MiB peak RSS. Evaluation is a
+small part of this application's full pipeline, so this pair does not establish
+an independent end-to-end gain from #14. The corresponding 2,000-entry compiled
+fixture measured evaluation 0.504/0.015 s and full checks 1.717/1.097 s with
+identical artifacts and exit 0.
 
 The existing-application command actually run was:
 
 ```sh
 deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
   --baseline baf52b9c --component all --runs 1 --size 2000 \
+  --project-root . --config <temporary-unapproved-lib-policy> --timeout-seconds 120
+deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
+  --baseline baf52b9c --component conformance --runs 1 --size 2000 \
+  --project-root . --config <temporary-unapproved-lib-policy> --timeout-seconds 120
+deno run --allow-read --allow-write --allow-run test/performance/conformance.ts \
+  --baseline baf52b9c --component rendering --runs 3 --size 2000 \
   --project-root . --config <temporary-unapproved-lib-policy> --timeout-seconds 120
 ```
 

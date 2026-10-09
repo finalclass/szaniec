@@ -19,6 +19,16 @@
  (libraries szaniec_model))
 
 (rule
+ (target callgraph_render.ml)
+ (deps ../../bin/callgraph_render.ml)
+ (action (copy %{deps} %{target})))
+
+(executable
+ (name rendering)
+ (modules rendering callgraph_render)
+ (libraries yojson))
+
+(rule
  (target projection.ml)
  (deps ../unit/callgraph_indexes.ml)
  (action (copy %{deps} %{target})))

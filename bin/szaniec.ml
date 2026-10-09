@@ -309,7 +309,8 @@ let json_report (r : Finding.report) : string =
   in
   Yojson.Safe.to_string json ^ "\n"
 
-let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
+let write_callgraph_json channel (cg : Callgraph.t) (inputs : Finding.inputs) :
+    unit =
   let jsite (s : Observation.site) =
     `Assoc
       [ ("path", `String s.Observation.site_path)
@@ -338,18 +339,20 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
       `Assoc
         [ ("origin", `String c.origin)
         ; ("site", jsite c.site)
-        ; ("evidencePath", `List (List.map (fun s -> `String s) c.context_path))
-        ; ("loops", `List (List.map repetition c.loops))
-        ; ("activations", `List (List.map repetition c.activations))
+        ; ( "evidencePath"
+          , `List (fun () -> List.map (fun s -> `String s) c.context_path) )
+        ; ("loops", `List (fun () -> List.map repetition c.loops))
+        ; ("activations", `List (fun () -> List.map repetition c.activations))
         ; ( "unknownReasons"
-          , `List (List.map (fun s -> `String s) c.unknown_reasons) ) ]
+          , `List (fun () -> List.map (fun s -> `String s) c.unknown_reasons) )
+        ]
     in
     `Assoc
       [ ("to", jtarget e.Callgraph.target)
-      ; ("sites", `List (List.map jsite e.Callgraph.sites))
-      ; ("contexts", `List (List.map context e.contexts)) ]
+      ; ("sites", `List (fun () -> List.map jsite e.Callgraph.sites))
+      ; ("contexts", `List (fun () -> List.map context e.contexts)) ]
   in
-  let rec jsteps steps = `List (List.map jstep steps)
+  let rec jsteps steps = `List (fun () -> List.map jstep steps)
   and jstep = function
     | Interpretation.Flow_call i ->
         let target =
@@ -366,16 +369,18 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
           ; ("to", jtarget target)
           ; ("site", jsite (List.hd i.sites))
           ; ( "evidencePath"
-            , `List (List.map (fun s -> `String s) i.evidence_path) ) ]
+            , `List (fun () -> List.map (fun s -> `String s) i.evidence_path) )
+          ]
     | Flow_choice branches ->
         `Assoc
           [ ("kind", `String "choice")
           ; ( "branches"
             , `List
-                (List.map
-                   (fun (label, steps) ->
-                     `Assoc [("label", `String label); ("steps", jsteps steps)] )
-                   branches ) ) ]
+                (fun () ->
+                  List.map
+                    (fun (label, steps) ->
+                      `Assoc [("label", `String label); ("steps", jsteps steps)] )
+                    branches ) ) ]
     | Flow_loop (kind, site, api, condition, body) ->
         `Assoc
           [ ("kind", `String "loop")
@@ -405,21 +410,23 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
       [ ("name", `String m.Callgraph.mi_name)
       ; ("request", `String m.Callgraph.mi_request)
       ; ("response", `String m.Callgraph.mi_response)
-      ; ("calls", `List (List.map jedge m.Callgraph.mi_calls))
+      ; ("calls", `List (fun () -> List.map jedge m.Callgraph.mi_calls))
       ; ("flow", jflow m.mi_flow)
       ; ( "calledBy"
         , `List
-            (List.map
-               (fun (svc, method_name) ->
-                 `Assoc
-                   [("service", `String svc); ("method", `String method_name)] )
-               m.Callgraph.mi_called_by ) ) ]
+            (fun () ->
+              List.map
+                (fun (svc, method_name) ->
+                  `Assoc
+                    [("service", `String svc); ("method", `String method_name)] )
+                m.Callgraph.mi_called_by ) ) ]
   in
   let jservice (s : Callgraph.service_info) =
     `Assoc
       [ ("name", `String s.Callgraph.si_name)
       ; ("role", `String s.Callgraph.si_role)
-      ; ("methods", `List (List.map jmethod s.Callgraph.si_methods)) ]
+      ; ("methods", `List (fun () -> List.map jmethod s.Callgraph.si_methods))
+      ]
   in
   let junresolved (unit_name, caller, site) =
     `Assoc
@@ -439,24 +446,29 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
             ; ("programAccess", `String Version.adapter_ocaml)
             ; ("interpretation", `String Version.adapter_well)
             ; ("rules", `String Version.rules) ] )
-      ; ("services", `List (List.map jservice cg.Callgraph.services))
+      ; ("services", `List (fun () -> List.map jservice cg.Callgraph.services))
       ; ( "entryPoints"
         , `List
-            (List.map
-               (fun (entry : Callgraph.entry_point) ->
-                 `Assoc
-                   [ ("symbol", `String entry.symbol)
-                   ; ("owner", `String entry.owner)
-                   ; ("site", jsite entry.site)
-                   ; ("calls", `List (List.map jedge entry.calls))
-                   ; ("flow", jflow entry.flow) ] )
-               cg.entry_points ) )
-      ; ("unresolved", `List (List.map junresolved cg.Callgraph.unresolved))
+            (fun () ->
+              List.map
+                (fun (entry : Callgraph.entry_point) ->
+                  `Assoc
+                    [ ("symbol", `String entry.symbol)
+                    ; ("owner", `String entry.owner)
+                    ; ("site", jsite entry.site)
+                    ; ("calls", `List (fun () -> List.map jedge entry.calls))
+                    ; ("flow", jflow entry.flow) ] )
+                cg.entry_points ) )
+      ; ( "unresolved"
+        , `List (fun () -> List.map junresolved cg.Callgraph.unresolved) )
       ; ( "unclassifiedUnits"
-        , `List (List.map (fun u -> `String u) cg.Callgraph.unclassified_units)
-        ) ]
+        , `List
+            (fun () ->
+              List.map (fun u -> `String u) cg.Callgraph.unclassified_units ) )
+      ]
   in
-  Yojson.Safe.pretty_to_string json ^ "\n"
+  Callgraph_render.to_channel channel json ;
+  output_char channel '\n'
 
 let write_callgraph (r : Finding.report) (out : string option) (root : string) :
     unit =
@@ -477,8 +489,11 @@ let write_callgraph (r : Finding.report) (out : string option) (root : string) :
       | _ -> (
         try
           let oc = open_out path in
-          output_string oc (callgraph_json cg r.Finding.inputs) ;
-          close_out oc
+          Fun.protect
+            ~finally:(fun () -> close_out_noerr oc)
+            (fun () ->
+              write_callgraph_json oc cg r.Finding.inputs ;
+              close_out oc )
         with
         | Sys_error e ->
             prerr_endline ("szaniec: cannot write " ^ path ^ ": " ^ e) ) )

@@ -165,6 +165,9 @@ Deno.test("cached acquisition preserves fresh, changed, incomplete and concurren
       .find((path) => path.toLowerCase().endsWith("tasks_page.cmt"));
     assert(artifact, "compiled client artifact is required");
     const bytes = await Deno.readFile(artifact);
+    // Dune may protect or hard-link outputs. Replace only this fixture's file.
+    await Deno.chmod(artifact, 0o444);
+    await Deno.remove(artifact);
     await Deno.writeTextFile(artifact, "corrupt compiler artifact");
     await verify("corrupt artifact cannot reuse cached facts", 2);
     await Deno.writeFile(artifact, bytes);

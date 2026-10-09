@@ -1122,8 +1122,21 @@ type extracted =
   ; measured: bool }
 
 let strip_tree (cmt : Cmt_format.cmt_infos) =
+  let cmt_annots =
+    match cmt.cmt_annots with
+    | Cmt_format.Implementation _ ->
+        Cmt_format.Implementation
+          {Typedtree.str_items= []; str_type= []; str_final_env= Env.empty}
+    | Cmt_format.Interface _ ->
+        Cmt_format.Interface
+          {Typedtree.sig_items= []; sig_type= []; sig_final_env= Env.empty}
+    | Cmt_format.Packed _ -> Cmt_format.Packed ([], [])
+    | Cmt_format.Partial_implementation _ ->
+        Cmt_format.Partial_implementation [||]
+    | Cmt_format.Partial_interface _ -> Cmt_format.Partial_interface [||]
+  in
   { cmt with
-    cmt_annots= Cmt_format.Partial_implementation [||]
+    cmt_annots
   ; cmt_initial_env= Env.empty
   ; cmt_comments= []
   ; cmt_declaration_dependencies= []

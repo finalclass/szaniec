@@ -34,6 +34,7 @@ const components = [
   "capabilities",
   "cache",
   "parallel",
+  "rendering",
 ];
 if (!components.includes(component)) throw new Error("Unknown --component");
 const evaluationOnly = Deno.args.includes("--evaluation-only");
@@ -126,7 +127,30 @@ function instrument(source: string) {
       "  Gc.full_major () ;\n  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n  Gc.full_major () ;\n",
     );
   }
+  const projection =
+    "  let callgraph = build_callgraph ~cy ~observation ~interpretation in\n";
+  source = replaceOnce(
+    source,
+    projection,
+    "  let projection_started = Unix.gettimeofday () in\n" + projection +
+      '  Printf.eprintf "SZANIEC_STAGE projection=%.9f\\n%!" (Unix.gettimeofday () -. projection_started) ;\n',
+  );
   return source;
+}
+
+function instrumentCli(source: string) {
+  source = replaceOnce(
+    source,
+    "let write_callgraph (r : Finding.report)",
+    "let write_callgraph_raw (r : Finding.report)",
+  );
+  const marker = "let complexity_text (r : Complexity.t)";
+  return replaceOnce(
+    source,
+    marker,
+    'let write_callgraph report out root =\n  let started = Unix.gettimeofday () in\n  write_callgraph_raw report out root ;\n  Printf.eprintf "SZANIEC_STAGE rendering=%.9f\\n%!" (Unix.gettimeofday () -. started)\n\n' +
+      marker,
+  );
 }
 
 async function copySources(destination: string) {
@@ -151,36 +175,67 @@ async function copySources(destination: string) {
 }
 
 async function seedBuild(destination: string) {
+  let exists = true;
   try {
     await Deno.stat(`${destination}/_build`);
-    return;
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    exists = false;
+  }
+  if (!exists) {
+    try {
+      await Deno.stat(`${repo}/_build`);
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return;
+      throw error;
+    }
+    await required("cp", [
+      "-a",
+      "--reflink=auto",
+      `${repo}/_build`,
+      `${destination}/_build`,
+    ]);
+  }
+  // Project-root keys cannot reuse the source checkout's observations.
+  try {
+    await Deno.remove(`${destination}/_build/.szaniec-observations`, {
+      recursive: true,
+    });
   } catch (error) {
     if (!(error instanceof Deno.errors.NotFound)) throw error;
   }
-  try {
-    await Deno.stat(`${repo}/_build`);
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return;
-    throw error;
-  }
-  await required("cp", [
-    "-a",
-    "--reflink=auto",
-    `${repo}/_build`,
-    `${destination}/_build`,
-  ]);
 }
 
 type Sample = {
   evaluationSeconds: number;
   observationSeconds: number;
   interpretationSeconds: number;
+  projectionSeconds: number;
+  renderingSeconds: number;
   fullSeconds: number;
   peakKiB: number;
   cpuSeconds: number;
   evaluationAllocatedBytes: number;
 };
-type Output = { code: number; report: Uint8Array; graph: Uint8Array };
+type Output = { code: number; report: Uint8Array; graphPath?: string };
+
+async function validateGraph(path: string) {
+  const file = await Deno.open(path);
+  const prefix = new Uint8Array(4096);
+  let length: number | null;
+  try {
+    length = await file.read(prefix);
+  } finally {
+    file.close();
+  }
+  if (
+    !/^\s*\{\s*"format"\s*:\s*"szaniec-callgraph\/\d+"/.test(
+      decoder.decode(prefix.subarray(0, length ?? 0)),
+    )
+  ) throw new Error("Missing callgraph format");
+  // Parse every byte without constructing a multi-gigabyte JavaScript object.
+  await required("jq", ["--stream", "empty", path]);
+}
 
 function equal(a: Uint8Array, b: Uint8Array) {
   return a.length === b.length && a.every((byte, i) => byte === b[i]);
@@ -226,6 +281,11 @@ const temporary = await Deno.makeTempDir({
   prefix: "szaniec-conformance-benchmark-",
 });
 try {
+  if (!evaluationOnly && !projectionOnly && !complexityCommand) {
+    await required("jq", ["--version"]);
+    await required("cmp", ["--version"]);
+    await required("sha256sum", ["--version"]);
+  }
   const timeCommand = selectedTime ?? `${temporary}/measure`;
   if (!selectedTime) {
     await required("cc", [
@@ -257,6 +317,12 @@ try {
         required("git", ["show", `${baseline}:${path}`]);
       if (component === "conformance") {
         await writeCurrent(enginePath, baselineEngine);
+      }
+      if (component === "rendering" || component === "all") {
+        await writeCurrent(
+          "bin/szaniec.ml",
+          await readBaseline("bin/szaniec.ml"),
+        );
       }
       if (component === "all") {
         for (
@@ -337,6 +403,10 @@ try {
     await Deno.writeTextFile(
       `${build}/${managerPath}`,
       instrument(await Deno.readTextFile(`${build}/${managerPath}`)),
+    );
+    await Deno.writeTextFile(
+      `${build}/bin/szaniec.ml`,
+      instrumentCli(await Deno.readTextFile(`${build}/bin/szaniec.ml`)),
     );
     if (evaluationOnly) {
       const adapterPath = `${build}/lib/interpretation_engine/well_adapter.ml`;
@@ -511,14 +581,11 @@ try {
         const output: Output = {
           code: result.code,
           report: result.stdout,
-          graph: evaluationOnly || projectionOnly || complexityCommand
-            ? new Uint8Array()
-            : await Deno.readFile(graphPath),
+          ...(evaluationOnly || projectionOnly || complexityCommand
+            ? {}
+            : { graphPath }),
         };
         const report = JSON.parse(decoder.decode(output.report));
-        const graph = evaluationOnly || projectionOnly || complexityCommand
-          ? {}
-          : JSON.parse(decoder.decode(output.graph));
         if (
           complexityCommand
             ? report.format !== "szaniec-complexity/1"
@@ -526,27 +593,38 @@ try {
             ? report.format !== "szaniec-projection-benchmark/1"
             : evaluationOnly
             ? report.format !== "szaniec-evaluation-benchmark/1"
-            : report.format !== "szaniec-report/1" ||
-              !graph.format?.startsWith("szaniec-callgraph/")
+            : report.format !== "szaniec-report/1"
         ) {
           throw new Error(
             `${project.label}: missing complete report or callgraph`,
           );
         }
-        if (!evaluationOnly && !projectionOnly && !complexityCommand) {
-          await Deno.remove(graphPath);
-        }
+        if (output.graphPath) await validateGraph(output.graphPath);
         if (reference) {
           if (
             reference.code !== output.code ||
-            !equal(reference.report, output.report) ||
-            !equal(reference.graph, output.graph)
+            !equal(reference.report, output.report)
           ) {
             throw new Error(
               `${project.label}: report, graph or exit status changed`,
             );
           }
-        } else reference = output;
+          if (output.graphPath) {
+            await required("cmp", [
+              "-s",
+              reference.graphPath!,
+              output.graphPath,
+            ]);
+            await Deno.remove(output.graphPath);
+          }
+        } else {
+          if (output.graphPath) {
+            const referencePath = `${temporary}/reference-graph.json`;
+            await Deno.rename(output.graphPath, referencePath);
+            output.graphPath = referencePath;
+          }
+          reference = output;
+        }
         const sample = {
           evaluationSeconds: Number(timing[1]),
           observationSeconds: Number(
@@ -554,6 +632,12 @@ try {
           ),
           interpretationSeconds: Number(
             stderr.match(/SZANIEC_STAGE interpretation=([\d.]+)/)?.[1] ?? 0,
+          ),
+          projectionSeconds: Number(
+            stderr.match(/SZANIEC_STAGE projection=([\d.]+)/)?.[1] ?? 0,
+          ),
+          renderingSeconds: Number(
+            stderr.match(/SZANIEC_STAGE rendering=([\d.]+)/)?.[1] ?? 0,
           ),
           fullSeconds,
           peakKiB: Number(peak[1]),
@@ -578,6 +662,8 @@ try {
           evaluationSeconds: sample.evaluationSeconds,
           observationSeconds: sample.observationSeconds,
           interpretationSeconds: sample.interpretationSeconds,
+          projectionSeconds: sample.projectionSeconds,
+          renderingSeconds: sample.renderingSeconds,
           ...(evaluationOnly
             ? { processSeconds: sample.fullSeconds }
             : { fullSeconds: sample.fullSeconds }),
@@ -608,14 +694,18 @@ try {
       evaluationOnly,
       byteIdentical: true,
       reportDigest: await digest(reference!.report),
-      ...(evaluationOnly || projectionOnly || complexityCommand
-        ? {}
-        : { graphDigest: await digest(reference!.graph) }),
+      ...(evaluationOnly || projectionOnly || complexityCommand ? {} : {
+        graphDigest: (await required("sha256sum", [reference!.graphPath!]))
+          .split(" ")[0],
+        graphBytes: (await Deno.stat(reference!.graphPath!)).size,
+      }),
       medians: samples.map((set, i) => ({
         evaluator: i === 0 ? "baseline" : "indexed",
         evaluationSeconds: median(set.map((s) => s.evaluationSeconds)),
         observationSeconds: median(set.map((s) => s.observationSeconds)),
         interpretationSeconds: median(set.map((s) => s.interpretationSeconds)),
+        projectionSeconds: median(set.map((s) => s.projectionSeconds)),
+        renderingSeconds: median(set.map((s) => s.renderingSeconds)),
         ...(evaluationOnly
           ? { processSeconds: median(set.map((s) => s.fullSeconds)) }
           : { fullSeconds: median(set.map((s) => s.fullSeconds)) }),
@@ -626,6 +716,7 @@ try {
         ),
       })),
     }));
+    if (reference?.graphPath) await Deno.remove(reference.graphPath);
   }
 } finally {
   await Deno.remove(temporary, { recursive: true });
