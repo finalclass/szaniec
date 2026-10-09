@@ -370,4 +370,4 @@ The temporary policy selects `roots = ["lib"]` and
 The [acquisition profiling follow-up](acquisition-profiling.md) separates remaining
 freshness, compiler, cache and normalization costs, measures first/warm cache use
 on a temporary application snapshot, and validates on-demand compiler import-path
-construction against this implementation.
+construction and inventory-scoped alias memoization against this implementation.
