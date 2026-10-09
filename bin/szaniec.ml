@@ -376,7 +376,7 @@ let callgraph_json (cg : Callgraph.t) (inputs : Finding.inputs) : string =
         , `List (List.map (fun u -> `String u) cg.Callgraph.unclassified_units)
         ) ]
   in
-  Yojson.Safe.to_string json ^ "\n"
+  Yojson.Safe.pretty_to_string json ^ "\n"
 
 let write_callgraph (r : Finding.report) (out : string option) (root : string) :
     unit =
