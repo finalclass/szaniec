@@ -30,8 +30,9 @@ Adapter `szaniec-ocaml-adapter/1.3.0`, supporting artifacts compiled
 with **OCaml 5.4.x**. That adapter records path alternatives,
 call-argument identities, the `szaniec-cc/1` function inventory,
 structure-level module aliases across compilation units and Dune wrappers,
-scoped compiler identities, exact defined values, interface freshness, and
-unsupported module constructs.
+scoped compiler identities, exact defined values, interface freshness,
+source-header provenance evidence, and unsupported module constructs.
+Generator-specific interpretation stays in the Well adapter.
 Szaniec itself is built with the same series (the dune-managed toolchain
 resolves this).
 

@@ -26,6 +26,10 @@ One entry per observed compilation unit (implementation module):
   `Lib.Sub.Module`; for a wrapped-false library, `Module.Sub`; for
   executables, `Main` (the `Dune__exe__` prefix is stripped).
 - `sourcePath` — path relative to the project root.
+- `sourceHeader` — the first source line, without its line terminator, from a
+  fresh unit; empty for an empty source or a stale unit. ProgramAccess preserves
+  this text without interpreting generator names. InterpretationEngine uses
+  recognized generator headers as provenance evidence.
 - `sourcePath` — mapped back from the recorded preprocessed source: dune
   pp targets `x.pp.ml` (from `x.ml`) and `x.mlx.pp.ml` (from `x.mlx`);
   units derived from `.mlx` view files are a declared profile exclusion.

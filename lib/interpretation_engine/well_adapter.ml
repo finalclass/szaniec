@@ -72,6 +72,10 @@ let last_segment (path : string) : string =
   | Some i -> String.sub path (i + 1) (String.length path - i - 1)
   | None -> path
 
+let generated_contract = Public_contracts.generated_contract
+
+let wrapper_segment = Public_contracts.wrapper_segment
+
 type ownership_map = (string, Interpretation.ownership) Hashtbl.t
 
 (* A canonical path segment equals the service stem (case-insensitive) or
@@ -277,6 +281,15 @@ let classify_ownership
     (fun (u : Observation.unit_info) ->
       let canonical = u.Observation.canonical in
       let segs = Canonical.split_dots canonical in
+      let generated = generated_contract u in
+      let wrapper = wrapper_segment (last_segment canonical) in
+      let generated_families =
+        if generated
+        then
+          services_matching_segment cy wrapper
+          |> List.map (fun s -> s.Szaniec_architecture_access.Cyrograf.svc_name)
+        else []
+      in
       let is_framework =
         List.exists
           (fun seg ->
@@ -312,7 +325,7 @@ let classify_ownership
                 | _ -> None
               in
               let names =
-                [] |> fun acc ->
+                generated_families |> fun acc ->
                 push_name acc source_name |> fun acc ->
                 push_name acc (canonical_family cy segs) |> fun acc ->
                 push_name acc (Hashtbl.find_opt impl_of canonical)
@@ -320,6 +333,21 @@ let classify_ownership
               in
               match names with
               | [] ->
+                  if
+                    (not generated)
+                    && (not (Hashtbl.mem contracts canonical))
+                    && wrapper <> last_segment canonical
+                    && services_matching_segment cy wrapper <> []
+                  then
+                    gaps :=
+                      { Observation.gap_code= "GAP-AMBIGUOUS-OWNERSHIP"
+                      ; gap_path= u.Observation.source_path
+                      ; gap_detail=
+                          Printf.sprintf
+                            "generated contract provenance cannot be \
+                             established for %s"
+                            canonical }
+                      :: !gaps ;
                   { Interpretation.owner_module= canonical
                   ; owner_class= Interpretation.Unclassified
                   ; owner_service= "" }
@@ -340,6 +368,16 @@ let classify_ownership
       in
       Hashtbl.replace map canonical owner )
     obs.Observation.units ;
+  let ambiguous_units = Hashtbl.create 16 in
+  List.iter
+    (fun (u : Observation.unit_info) ->
+      if
+        List.exists
+          (fun (g : Observation.gap) ->
+            g.gap_code = "GAP-AMBIGUOUS-OWNERSHIP" && g.gap_path = u.source_path )
+          !gaps
+      then Hashtbl.replace ambiguous_units u.canonical () )
+    obs.units ;
   Hashtbl.iter
     (fun unit (contract : Szaniec_architecture_access.Cyrograf.contract) ->
       let previous = Hashtbl.find map unit in
@@ -354,7 +392,9 @@ let classify_ownership
         | Some s -> s.svc_name
         | None -> ""
       in
-      if previous.owner_service <> "" && previous.owner_service <> family
+      if Hashtbl.mem ambiguous_units unit
+      then ()
+      else if previous.owner_service <> "" && previous.owner_service <> family
       then (
         Hashtbl.replace
           map
@@ -389,7 +429,9 @@ let classify_ownership
     List.iter
       (fun unit ->
         match Hashtbl.find_opt map unit with
-        | Some o when o.owner_class = Interpretation.Unclassified ->
+        | Some o
+          when o.owner_class = Interpretation.Unclassified
+               && not (Hashtbl.mem ambiguous_units unit) ->
             let aliases =
               List.filter
                 (fun (path, _) ->
@@ -479,7 +521,9 @@ let classify_ownership
     obs.Observation.calls ;
   Hashtbl.iter
     (fun target () ->
-      if not (Hashtbl.mem foreign_callers target)
+      if
+        (not (Hashtbl.mem foreign_callers target))
+        && not (Hashtbl.mem ambiguous_units target)
       then
         Hashtbl.replace
           map
@@ -552,6 +596,18 @@ let interpret
       (fun (u : Observation.unit_info) -> u.Observation.canonical)
       obs.Observation.units
   in
+  let ambiguous_units = Hashtbl.create 16 in
+  let ambiguous_paths = Hashtbl.create 16 in
+  List.iter
+    (fun (gap : Observation.gap) ->
+      if gap.gap_code = "GAP-AMBIGUOUS-OWNERSHIP"
+      then Hashtbl.replace ambiguous_paths gap.gap_path () )
+    (ownership_gaps @ contract_gaps) ;
+  List.iter
+    (fun (u : Observation.unit_info) ->
+      if Hashtbl.mem ambiguous_paths u.source_path
+      then Hashtbl.replace ambiguous_units u.canonical () )
+    obs.units ;
   let owner_of_path (path : string) : Interpretation.ownership =
     match Canonical.unit_prefix unit_paths path with
     | Some u -> Hashtbl.find ownership_map u
@@ -561,11 +617,23 @@ let interpret
         ; owner_service= "" }
   in
   let unit_owner_class path = (owner_of_path path).owner_class in
+  let generated_units = Hashtbl.create 16 in
+  List.iter
+    (fun (u : Observation.unit_info) ->
+      if generated_contract u
+      then Hashtbl.replace generated_units u.canonical () )
+    obs.units ;
+  let generated_path path =
+    match Canonical.unit_prefix unit_paths path with
+    | Some unit -> Hashtbl.mem generated_units unit
+    | None -> false
+  in
   let contract_call_target (callee : string) :
       (Szaniec_architecture_access.Cyrograf.service * string (* method *))
       option =
     match Canonical.unit_prefix unit_paths callee with
     | None -> None
+    | Some unit when Hashtbl.mem ambiguous_units unit -> None
     | Some unit -> (
       match
         (Hashtbl.find_opt contracts unit, Public_contracts.relative unit callee)
@@ -574,9 +642,14 @@ let interpret
           let method_name =
             match Public_contracts.rpc_member cy contract member with
             | Some name -> name
+            | None when Hashtbl.mem generated_units unit -> last_segment member
             | None -> member
           in
-          if Public_contracts.data_member contract member
+          if
+            Public_contracts.data_member
+              ~generated:(Hashtbl.mem generated_units unit)
+              contract
+              member
           then None
           else
             Option.map
@@ -589,6 +662,7 @@ let interpret
   in
   let contract_member path =
     match Canonical.unit_prefix unit_paths path with
+    | Some unit when Hashtbl.mem ambiguous_units unit -> None
     | Some unit -> (
       match
         (Hashtbl.find_opt contracts unit, Public_contracts.relative unit path)
@@ -606,7 +680,7 @@ let interpret
   let generated_member path =
     match contract_member path with
     | Some (c, member) ->
-        Public_contracts.mechanic c member
+        Public_contracts.mechanic ~generated:(generated_path path) c member
         || Public_contracts.rpc_member cy c member <> None
         || Hashtbl.mem topic_values path
     | None -> false
@@ -620,8 +694,17 @@ let interpret
           path = unit
           ||
           match Public_contracts.relative unit path with
-          | Some member ->
-              List.mem member c.contract_messages || member = "Proxy"
+          | Some member -> (
+              List.mem member c.contract_messages
+              || member = "Proxy"
+              || generated_path path
+                 && (not (List.mem path obs.defined_values))
+                 &&
+                 match Canonical.split_dots member with
+                 | [_]
+                  |[_; "Storage"] ->
+                     true
+                 | _ -> false )
           | None -> false )
       | None ->
           (owner_of_path unit).owner_class
@@ -869,7 +952,13 @@ let interpret
                       svc.Szaniec_architecture_access.Cyrograf.svc_methods
                   in
                   let mechanic = generated_member callee && not declared in
-                  if (not declared) && not mechanic
+                  if
+                    (not declared)
+                    && (not mechanic)
+                    && not
+                         ( self_call
+                         && generated_path callee
+                         && generated_path (c.call_unit ^ "." ^ c.caller) )
                   then
                     gaps :=
                       { gap_code= "SPEC-UNDECLARED-METHOD"
@@ -903,7 +992,7 @@ let interpret
                   else if (not self_call) && not mechanic
                   then
                     record_interaction
-                      ( if declared
+                      ( if declared || generated_path callee
                         then Interpretation.ServiceRequest
                         else Interpretation.ImplementationAccess )
                       (from_name c.Observation.call_unit)
@@ -944,29 +1033,76 @@ let interpret
                         from_owner.owner_service
                       && from_owner.owner_service <> ""
                     in
-                    match to_owner.owner_class with
-                    | Interpretation.Contract_of _ when self_call ->
-                        if not (generated_member callee)
-                        then dfs visited target (path @ [callee])
-                    | Interpretation.Contract_of s ->
-                        record_interaction
-                          Interpretation.ImplementationAccess
-                          (from_name c.Observation.call_unit)
-                          s
-                          ""
-                          target.n_unit
-                          ""
-                          callee
-                          (path @ [callee])
-                          site
-                    | Interpretation.Contract_data _ ->
-                        if
-                          (not (generated_member callee))
-                          && target.n_unit <> c.call_unit
-                        then
+                    if Hashtbl.mem ambiguous_units target.n_unit
+                    then
+                      gaps :=
+                        { gap_code= "GAP-UNRESOLVED-TARGET"
+                        ; gap_path= site.Observation.site_path
+                        ; gap_detail=
+                            "target ownership cannot be resolved: " ^ callee }
+                        :: !gaps
+                    else
+                      match to_owner.owner_class with
+                      | Interpretation.Contract_of _ when self_call ->
+                          if not (generated_member callee)
+                          then dfs visited target (path @ [callee])
+                      | Interpretation.Contract_of s ->
                           record_interaction
                             Interpretation.ImplementationAccess
-                            (from_name c.call_unit)
+                            (from_name c.Observation.call_unit)
+                            s
+                            ""
+                            target.n_unit
+                            ""
+                            callee
+                            (path @ [callee])
+                            site
+                      | Interpretation.Contract_data _ ->
+                          if
+                            (not (generated_member callee))
+                            && target.n_unit <> c.call_unit
+                          then
+                            record_interaction
+                              Interpretation.ImplementationAccess
+                              (from_name c.call_unit)
+                              ""
+                              ""
+                              target.n_unit
+                              ""
+                              callee
+                              (path @ [callee])
+                              site
+                      | Interpretation.Implementation_of _ when self_call ->
+                          dfs
+                            visited
+                            {n_unit= target.n_unit; n_symbol= target.n_symbol}
+                            (path @ [callee])
+                      | Interpretation.Helper_of _ when self_call ->
+                          dfs
+                            visited
+                            {n_unit= target.n_unit; n_symbol= target.n_symbol}
+                            (path @ [callee])
+                      | Interpretation.Implementation_of s
+                       |Interpretation.Helper_of s ->
+                          record_interaction
+                            Interpretation.ImplementationAccess
+                            (from_name c.Observation.call_unit)
+                            s
+                            ""
+                            target.n_unit
+                            ""
+                            callee
+                            (path @ [callee])
+                            site
+                      | Interpretation.Unclassified
+                        when from_owner.Interpretation.owner_service <> ""
+                             && not
+                                  (String.equal
+                                     from_owner.Interpretation.owner_module
+                                     target.n_unit ) ->
+                          record_interaction
+                            Interpretation.ImplementationAccess
+                            (from_name c.Observation.call_unit)
                             ""
                             ""
                             target.n_unit
@@ -974,52 +1110,16 @@ let interpret
                             callee
                             (path @ [callee])
                             site
-                    | Interpretation.Implementation_of _ when self_call ->
-                        dfs
-                          visited
-                          {n_unit= target.n_unit; n_symbol= target.n_symbol}
-                          (path @ [callee])
-                    | Interpretation.Helper_of _ when self_call ->
-                        dfs
-                          visited
-                          {n_unit= target.n_unit; n_symbol= target.n_symbol}
-                          (path @ [callee])
-                    | Interpretation.Implementation_of s
-                     |Interpretation.Helper_of s ->
-                        record_interaction
-                          Interpretation.ImplementationAccess
-                          (from_name c.Observation.call_unit)
-                          s
-                          ""
-                          target.n_unit
-                          ""
-                          callee
-                          (path @ [callee])
-                          site
-                    | Interpretation.Unclassified
-                      when from_owner.Interpretation.owner_service <> ""
-                           && not
-                                (String.equal
-                                   from_owner.Interpretation.owner_module
-                                   target.n_unit ) ->
-                        record_interaction
-                          Interpretation.ImplementationAccess
-                          (from_name c.Observation.call_unit)
-                          ""
-                          ""
-                          target.n_unit
-                          ""
-                          callee
-                          (path @ [callee])
-                          site
-                    | Interpretation.CompositionRoot
-                     |Interpretation.Unclassified
-                     |Interpretation.ExternalLibrary _ ->
-                        () ) ) ) )
+                      | Interpretation.CompositionRoot
+                       |Interpretation.Unclassified
+                       |Interpretation.ExternalLibrary _ ->
+                          () ) ) ) )
       in
       List.iter handle (out_edges_of n)
   in
   let walkable (n : node) =
+    (not (Hashtbl.mem ambiguous_units n.n_unit))
+    &&
     match unit_owner_class n.n_unit with
     | Interpretation.ExternalLibrary _ -> false
     | _ -> not (generated_member (n.n_unit ^ "." ^ n.n_symbol))
@@ -1125,6 +1225,8 @@ let interpret
           in
           if
             (not is_wiring_ref)
+            && (not (Hashtbl.mem ambiguous_units target_unit))
+            && (not (Hashtbl.mem ambiguous_units v.ref_unit))
             && (not (generated_member (v.ref_unit ^ "." ^ v.ref_caller)))
             && (not (generated_member v.ref_target))
             && not (public_module_path v.ref_target)
@@ -1199,6 +1301,7 @@ let interpret
         && List.exists
              (fun a -> String.equal a c.Observation.callee)
              messaging_apis
+        && (not (Hashtbl.mem ambiguous_units c.Observation.call_unit))
         &&
         match unit_owner_class c.Observation.call_unit with
         | Interpretation.ExternalLibrary _ -> false

@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(library
+ (name app_browser)
+ (libraries contract_data_browser contract well)
+ (flags (:standard -bin-annot)))
