@@ -384,6 +384,16 @@ missing provenance or conflicting ownership stays an analysis gap. See the
 [generated-contract fixture](test/fixtures/generated-contracts/README.md)
 for the verified shapes and limits.
 
+Application-generated bindings without those headers also work with approved
+`[[policy.contract_bindings]]` declarations. Bind each native/browser data unit
+and wrapper to its exact `.cyrograf` source, using compiler module paths or
+resolved aggregate aliases. Message modules must be declared in that contract.
+Review and approve the resulting policy, then rebuild before checking it.
+The [headerless fixture and declaration workflow](test/fixtures/generated-contracts/README.md#application-generated-bindings-without-headers)
+verify a nonstandard `Project_service_` prefix, nested aliases, codec callbacks,
+RPC forwarding and private dependencies with both the development executable
+and the packaged launcher. Wrapper names alone do not establish contract status.
+
 ### Reports and call graph
 
 Save diagnostic JSON separately from the graph:
@@ -770,6 +780,8 @@ dune build @test/unit/runtest
 deno test --allow-read --allow-write --allow-run test/config/run.ts
 deno test --allow-read --allow-write --allow-run test/loops/run.ts
 deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
+dune build test/acceptance/contract_bindings_probe.exe
+deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/application_contracts.ts
 test/acceptance/run.sh               # architecture and complexity
 test/acceptance/suggestions.sh       # fixture replay; check stays unchanged
 test/coverage/run.sh                 # instrumentation and HTTP scenarios

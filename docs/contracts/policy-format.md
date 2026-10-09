@@ -116,6 +116,48 @@ explicit generated binding must reference an in-scope `.cyrograf` contract;
 it does not approve arbitrary code inside that unit. Compiler module aliases
 preserve these identities across library aggregators and projections.
 
+### Application-generated binding workflow
+
+A generator outside Well/Cyrograf may omit the recognized first-line header
+and use its own wrapper prefix. Existing `contract_bindings` declarations
+support that shape; the prefix does not need to be registered. For example:
+
+```toml
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Contract_data_browser.Task_manager"
+
+[[policy.contract_bindings]]
+source = "lib/contract/Task_manager.cyrograf"
+module = "Project_browser.Nested.Task_manager"
+```
+
+The second path is a compiler-observed alias for
+`Project_browser.Project_service_task_manager`. Bind the corresponding native
+data and wrapper units as well. Each binding names one complete compilation
+unit; an alias can select that unit but cannot grant a separate contract identity
+to a nested module inside it. Every message exposed without a recognized
+generator header must be declared in the source contract, for example
+`struct Request { value: i32 }`. Arbitrary helper members remain private.
+
+1. Build the application and obtain exact module identities from its compiler
+   evidence. Include generated directories in the policy roots.
+2. Declare each data/wrapper projection and review the policy. Do not put those
+   modules in `approved_shared_modules`.
+3. Record that reviewed identity with `szaniec approve`; repeat approval only
+   when the selected policy changes.
+4. Run `szaniec check --rebuild --json` with the intended executable. Verify the
+   compiler/adapters and approved digest in `inputs`, and inspect any gaps.
+   A report with stale artifacts is incomplete evidence of current behavior.
+
+The [complete fixture policy](../../test/fixtures/generated-contracts/application.toml)
+and [compiled acceptance scenarios](../../test/fixtures/generated-contracts/README.md#application-generated-bindings-without-headers)
+exercise twenty bindings across five declared contracts and native/browser
+projections. Removing a declaration does not grant contract status; an
+unmatched arbitrary-prefix wrapper stays subject to ownership diagnostics.
+An unapproved policy, a missing or stale binding unit, and conflicting contract
+identities preserve their gaps.
+
 ## Approved-policy selection
 
 The approved identity is embedded in the same TOML document:
