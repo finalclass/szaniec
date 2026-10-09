@@ -1131,6 +1131,7 @@ let observe
                     { Observation.unit_id= modname
                     ; canonical= unit_canonical
                     ; source_path
+                    ; source_header= ""
                     ; source_digest= ""
                     ; artifact_path= artifact
                     ; fresh= false }
@@ -1167,6 +1168,13 @@ let observe
                     { Observation.unit_id= modname
                     ; canonical= unit_canonical
                     ; source_path
+                    ; source_header=
+                        (let ic = open_in_bin source_abs in
+                         Fun.protect
+                           ~finally:(fun () -> close_in ic)
+                           (fun () ->
+                             try input_line ic with
+                             | End_of_file -> "" ) )
                     ; source_digest= ""
                     ; artifact_path= artifact
                     ; fresh= true }
