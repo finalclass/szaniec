@@ -51,6 +51,19 @@ consumers. Its implementation body is still analyzed in the owning service;
 public declarations cannot hide private dependencies or resource access.
 Foreign consumers or undeclared members produce implementation access.
 
+Owned surfaces also apply to recognized implicit Client families without RPC.
+Approved local services are resolved from the policy's exact source root and
+fresh compiler units before interpretation; root membership supplies ownership
+and cannot override conflicting source, contract or compiler identities.
+Their facets remain ordinary service requests, with the same structural rules.
+
+The built-in SQLite resource mapping excludes only documented value operations:
+`Rc.to_string`, `Rc.is_success`, `Rc.check`, `Rc.int_of_unknown` and the
+documented `Data` conversions. These remain code dependencies. All other
+`Sqlite3` calls, including `errmsg`, retain database access. Explicit project
+resource prefixes take precedence over this built-in distinction. The operation
+inventory follows the [SQLite binding API](https://mmottl.github.io/sqlite3-ocaml/api/sqlite3/Sqlite3/index.html).
+
 Acceptance uses a redistributable, compiled fixture with several service
 families, a data-only Common contract, native/browser bindings, nested aliases,
 prefixed modules and an owned server API with an `.mli`. With an empty shared
@@ -62,17 +75,34 @@ edited policy, stale artifacts, missing members and
 ambiguous ownership retain violations or gaps. Browser RPC calls retain layer
 checks. Data-only contracts are absent from the service graph.
 
-Format identifier (conceptual): `szaniec-interpretation/4`.
+Format identifier (conceptual): `szaniec-interpretation/5`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.4.1`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.5.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
+
+`callbacks` records execution phase per source site and typed target: same-path,
+independent activation, deferred or unknown. Known iterators and immediate APIs
+contribute callback paths; registration callbacks start independent paths;
+passing a closure to `ignore` or an unknown API does not execute it. Local
+higher-order bodies use their compiler-proven parameter targets without executing
+the arguments twice. Unknown external callback semantics relevant to observed
+application bodies produce `GAP-CALLBACK-SEMANTICS`. Conformance consumes these
+facts without knowing library spellings.
+
+`deferredCalls` retains proven partial applications by site. Resumed path steps
+refer to invocation of the resulting function and do not inherit construction's
+deferred phase. Callback APIs retain their actual argument arity, so mapping a
+curried function may construct further functions without executing their bodies.
+Unverifiable invoked returned closures produce `GAP-RETURNED-CLOSURE`.
+Wrapped callback values supplied to unknown APIs retain unknown execution rather
+than becoming independent entries merely because their closures were created.
 
 ## Service family
 

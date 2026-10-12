@@ -1,6 +1,6 @@
 (* Approved policy model. Mirrors docs/contracts/policy-format.md
-   (embedded TOML policy). Services, roles and methods are discovered from
-   cyrograf contract files and code evidence, not declared here. *)
+   (embedded TOML policy). RPC services and methods come from Cyrograf;
+   approved local roots are validated against compiler ownership evidence. *)
 
 type t =
   { name: string
@@ -8,7 +8,12 @@ type t =
   ; approved_shared_modules: string list
   ; contract_bindings: contract_binding list
   ; public_contracts: public_contract list
+  ; local_services: local_service list
   ; resources: resource list }
+
+and local_service =
+  { local_name: string
+  ; local_root: string }
 
 and contract_binding =
   { contract_source: string
@@ -68,6 +73,20 @@ let digest (policy : t) =
                      ; ("members", strings p.public_members)
                      ; ("consumers", strings p.public_consumers) ] )
                  policy.public_contracts ) ) ]
+  in
+  let fields =
+    if policy.local_services = []
+    then fields
+    else
+      fields
+      @ [ ( "local_services"
+          , `List
+              (List.map
+                 (fun s ->
+                   `Assoc
+                     [ ("name", `String s.local_name)
+                     ; ("root", `String s.local_root) ] )
+                 policy.local_services ) ) ]
   in
   let json = `Assoc fields in
   "sha256:"

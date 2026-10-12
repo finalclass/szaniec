@@ -12,7 +12,8 @@ type loop =
 type execution_arg =
   { position: int
   ; label: string
-  ; target: string }
+  ; target: string
+  ; embedded: bool }
 
 type execution_definition =
   { symbol: string
@@ -25,6 +26,7 @@ type resolution =
   | Unresolved_local
   | Unresolved_field
   | Unresolved_dynamic
+  | Unresolved_ambiguous
 
 type execution_call =
   { execution_caller: string
@@ -68,14 +70,17 @@ type path_step =
   { step_callee: string
   ; step_resolution: resolution
   ; step_site: site
-  ; step_args: call_arg list }
+  ; step_args: call_arg list
+  ; step_resumed: bool
+  ; step_exit: bool }
 
 type exec_paths =
   { paths_unit: string
   ; paths_caller: string
   ; alternatives: path_step list list
         (* each inner list co-occurs; empty when ambiguous *)
-  ; ambiguous: bool }
+  ; ambiguous: bool
+  ; limiting_reason: string }
 
 type value_ref =
   { ref_unit: string

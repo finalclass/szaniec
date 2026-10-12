@@ -145,14 +145,14 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
     await copy(`${repository}/test/fixtures/owned-contracts-app`, root);
     const build = await command("dune", ["build"]);
     assert(build.code === 0, build.err);
+    await approve();
+    const base = await check();
+    assert(base.code === 0 && base.report.status === "ok", base.err + base.out);
     const evidence = await command(
       `${repository}/_build/default/test/acceptance/contract_observation.exe`,
       [root],
     );
     assert(evidence.code === 0, evidence.err + evidence.out);
-    await approve();
-    const base = await check();
-    assert(base.code === 0 && base.report.status === "ok", base.err + base.out);
     assert(
       base.report.summary.violations === 0 && base.report.summary.gaps === 0,
       base.out,
@@ -226,11 +226,25 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
       ),
     }, ["IMPL-ACCESS-CROSS-SERVICE"]);
     await scenario(
-      "unsupported call inside a public serializer remains a gap",
+      "compiler-known callback inside a public serializer is resolved",
       {
         [browserCommon]: browserSource.replace(
           "    match encode_value v with",
           "    let apply operation = operation v in\n    match apply encode_value with",
+        ),
+      },
+      [],
+      0,
+    );
+    await scenario(
+      "mutable callback inside a public serializer remains a gap",
+      {
+        [browserCommon]: browserSource.replace(
+          "  let to_drut (v : t)",
+          "  type encoder = { mutable run : t -> (Drut_runtime.value, Cyrograf.Error.t) result }\n\n  let to_drut (v : t)",
+        ).replace(
+          "    match encode_value v with",
+          "    let operation = {run = encode_value} in\n    match operation.run v with",
         ),
       },
       ["GAP-UNRESOLVED-CALL"],
@@ -554,9 +568,19 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
       );
       const current = await check(false);
       assert(
-        current.code === 0 && current.report.summary.gaps === 0,
+        current.report.summary.violations === 0 &&
+          current.report.findings.every((f) =>
+            f.rule === "GAP-UNVERIFIABLE-TRANSFORMATION"
+          ),
         "content-current rewrites must retain their bindings: " + current.out,
       );
+      if (current.code === 2) {
+        const verified = await check();
+        assert(
+          verified.code === 0,
+          "refreshed transformation receipt: " + verified.out,
+        );
+      }
       const freshEvidence = await command(
         `${repository}/_build/default/test/acceptance/contract_observation.exe`,
         [root],
@@ -578,14 +602,11 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
     const transformedTimes = await Deno.stat(transformed);
     try {
       await Deno.utime(transformed, rewriteTime, rewriteTime);
-      const unsupportedProof = await check(false);
+      const currentProof = await check(false);
       assert(
-        unsupportedProof.code === 2 &&
-          unsupportedProof.report.findings.some((f) =>
-            f.rule === "GAP-STALE-ARTIFACT"
-          ),
-        "a preprocessed input digest cannot prove a rewritten original is current: " +
-          unsupportedProof.out,
+        currentProof.code === 0,
+        "a current transformation receipt survives a timestamp-only rewrite: " +
+          currentProof.out,
       );
       const rebuilt = await check();
       assert(
@@ -593,7 +614,7 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
         "successful transformation rebuild must provide current evidence: " +
           rebuilt.out,
       );
-      console.log("preprocessed input requires transformation evidence: ok");
+      console.log("preprocessed input retains content-based evidence: ok");
     } finally {
       await Deno.utime(
         transformed,
@@ -613,12 +634,11 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
       );
       const rebuilt = await check();
       assert(rebuilt.code === 0, rebuilt.err + rebuilt.out);
-      const unproven = await check(false);
+      const proven = await check(false);
       assert(
-        unproven.code === 2 &&
-          unproven.report.findings.some((f) => f.rule === "GAP-STALE-ARTIFACT"),
-        "a compiler-applied transform requires a successful rebuild: " +
-          unproven.out,
+        proven.code === 0,
+        "a compiler-applied transform retains its successful rebuild receipt: " +
+          proven.out,
       );
       console.log(
         "compiler-applied preprocessing requires rebuild evidence: ok",

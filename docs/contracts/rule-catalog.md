@@ -105,10 +105,14 @@ boundary stops the walk. `Client -> Manager -> Access` stays two
 interactions and is not a Client use-case that called Access.
 
 An entry is a value with no caller in the same boundary. When a
-function's alternatives cannot be built (more than 48 alternatives,
-a `try`/`with` whose body and handler both call, or recursive helper
-inlining), the function contributes `GAP-AMBIGUOUS-PATH` and these
-rules do not fire for it.
+function's alternatives cannot be built within the bounded summary contract,
+it contributes `GAP-AMBIGUOUS-PATH` naming the limiting construct and unevaluated
+checks. Direct, established witnesses remain findings alongside the gap.
+For recursive graphs with all targets resolved, a conservative reachable-target
+bound proves fan-out absent when there is at most one Manager and one queued
+Manager. This does not claim recursion terminates or order its invocations.
+Multiple recursive targets remain unverified rather than being combined into
+an invented execution path. See [observation limits](observation-schema.md#completeness).
 
 ### `UC-CLIENT-MULTI-MANAGER`
 - Don't: a Client performs one use case through one Manager.
@@ -238,16 +242,23 @@ publisher to a subscriber.
 | Identifier | Condition | Effect |
 |---|---|---|
 | `GAP-UNOBSERVED-SOURCE` | in-scope source file without artifact | exit 2 |
-| `GAP-STALE-ARTIFACT` | artifact older than its source and no verified rebuild | exit 2 |
+| `GAP-STALE-ARTIFACT` | confirmed source/input content or interface mismatch | exit 2 |
+| `GAP-MISSING-INPUT` | authored or generated compiler input is missing | exit 2 |
+| `GAP-UNVERIFIABLE-TRANSFORMATION` | transformation receipt is absent or its dependency/tool identity changed | exit 2 |
+| `GAP-SOURCE-MAPPING` | MLX executable locations lack authored compiler mapping | exit 2 |
+| `GAP-LOCAL-SERVICE` | local boundary is unapproved, conflicting, missing or lacks fresh typed evidence | exit 2 |
 | `GAP-UNSUPPORTED-COMPILER` | artifact compiler series outside adapter support | exit 2 |
 | `GAP-ARTIFACT-READ` | artifact unreadable | exit 2 |
 | `GAP-UNRESOLVED-CALL` | dynamic callee in in-scope application code | exit 2 |
+| `GAP-CALLBACK-SEMANTICS` | an external API's callback execution is unknown | exit 2 |
+| `GAP-RETURNED-CLOSURE` | a factory result is invoked without a proven execution target | exit 2 |
+| `GAP-INCOMPLETE-ARTIFACT` | the compiler artifact contains only a partial typed implementation | exit 2 |
 | `GAP-UNSUPPORTED-CONSTRUCT` | construct the adapter cannot follow | exit 2 |
 | `GAP-AMBIGUOUS-OWNERSHIP` | family evidence disagrees, or one directory name matches several services | exit 2 |
 | `GAP-POLICY-NOT-APPROVED` | policy content ≠ approved digest | exit 2 |
 | `GAP-PROFILE-UNSUPPORTED` | policy requests an unknown profile | exit 2 |
-| `GAP-AMBIGUOUS-PATH` | executable alternatives for a function cannot be built (width cap, mixed `try`/`with`, or recursive inlining) | exit 2 |
-| `GAP-UNRESOLVED-TARGET` | `Well.request` topic is not a resolved value or string literal, or no subscriber of that topic was observed | exit 2 |
+| `GAP-AMBIGUOUS-PATH` | execution summary exceeds a stated bound or contains unresolved exception/recursive control flow | exit 2 |
+| `GAP-UNRESOLVED-TARGET` | execution/binding evidence is unavailable (with its upstream reason), or a queued topic/subscriber cannot be resolved | exit 2 |
 
 Gap rules require no policy approval: they report limits of analysis.
 Violations and gaps coexist in one report; gaps force exit 2.

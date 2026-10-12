@@ -159,6 +159,11 @@ subject to structural rules. These declarations belong to approved policy,
 not to the shared implementation whitelist; see
 [public contracts](docs/contracts/policy-format.md#public-contracts).
 
+RPC-free local boundaries use explicitly approved exact source roots, validated
+against fresh compiler ownership evidence by ArchitectureAccess. Implicit Client
+families may expose exact local facets without declaring RPCs. Neither mechanism
+approves arbitrary helper sharing or conceals the facet's implementation calls.
+
 A private helper belongs to a service family only when its source path
 lies in that family's directory tree (nested directories and nested
 modules included) or compiler evidence binds the unit to the service.

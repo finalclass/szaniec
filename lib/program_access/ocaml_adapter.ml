@@ -51,7 +51,8 @@ let scan_sources (project_root : string) (roots : string list) : string list =
         scan
           project_root
           root
-          (fun e -> Filename.check_suffix e ".ml")
+          (fun e ->
+            Filename.check_suffix e ".ml" || Filename.check_suffix e ".mlx" )
           acc
           false )
     roots ;
@@ -136,14 +137,12 @@ let fresher_or_equal (source : string) (artifact : string) : bool =
   | Unix.Unix_error _ ->
       false (* disappeared mid-scan (e.g. concurrent build) *)
 
-(* Map the source file recorded in the artifact back to the project source:
-   dune pp targets are [x.pp.ml] (from [x.ml]) and [x.mlx.pp.ml] (from
-   [x.mlx]). Returns [Some path] for a plain-ML source and [None] for units
-   derived from another file type (e.g. .mlx view files, a declared profile
-   exclusion). *)
+(* Dune preprocessing and dialect compilation retain authored identities. *)
 let real_source (sourcefile : string) : string option =
   if Filename.check_suffix sourcefile ".mlx.pp.ml"
-  then None
+  then Some (String.sub sourcefile 0 (String.length sourcefile - 6))
+  else if Filename.check_suffix sourcefile ".mlx.ml"
+  then Some (String.sub sourcefile 0 (String.length sourcefile - 3))
   else if Filename.check_suffix sourcefile ".pp.ml"
   then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
   else Some sourcefile
@@ -169,7 +168,12 @@ let digest_matches path expected =
   try Some (Digest.file path) = expected with
   | Sys_error _ -> false
 
-let current_input ~project_root ~source (cmt : Cmt_format.cmt_infos) artifact =
+let current_input
+    ~provenance
+    ~project_root
+    ~source
+    (cmt : Cmt_format.cmt_infos)
+    artifact =
   match cmt.cmt_sourcefile with
   | None -> false
   | Some recorded ->
@@ -180,12 +184,12 @@ let current_input ~project_root ~source (cmt : Cmt_format.cmt_infos) artifact =
       let transformed =
         List.exists
           (fun suffix -> Filename.check_suffix recorded suffix)
-          [".pp.ml"; ".pp.mli"]
+          [".pp.ml"; ".pp.mli"; ".mlx.ml"]
       in
-      if compiler_transform || cmt.cmt_source_digest = None
-      then
-        false
-        (* No digest of the compiler-applied transformation is recorded. *)
+      if compiler_transform || transformed
+      then Provenance.current provenance ~source cmt artifact
+      else if cmt.cmt_source_digest = None
+      then false
       else
         digest_matches input cmt.cmt_source_digest
         &&
@@ -201,10 +205,16 @@ let interface_crc path name =
   | _ -> None
 
 let current_interface
+    ?provenance
     ~project_root
     ~source
     (cmt : Cmt_format.cmt_infos)
     artifact =
+  let provenance =
+    Option.value
+      ~default:(Provenance.create ~root:project_root ~inputs:[])
+      provenance
+  in
   let interface = Filename.remove_extension source ^ ".mli" in
   if not (Sys.file_exists interface)
   then
@@ -221,7 +231,12 @@ let current_interface
       let expected =
         List.assoc_opt cmt.cmt_modname cmt.cmt_imports |> Option.join
       in
-      current_input ~project_root ~source:interface cmti (base ^ ".cmti")
+      current_input
+        ~provenance
+        ~project_root
+        ~source:interface
+        cmti
+        (base ^ ".cmti")
       && expected <> None
       && cmti.cmt_interface_digest = expected
       && interface_crc (base ^ ".cmi") cmt.cmt_modname = expected
@@ -263,7 +278,7 @@ let read_file (path : string) : string =
 
 let normalize_fname ~(project_root : string) (fname : string) : string =
   if Filename.is_relative fname
-  then fname
+  then strip_build_prefix fname
   else
     let root = String.length project_root in
     if
@@ -294,42 +309,34 @@ type facts =
 (* Executable alternatives of one expression. Above [max_path_alts] the
    function is ambiguous: use-case and queue fan-out rules then gap
    instead of guessing. *)
-let max_path_alts = 48
-
 type flow =
   { alts: Observation.path_step list list
-  ; ambiguous: bool }
+  ; ambiguous: bool
+  ; reason: string }
 
-let flow_empty = {alts= [[]]; ambiguous= false}
+let flow_empty = {alts= [[]]; ambiguous= false; reason= ""}
 
-let flow_ambiguous = {alts= []; ambiguous= true}
+let flow_ambiguous =
+  {alts= []; ambiguous= true; reason= "unsupported executable construct"}
 
-let flow_one (step : Observation.path_step) = {alts= [[step]]; ambiguous= false}
+let summary_flow = function
+  | Ok alts -> {alts; ambiguous= false; reason= ""}
+  | Error reason -> {alts= []; ambiguous= true; reason}
+
+let flow_one (step : Observation.path_step) =
+  {alts= [[step]]; ambiguous= false; reason= ""}
 
 let flow_has_call (f : flow) : bool = List.exists (fun alt -> alt <> []) f.alts
 
 let flow_union (a : flow) (b : flow) : flow =
   if a.ambiguous || b.ambiguous
-  then flow_ambiguous
-  else
-    let alts = a.alts @ b.alts in
-    if List.length alts > max_path_alts
-    then flow_ambiguous
-    else {alts; ambiguous= false}
+  then if a.ambiguous then a else b
+  else summary_flow (Execution_paths.union a.alts b.alts)
 
 let flow_seq (a : flow) (b : flow) : flow =
   if a.ambiguous || b.ambiguous
-  then flow_ambiguous
-  else
-    let n = List.length a.alts * List.length b.alts in
-    if n > max_path_alts
-    then flow_ambiguous
-    else
-      { alts=
-          List.concat_map
-            (fun left -> List.map (fun right -> left @ right) b.alts)
-            a.alts
-      ; ambiguous= false }
+  then if a.ambiguous then a else b
+  else summary_flow (Execution_paths.sequence a.alts b.alts)
 
 let flow_seqs (fs : flow list) : flow = List.fold_left flow_seq flow_empty fs
 
@@ -346,17 +353,7 @@ let step_key (s : Observation.path_step) =
   , s.Observation.step_site.Observation.col )
 
 let normalize_flow (f : flow) : flow =
-  if f.ambiguous
-  then flow_ambiguous
-  else
-    let alts =
-      List.map
-        (fun alt -> List.sort (fun a b -> compare (step_key a) (step_key b)) alt)
-        f.alts
-      |> List.sort (fun a b ->
-          compare (List.map step_key a) (List.map step_key b) )
-    in
-    {alts; ambiguous= false}
+  if f.ambiguous then f else summary_flow (Execution_paths.summarize f.alts)
 
 let same_flow (a : Observation.exec_paths) (b : Observation.exec_paths) : bool =
   String.equal a.Observation.paths_unit b.Observation.paths_unit
@@ -372,27 +369,40 @@ let add_flow
     { Observation.paths_unit= unit_canonical
     ; paths_caller= caller
     ; alternatives= f.alts
-    ; ambiguous= f.ambiguous }
+    ; ambiguous= f.ambiguous
+    ; limiting_reason= f.reason }
   in
   match List.find_opt (same_flow fresh) facts.flows with
   | None -> facts.flows <- fresh :: facts.flows
   | Some prev ->
       let merged =
         if prev.Observation.ambiguous || fresh.Observation.ambiguous
-        then {prev with Observation.alternatives= []; ambiguous= true}
+        then
+          { prev with
+            Observation.alternatives= []
+          ; ambiguous= true
+          ; limiting_reason=
+              ( if prev.ambiguous
+                then prev.limiting_reason
+                else fresh.limiting_reason ) }
         else
           let alts =
             prev.Observation.alternatives @ fresh.Observation.alternatives
           in
-          if List.length alts > max_path_alts
-          then {prev with Observation.alternatives= []; ambiguous= true}
-          else {prev with Observation.alternatives= alts}
+          match Execution_paths.summarize alts with
+          | Error reason ->
+              { prev with
+                Observation.alternatives= []
+              ; ambiguous= true
+              ; limiting_reason= reason }
+          | Ok alts -> {prev with Observation.alternatives= alts}
       in
       facts.flows <-
         merged :: List.filter (fun p -> not (same_flow fresh p)) facts.flows
 
 type ctx =
   { project_root: string
+  ; local_targets: bool
   ; unit_canonical: string
   ; lib_cap: string
   ; defined: (Ident.t, string) Hashtbl.t
@@ -604,7 +614,9 @@ let rec record_call
       { step_callee= target
       ; step_resolution= resolution
       ; step_site= site
-      ; step_args= args }
+      ; step_args= args
+      ; step_resumed= false
+      ; step_exit= List.mem target ["Stdlib.raise"; "Stdlib.raise_notrace"] }
   | _ ->
       (* Keep the reason the walker already decided. A local variable is
          not a canonical path, but it is not an arbitrary dynamic
@@ -625,7 +637,9 @@ let rec record_call
       { step_callee= ""
       ; step_resolution= resolution
       ; step_site= site
-      ; step_args= args }
+      ; step_args= args
+      ; step_resumed= false
+      ; step_exit= false }
 
 and record_ref
     (c : ctx)
@@ -663,7 +677,9 @@ and walk_expr
     { Observation.step_callee= ""
     ; step_resolution= resolution
     ; step_site= site
-    ; step_args= args }
+    ; step_args= args
+    ; step_resumed= false
+    ; step_exit= false }
   in
   match e.Typedtree.exp_desc with
   | Texp_apply (tfun0, outer_args) ->
@@ -796,11 +812,48 @@ and walk_expr
       flow_seqs (List.map (walk_expr c facts caller) args)
   | Texp_constant _ -> flow_empty
   | Texp_let (_, vbs, body) ->
+      if c.local_targets
+      then
+        List.iter
+          (fun vb ->
+            match vb.Typedtree.vb_pat.pat_desc with
+            | Tpat_var (id, _, _) -> (
+              match vb.vb_expr.exp_desc with
+              | Texp_function _ ->
+                  Hashtbl.replace
+                    c.defined
+                    id
+                    ( c.unit_canonical
+                    ^ "."
+                    ^ caller
+                    ^ "."
+                    ^ Ident.name id
+                    ^ "@"
+                    ^ string_of_int vb.vb_loc.loc_start.pos_lnum )
+              | Texp_ident (path, _, _) -> (
+                match canonicalize c path with
+                | `Canonical target -> Hashtbl.replace c.defined id target
+                | _ -> () )
+              | _ -> () )
+            | _ -> () )
+          vbs ;
       let bindings =
         List.map
           (fun vb ->
             walk_pat c facts caller vb.Typedtree.vb_pat ;
-            walk_expr c facts caller vb.Typedtree.vb_expr )
+            match (vb.vb_pat.pat_desc, vb.vb_expr.exp_desc) with
+            | Tpat_var (id, _, _), Texp_function _ when c.local_targets ->
+                let full = Hashtbl.find c.defined id in
+                let symbol =
+                  String.sub
+                    full
+                    (String.length c.unit_canonical + 1)
+                    (String.length full - String.length c.unit_canonical - 1)
+                in
+                let flow = walk_as_binding c facts symbol vb.vb_expr in
+                add_flow c.unit_canonical facts symbol flow ;
+                flow_empty
+            | _ -> walk_expr c facts caller vb.Typedtree.vb_expr )
           vbs
       in
       flow_seq (flow_seqs bindings) (walk_expr c facts caller body)
@@ -827,8 +880,70 @@ and walk_expr
               (fun k -> walk_expr c facts caller k.Typedtree.c_rhs)
               eff_cases )
       in
-      if flow_has_call body_flow && flow_has_call handlers
-      then flow_ambiguous
+      let exception_path description =
+        match description.Data_types.cstr_tag with
+        | Data_types.Cstr_extension (path, _) -> Some (Path.name path)
+        | _ -> None
+      in
+      let explicit_raise =
+        match body.exp_desc with
+        | Texp_apply
+            ( {exp_desc= Texp_ident (path, _, _); _}
+            , [ ( _
+                , Typedtree.Arg
+                    {exp_desc= Texp_construct (_, description, []); _} ) ] )
+          -> (
+          match canonicalize c path with
+          | `Canonical ("Stdlib.raise" | "Stdlib.raise_notrace") ->
+              exception_path description
+          | _ -> None )
+        | _ -> None
+      in
+      let rec select exception_ = function
+        | [] -> Some body_flow
+        | case :: rest ->
+            let matches =
+              match case.Typedtree.c_lhs.pat_desc with
+              | Tpat_any
+               |Tpat_var _ ->
+                  true
+              | Tpat_construct (_, description, [], _) ->
+                  exception_path description = Some exception_
+              | _ -> false
+            in
+            if matches
+            then
+              if case.c_guard = None
+              then Some (walk_expr c facts caller case.c_rhs)
+              else None
+            else select exception_ rest
+      in
+      if eff_cases <> []
+      then
+        { flow_ambiguous with
+          reason= "try/with effect-handler execution is unsupported" }
+      else if explicit_raise <> None
+      then
+        match
+          Option.bind explicit_raise (fun exception_ -> select exception_ cases)
+        with
+        | Some flow -> flow
+        | None ->
+            { flow_ambiguous with
+              reason= "explicit exception handler guard cannot be resolved" }
+      else if
+        match body.exp_desc with
+        | Texp_constant _
+         |Texp_construct (_, _, []) ->
+            true
+        | _ -> false
+      then body_flow
+      else if flow_has_call body_flow && flow_has_call handlers
+      then
+        { flow_ambiguous with
+          reason=
+            "try/with: throwing call completion and handler selection are not \
+             proven" }
       else if flow_has_call handlers
       then handlers
       else body_flow
@@ -1082,6 +1197,7 @@ let walk_unit
       let unit_canonical = Canonical.of_unit_name ~library:lib ~unit_name in
       let c =
         { project_root
+        ; local_targets= execution
         ; unit_canonical
         ; lib_cap= String.capitalize_ascii lib
         ; defined= Hashtbl.create 64
@@ -1091,7 +1207,7 @@ let walk_unit
       pre_collect c s.str_items ;
       walk_structure c facts "" s.str_items ;
       if execution
-      then
+      then (
         facts.execution <-
           Execution.observe
             ~unit_canonical
@@ -1102,7 +1218,103 @@ let walk_unit
                |`Dynamic ->
                   "" )
             ~site_of_loc:(site_of_loc ~project_root)
-            s
+            s ;
+        let calls = Hashtbl.create 32 in
+        List.iter
+          (fun (call : Observation.execution_call) ->
+            if not call.execution_resumed
+            then Hashtbl.replace calls call.execution_site call )
+          facts.execution.invocations ;
+        let rec path_flow steps =
+          List.map
+            (function
+              | Observation.Invoke call ->
+                  let args =
+                    List.find_opt
+                      (fun (raw : Observation.call) ->
+                        raw.site = call.execution_site )
+                      facts.calls
+                    |> Option.fold ~none:[] ~some:(fun raw ->
+                        raw.Observation.args )
+                  in
+                  flow_one
+                    { Observation.step_callee= call.execution_callee
+                    ; step_resolution= call.execution_resolution
+                    ; step_site= call.execution_site
+                    ; step_args= args
+                    ; step_resumed= call.execution_resumed
+                    ; step_exit=
+                        List.mem
+                          call.execution_callee
+                          ["Stdlib.raise"; "Stdlib.raise_notrace"] }
+              | Observation.Choose branches ->
+                  union_all
+                    (List.map (fun (_, steps) -> path_flow steps) branches)
+              | Observation.Repeat (_, _, condition, body) ->
+                  flow_seq (path_flow condition) (path_flow body)
+              | Observation.Unknown_order
+                  ("operand evaluation order unspecified", _) ->
+                  flow_empty
+              | Observation.Unknown_order (reason, _) ->
+                  {flow_ambiguous with reason}
+              | Observation.Leave _ -> flow_empty )
+            steps
+          |> flow_seqs
+        in
+        List.iter
+          (fun (symbol, steps) ->
+            let relative =
+              String.sub
+                symbol
+                (String.length unit_canonical + 1)
+                (String.length symbol - String.length unit_canonical - 1)
+            in
+            if
+              (not
+                 (List.exists
+                    (fun (paths : Observation.exec_paths) ->
+                      paths.paths_unit = unit_canonical
+                      && paths.paths_caller = relative )
+                    facts.flows ) )
+              && Option.is_some (find_substring symbol ".<callback@")
+            then add_flow unit_canonical facts relative (path_flow steps) )
+          facts.execution.ordered ;
+        facts.calls <-
+          List.map
+            (fun (call : Observation.call) ->
+              match Hashtbl.find_opt calls call.site with
+              | Some execution
+                when List.mem
+                       execution.execution_resolution
+                       [Observation.Resolved; Unresolved_ambiguous] ->
+                  { call with
+                    callee= execution.execution_callee
+                  ; resolution= execution.execution_resolution }
+              | _ -> call )
+            facts.calls ;
+        facts.flows <-
+          List.map
+            (fun (paths : Observation.exec_paths) ->
+              { paths with
+                alternatives=
+                  List.map
+                    (List.map (fun (step : Observation.path_step) ->
+                         match Hashtbl.find_opt calls step.step_site with
+                         | Some execution
+                           when List.mem
+                                  execution.execution_resolution
+                                  [Observation.Resolved; Unresolved_ambiguous]
+                           ->
+                             { step with
+                               step_callee= execution.execution_callee
+                             ; step_resolution= execution.execution_resolution
+                             ; step_exit=
+                                 List.mem
+                                   execution.execution_callee
+                                   ["Stdlib.raise"; "Stdlib.raise_notrace"] }
+                         | _ -> step ) )
+                    paths.alternatives } )
+            facts.flows )
   | Cmt_format.Interface _
    |Cmt_format.Packed _
    |Cmt_format.Partial_implementation _
@@ -1194,6 +1406,22 @@ let observe
         | All -> "all" )
   in
   let sources = scan_sources project_root program_roots in
+  let dependency_inputs = ref [] in
+  scan
+    project_root
+    ""
+    (fun file ->
+      List.mem file ["dune"; "dune-project"; "dune-workspace"]
+      || List.exists
+           (Filename.check_suffix file)
+           [".ml"; ".mli"; ".mlx"; ".ts"; ".sh"; ".cyrograf"; ".pkg"; ".opam"] )
+    dependency_inputs
+    false ;
+  let provenance =
+    Provenance.create
+      ~root:project_root
+      ~inputs:(List.sort_uniq compare !dependency_inputs)
+  in
   let artifacts = scan_artifacts project_root in
   let gaps = ref [] in
   let selected = ref 0 in
@@ -1268,7 +1496,7 @@ let observe
         | None -> ""
       in
       match real_source recorded with
-      | None -> () (* .mlx-derived unit: declared profile exclusion *)
+      | None -> ()
       | Some source_path ->
           let generated = Filename.check_suffix source_path ".ml-gen" in
           if source_path = "" || not (in_scope program_roots source_path)
@@ -1297,6 +1525,14 @@ let observe
             else
               let source_abs = project_root // source_path in
               let source_exists = Sys.file_exists source_abs in
+              let recorded_input = compiler_path ~project_root cmt recorded in
+              let transformed =
+                Array.exists
+                  (fun arg -> arg = "-pp" || arg = "-ppx")
+                  cmt.cmt_args
+                || Filename.check_suffix recorded ".pp.ml"
+                || Filename.check_suffix recorded ".mlx.ml"
+              in
               (* Dune's wrapped-library stub is often recorded as
                  [lib/name.ml-gen] but kept only inside [_build]. There is
                  no project source to go stale against, so the artifact is
@@ -1305,13 +1541,28 @@ let observe
               let fresh =
                 (generated && not source_exists)
                 || source_exists
+                   && ( (not architecture)
+                      ||
+                      match cmt.Cmt_format.cmt_annots with
+                      | Cmt_format.Implementation _ -> true
+                      | _ -> false )
+                   && Sys.file_exists recorded_input
+                   && ( (not transformed)
+                      || Option.is_some
+                           (Provenance.identity
+                              provenance
+                              ~source:source_abs
+                              cmt
+                              (project_root // artifact) ) )
                    && ( assume_fresh
                       || current_input
+                           ~provenance
                            ~project_root
                            ~source:source_abs
                            cmt
                            (project_root // artifact)
                          && current_interface
+                              ~provenance
                               ~project_root
                               ~source:source_abs
                               cmt
@@ -1324,14 +1575,70 @@ let observe
               let unit_canonical =
                 Canonical.of_unit_name ~library:lib ~unit_name:modname
               in
+              if fresh && assume_fresh
+              then (
+                Provenance.record
+                  provenance
+                  ~source:source_abs
+                  cmt
+                  (project_root // artifact) ;
+                let interface = Filename.remove_extension source_abs ^ ".mli" in
+                let cmti =
+                  Filename.remove_extension (project_root // artifact) ^ ".cmti"
+                in
+                if Sys.file_exists interface && Sys.file_exists cmti
+                then
+                  try
+                    Provenance.record
+                      provenance
+                      ~source:interface
+                      (Cmt_format.read_cmt cmti)
+                      cmti
+                  with
+                  | _ -> () ) ;
               if not fresh
               then
+                let code =
+                  if
+                    match cmt.Cmt_format.cmt_annots with
+                    | Cmt_format.Implementation _ -> false
+                    | _ -> true
+                  then "GAP-INCOMPLETE-ARTIFACT"
+                  else if
+                    (not source_exists) || not (Sys.file_exists recorded_input)
+                  then "GAP-MISSING-INPUT"
+                  else if
+                    Provenance.source_changed
+                      ~source:source_abs
+                      (project_root // artifact)
+                  then "GAP-STALE-ARTIFACT"
+                  else if
+                    transformed
+                    && not
+                         (Provenance.current
+                            provenance
+                            ~source:source_abs
+                            cmt
+                            (project_root // artifact) )
+                  then "GAP-UNVERIFIABLE-TRANSFORMATION"
+                  else "GAP-STALE-ARTIFACT"
+                in
                 let detail =
-                  if source_exists
+                  if code = "GAP-INCOMPLETE-ARTIFACT"
                   then
-                    "compiler input, transformation or interface evidence is \
-                     not current"
-                  else "source file missing"
+                    "compiler artifact does not contain a complete typed \
+                     implementation"
+                  else if code = "GAP-MISSING-INPUT"
+                  then
+                    "authored or generated compiler input missing: " ^ recorded
+                  else if code = "GAP-UNVERIFIABLE-TRANSFORMATION"
+                  then
+                    "transformation provenance unavailable or changed for "
+                    ^ recorded
+                    ^ "; run check --rebuild"
+                  else
+                    "compiler input content or interface identity differs from \
+                     the current source/build"
                 in
                 (* Wrapper units stay out of the conformance unit list.
                    Their staleness is a coverage fact for the inventory.
@@ -1339,13 +1646,13 @@ let observe
                 if generated
                 then
                   measure_gaps :=
-                    { Observation.gap_code= "GAP-STALE-ARTIFACT"
+                    { Observation.gap_code= code
                     ; gap_path= source_path
                     ; gap_detail= detail }
                     :: !measure_gaps
                 else (
                   gaps :=
-                    { Observation.gap_code= "GAP-STALE-ARTIFACT"
+                    { Observation.gap_code= code
                     ; gap_path= source_path
                     ; gap_detail= detail }
                     :: !gaps ;
@@ -1468,6 +1775,28 @@ let observe
                   <> cache_key
                 then raise (Sys_error "source changed during observation") ;
                 let facts = extracted.facts in
+                ( if Filename.check_suffix source_path ".mlx"
+                  then
+                    let unmapped =
+                      List.exists
+                        (fun (call : Observation.call) ->
+                          call.site.site_path <> source_path )
+                        facts.calls
+                      || List.exists
+                           (fun (call : Observation.execution_call) ->
+                             call.execution_site.site_path <> source_path )
+                           facts.execution.invocations
+                    in
+                    if unmapped
+                    then
+                      gaps :=
+                        { Observation.gap_code= "GAP-SOURCE-MAPPING"
+                        ; gap_path= source_path
+                        ; gap_detail=
+                            "MLX executable locations do not map to the \
+                             authored input; compiler/preprocessor source \
+                             mapping is required" }
+                        :: !gaps ) ;
                 module_aliases := List.rev_append facts.aliases !module_aliases ;
                 if extracted.alias_only
                 then alias_only_units := unit_canonical :: !alias_only_units ;
@@ -1684,7 +2013,12 @@ let observe
     then Some "unobserved"
     else if
       List.exists
-        (fun g -> g.Observation.gap_code = "GAP-STALE-ARTIFACT")
+        (fun g ->
+          List.mem
+            g.Observation.gap_code
+            [ "GAP-STALE-ARTIFACT"
+            ; "GAP-MISSING-INPUT"
+            ; "GAP-UNVERIFIABLE-TRANSFORMATION" ] )
         for_path
     then Some "stale"
     else if

@@ -71,7 +71,9 @@ let () =
                (Marshal.to_string
                   { interpretation with
                     execution_interactions= []
-                  ; execution_flows= [] }
+                  ; execution_flows= []
+                  ; callbacks= []
+                  ; deferred_calls= [] }
                   [] ) ) )
       ; ( "findingsDigest"
         , `String

@@ -9,7 +9,9 @@ let step site =
   { Observation.step_callee= "Task_manager.list"
   ; step_resolution= Observation.Resolved
   ; step_site= site
-  ; step_args= [] }
+  ; step_args= []
+  ; step_resumed= false
+  ; step_exit= false }
 
 let interaction method_name sites : Interpretation.interaction =
   { kind= Interpretation.ServiceRequest

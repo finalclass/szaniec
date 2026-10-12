@@ -5,6 +5,8 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
   let definitions = ref [] in
   let invocations = ref [] in
   let symbols = Hashtbl.create 32 in
+  let records = Hashtbl.create 16 in
+  let parameter_symbols = Hashtbl.create 16 in
   let functions = Hashtbl.create 32 in
   let bodies = Hashtbl.create 32 in
   let applications = Hashtbl.create 32 in
@@ -27,7 +29,7 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
     | Path.Pident id when Hashtbl.mem symbols id -> Hashtbl.find symbols id
     | _ -> resolve path
   in
-  let function_symbol e =
+  let rec function_symbol e =
     match e.exp_desc with
     | Texp_function _
      |Texp_apply _
@@ -39,6 +41,24 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
           Hashtbl.add functions e.exp_loc symbol ;
           symbol )
     | Texp_ident (path, _, _) when function_type e -> resolved path
+    | Texp_field (record, _, label)
+      when function_type e && label.Data_types.lbl_mut = Asttypes.Immutable -> (
+      match record.exp_desc with
+      | Texp_ident (Path.Pident id, _, _) ->
+          Option.value
+            ~default:""
+            (Hashtbl.find_opt records (id, label.lbl_name))
+      | Texp_record {fields; _} ->
+          Array.to_list fields
+          |> List.find_map (fun (field, value) ->
+              if field.Data_types.lbl_name = label.lbl_name
+              then
+                match value with
+                | Overridden (_, value) -> Some (function_symbol value)
+                | _ -> None
+              else None )
+          |> Option.value ~default:""
+      | _ -> "" )
     | _ -> ""
   in
   let register vb =
@@ -55,8 +75,39 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
           Hashtbl.replace functions vb.vb_expr.exp_loc symbol
       | Texp_ident (path, _, _) when function_type vb.vb_expr ->
           Hashtbl.replace symbols id (resolved path)
-      | Texp_apply _ when function_type vb.vb_expr ->
+      | Texp_apply _
+       |Texp_field _
+        when function_type vb.vb_expr ->
           Hashtbl.replace symbols id (function_symbol vb.vb_expr)
+      | Texp_record {fields; extended_expression; _} ->
+          ( match extended_expression with
+          | Some {exp_desc= Texp_ident (Path.Pident base, _, _); _} ->
+              Hashtbl.to_seq records
+              |> List.of_seq
+              |> List.iter (fun ((record, field), target) ->
+                  if Ident.same record base
+                  then Hashtbl.replace records (id, field) target )
+          | _ -> () ) ;
+          Array.iter
+            (fun (label, value) ->
+              if label.Data_types.lbl_mut = Asttypes.Immutable
+              then
+                match value with
+                | Overridden (_, value) when function_type value ->
+                    Hashtbl.replace
+                      records
+                      (id, label.lbl_name)
+                      (function_symbol value)
+                | Overridden _
+                 |Kept _ ->
+                    () )
+            fields
+      | Texp_ident (Path.Pident base, _, _) ->
+          Hashtbl.to_seq records
+          |> List.of_seq
+          |> List.iter (fun ((record, field), target) ->
+              if Ident.same record base
+              then Hashtbl.replace records (id, field) target )
       | _ -> () )
     | _ -> ()
   in
@@ -123,6 +174,17 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
           match e.exp_desc with
           | Texp_function (params, body) ->
               let symbol = function_symbol e in
+              List.iteri
+                (fun position parameter ->
+                  match parameter.fp_kind with
+                  | Tparam_pat {pat_desc= Tpat_var (id, _, _); _} ->
+                      let key =
+                        symbol ^ ".<parameter@" ^ string_of_int position ^ ">"
+                      in
+                      Hashtbl.replace parameter_symbols key (symbol, position) ;
+                      Hashtbl.replace symbols id key
+                  | _ -> () )
+                params ;
               let arity =
                 List.length params
                 +
@@ -169,15 +231,44 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
                   match resolved path with
                   | "" -> ("", Observation.Unresolved_local)
                   | symbol -> (symbol, Observation.Resolved) )
-                | Texp_field _ -> ("", Observation.Unresolved_field)
+                | Texp_field _ ->
+                    let target = function_symbol fn in
+                    ( target
+                    , if target = ""
+                      then Observation.Unresolved_field
+                      else Observation.Resolved )
                 | _ -> ("", Observation.Unresolved_dynamic)
+              in
+              let rec embedded_functions e =
+                if function_type e
+                then [function_symbol e]
+                else
+                  match e.exp_desc with
+                  | Texp_construct (_, _, values)
+                   |Texp_array (_, values) ->
+                      List.concat_map embedded_functions values
+                  | Texp_tuple values ->
+                      List.concat_map
+                        (fun (_, e) -> embedded_functions e)
+                        values
+                  | Texp_record {fields; _} ->
+                      Array.to_list fields
+                      |> List.concat_map (function
+                        | _, Overridden (_, e) -> embedded_functions e
+                        | _ -> [] )
+                  | Texp_ident (Path.Pident id, _, _) ->
+                      Hashtbl.to_seq records
+                      |> List.of_seq
+                      |> List.filter_map (fun ((record, _), target) ->
+                          if Ident.same record id then Some target else None )
+                  | _ -> []
               in
               let arguments =
                 List.mapi
                   (fun position (label, arg) ->
                     match arg with
-                    | Omitted _ -> None
-                    | Arg e when function_type e ->
+                    | Omitted _ -> []
+                    | Arg e ->
                         let label =
                           match label with
                           | Asttypes.Nolabel -> ""
@@ -185,13 +276,15 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
                            |Asttypes.Optional s ->
                               s
                         in
-                        Some
-                          { Observation.position
-                          ; label
-                          ; target= function_symbol e }
-                    | _ -> None )
+                        List.map
+                          (fun target ->
+                            { Observation.position
+                            ; label
+                            ; target
+                            ; embedded= not (function_type e) } )
+                          (embedded_functions e) )
                   args
-                |> List.filter_map Fun.id
+                |> List.concat
               in
               let partial = function_type e in
               let invocation =
@@ -243,6 +336,73 @@ let observe ~unit_canonical ~resolve ~site_of_loc (structure : structure) =
     | [] -> Location.none )
     true ;
   iterator.structure iterator structure ;
+  let ambiguous_parameters = Hashtbl.create 8 in
+  let parameter_target symbol =
+    match Hashtbl.find_opt parameter_symbols symbol with
+    | None -> symbol
+    | Some (callee, position) -> (
+        let calls =
+          List.filter
+            (fun (call : Observation.execution_call) ->
+              call.execution_callee = callee && not call.execution_partial )
+            !invocations
+        in
+        let targets =
+          List.map
+            (fun call ->
+              List.find_opt
+                (fun (arg : Observation.execution_arg) ->
+                  arg.position = position )
+                call.Observation.execution_args
+              |> Option.fold ~none:"" ~some:(fun arg -> arg.Observation.target) )
+            calls
+          |> List.sort_uniq compare
+        in
+        match targets with
+        | [target]
+          when target <> "" && not (Hashtbl.mem parameter_symbols target) ->
+            target
+        | targets ->
+            if List.length targets > 1 && List.for_all (( <> ) "") targets
+            then Hashtbl.replace ambiguous_parameters symbol () ;
+            "" )
+  in
+  let resolve_call (call : Observation.execution_call) =
+    let target = parameter_target call.execution_callee in
+    { call with
+      execution_callee= target
+    ; execution_resolution=
+        ( if Hashtbl.mem parameter_symbols call.execution_callee
+          then
+            if target = ""
+            then
+              if Hashtbl.mem ambiguous_parameters call.execution_callee
+              then Observation.Unresolved_ambiguous
+              else Observation.Unresolved_local
+            else Observation.Resolved
+          else call.execution_resolution )
+    ; execution_args=
+        List.map
+          (fun (a : Observation.execution_arg) ->
+            {a with target= parameter_target a.target} )
+          call.execution_args }
+  in
+  invocations := List.map resolve_call !invocations ;
+  Hashtbl.to_seq applications
+  |> List.of_seq
+  |> List.iter (fun (location, call) ->
+      Hashtbl.replace applications location (resolve_call call) ) ;
+  resumed :=
+    List.map
+      (fun (symbol, steps) ->
+        ( symbol
+        , List.map
+            (function
+              | Observation.Invoke call ->
+                  Observation.Invoke (resolve_call call)
+              | step -> step )
+            steps ) )
+      !resumed ;
   { Observation.definitions= List.sort_uniq compare !definitions
   ; invocations= List.sort_uniq compare !invocations
   ; ordered=

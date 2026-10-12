@@ -6,8 +6,7 @@
 open Szaniec_model
 
 let exclusions =
-  [ ".mlx view files (MLX preprocessor not in this profile)"
-  ; ".mli bodies (interface freshness recorded)"
+  [ ".mli bodies (interface freshness recorded)"
   ; "dune wrapper execution (.ml-gen aliases observed)"
   ; "resource access beyond framework-known APIs (recorded as external calls)"
   ]
@@ -57,6 +56,39 @@ let topic_key (args : Observation.call_arg list) ~(labeled : string) :
 (* Resource APIs are framework knowledge, not project policy. *)
 let framework_resources : (string * string) list =
   [("Well.Db.", "database"); ("Sqlite3.", "database")]
+
+let sqlite_value_operation api =
+  List.mem
+    api
+    [ "Sqlite3.Rc.to_string"
+    ; "Sqlite3.Rc.is_success"
+    ; "Sqlite3.Rc.check"
+    ; "Sqlite3.Rc.int_of_unknown" ]
+  || List.exists
+       (fun member -> api = "Sqlite3.Data." ^ member)
+       [ "opt_text"
+       ; "opt_int"
+       ; "opt_nativeint"
+       ; "opt_int32"
+       ; "opt_int64"
+       ; "opt_float"
+       ; "opt_bool"
+       ; "to_string_exn"
+       ; "to_int_exn"
+       ; "to_nativeint_exn"
+       ; "to_int32_exn"
+       ; "to_int64_exn"
+       ; "to_float_exn"
+       ; "to_bool_exn"
+       ; "to_string"
+       ; "to_int"
+       ; "to_nativeint"
+       ; "to_int32"
+       ; "to_int64"
+       ; "to_float"
+       ; "to_bool"
+       ; "to_string_coerce"
+       ; "to_string_debug" ]
 
 (* Generated-code mechanic members of contract units (wire codecs,
    binding and dispatch). Calls to any other contract member are checked
@@ -174,6 +206,7 @@ let classify_ownership
     ~contracts
     ~unavailable_contracts
     ~serialization_runtimes
+    ~local_services
     (cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) :
     ownership_map * Observation.gap list * (string, string) Hashtbl.t =
@@ -271,6 +304,32 @@ let classify_ownership
   in
   List.iter
     (fun (u : Observation.unit_info) ->
+      let local_owners =
+        List.filter
+          (fun (s : Policy.local_service) ->
+            Canonical.starts_with ~prefix:(s.local_root ^ "/") u.source_path
+            && List.exists
+                 (fun (owner : Szaniec_architecture_access.Cyrograf.service) ->
+                   owner.svc_name = s.local_name )
+                 cy.services )
+          local_services
+      in
+      let cy =
+        { cy with
+          Szaniec_architecture_access.Cyrograf.services=
+            List.filter
+              (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+                (not
+                   (List.exists
+                      (fun (local : Policy.local_service) ->
+                        local.local_name = s.svc_name )
+                      local_services ) )
+                || List.exists
+                     (fun (local : Policy.local_service) ->
+                       local.local_name = s.svc_name )
+                     local_owners )
+              cy.services }
+      in
       let canonical = u.Observation.canonical in
       let segs = Canonical.split_dots canonical in
       let generated = generated_contract u in
@@ -317,7 +376,11 @@ let classify_ownership
                 | _ -> None
               in
               let names =
-                generated_families |> fun acc ->
+                generated_families
+                @ List.map
+                    (fun (local : Policy.local_service) -> local.local_name)
+                    local_owners
+                |> fun acc ->
                 push_name acc source_name |> fun acc ->
                 push_name acc (canonical_family cy segs) |> fun acc ->
                 push_name acc (Hashtbl.find_opt impl_of canonical)
@@ -643,6 +706,7 @@ let interpret
       ~contracts
       ~unavailable_contracts
       ~serialization_runtimes
+      ~local_services:policy.local_services
       cy
       obs
   in
@@ -819,21 +883,70 @@ let interpret
   let resource_of_api (callee : string) : string option =
     match
       List.find_opt
-        (fun (prefix, _) -> Canonical.starts_with ~prefix callee)
-        framework_resources
+        (fun (r : Policy.resource) ->
+          List.exists
+            (fun prefix -> Canonical.starts_with ~prefix callee)
+            r.api_prefixes )
+        policy.resources
     with
-    | Some (_, name) -> Some name
+    | Some r -> Some r.resource_name
+    | None when sqlite_value_operation callee -> None
     | None -> (
       match
         List.find_opt
-          (fun (r : Policy.resource) ->
-            List.exists
-              (fun p -> Canonical.starts_with ~prefix:p callee)
-              r.Policy.api_prefixes )
-          policy.Policy.resources
+          (fun (prefix, _) -> Canonical.starts_with ~prefix callee)
+          framework_resources
       with
-      | Some r -> Some r.Policy.resource_name
+      | Some (_, name) -> Some name
       | None -> None )
+  in
+  let arities = Hashtbl.create 32 in
+  List.iter
+    (fun (d : Observation.execution_definition) ->
+      Hashtbl.replace arities d.symbol d.definition_arity )
+    obs.execution.definitions ;
+  List.iter
+    (fun (call : Observation.execution_call) ->
+      if call.execution_resumed
+      then
+        match Hashtbl.find_opt arities call.execution_callee with
+        | Some arity when arity > call.execution_supplied ->
+            Hashtbl.replace
+              arities
+              call.execution_caller
+              (arity - call.execution_supplied)
+        | _ -> () )
+    obs.execution.invocations ;
+  let execution =
+    { obs.execution with
+      Observation.definitions=
+        List.map
+          (fun (d : Observation.execution_definition) ->
+            { d with
+              definition_arity=
+                Option.value
+                  ~default:d.definition_arity
+                  (Hashtbl.find_opt arities d.symbol) } )
+          obs.execution.definitions }
+  in
+  let deferred_calls =
+    List.filter_map
+      (fun (call : Observation.execution_call) ->
+        let arity =
+          match Hashtbl.find_opt arities call.execution_callee with
+          | Some _ as arity -> arity
+          | None -> Repetition.collection_arity call.execution_callee
+        in
+        if
+          call.execution_partial
+          && Option.fold
+               ~none:false
+               ~some:(fun arity -> arity > call.execution_supplied)
+               arity
+        then Some call.execution_site
+        else None )
+      obs.execution.invocations
+    |> List.sort_uniq compare
   in
   let node_of_call (c : Observation.call) : node =
     {n_unit= c.Observation.call_unit; n_symbol= c.Observation.caller}
@@ -912,10 +1025,30 @@ let interpret
   let interactions : Interpretation.interaction list ref = ref [] in
   let gaps = ref (ownership_gaps @ contract_gaps @ surface_gaps) in
   let unavailable_gap path site =
+    let reason =
+      match resolve_unit path with
+      | None -> "target identity ambiguous or unavailable"
+      | Some unit -> (
+        match
+          List.find_opt
+            (fun (u : Observation.unit_info) -> u.canonical = unit)
+            obs.units
+        with
+        | None -> "target unit unavailable"
+        | Some u ->
+            List.filter
+              (fun (g : Observation.gap) -> g.gap_path = u.source_path)
+              obs.gaps
+            |> List.map (fun g -> g.Observation.gap_code ^ ": " ^ g.gap_detail)
+            |> String.concat "; " )
+    in
     gaps :=
       { Observation.gap_code= "GAP-UNRESOLVED-TARGET"
       ; gap_path= site.Observation.site_path
-      ; gap_detail= "target ownership cannot be resolved: " ^ path }
+      ; gap_detail=
+          ( "target ownership cannot be resolved: "
+          ^ path
+          ^ if reason = "" then "" else "; " ^ reason ) }
       :: !gaps
   in
   let unresolved_seen : (string, unit) Hashtbl.t = Hashtbl.create 32 in
@@ -952,7 +1085,8 @@ let interpret
       | Interpretation.ExternalLibrary _ -> false
       | Interpretation.Contract_data "serialization runtime"
         when c.resolution = Observation.Unresolved_local
-             && Public_contracts.runtime_member c.caller ->
+             && Public_contracts.runtime_member
+                  (List.hd (String.split_on_char '.' c.caller)) ->
           false (* Primitive runtime callbacks stay in the raw observation. *)
       | _ ->
           (not (generated_member (c.call_unit ^ "." ^ c.caller)))
@@ -981,6 +1115,8 @@ let interpret
                 ( match c.Observation.resolution with
                 | Observation.Unresolved_local -> "locally bound variable"
                 | Observation.Unresolved_field -> "record field"
+                | Observation.Unresolved_ambiguous ->
+                    "ambiguous compiler-known callback targets"
                 | _ -> "dynamic expression" )
                 c.Observation.call_unit
                 c.Observation.caller
@@ -1001,7 +1137,15 @@ let interpret
       let () = Hashtbl.replace seen key () in
       let handle (c : Observation.call) =
         let site = c.Observation.site in
-        if c.Observation.resolution <> Observation.Resolved
+        if
+          List.mem site deferred_calls
+          && ( resource_of_api c.callee <> None
+             || contract_call_target c.callee <> None
+             || same_boundary
+                  (owner_of_path c.call_unit)
+                  (owner_of_path c.callee) )
+        then ()
+        else if c.Observation.resolution <> Observation.Resolved
         then unresolved_gap c
         else if String.length c.Observation.callee = 0
         then ()
@@ -1577,12 +1721,19 @@ let interpret
     definitions
   in
   let eligible symbol =
-    match (owner_of_path symbol).owner_class with
-    | Interpretation.Contract_of _
-     |Contract_data _
-     |ExternalLibrary _ ->
-        false
-    | _ -> not (generated_member symbol)
+    if
+      Option.fold
+        ~none:false
+        ~some:(Hashtbl.mem ambiguous_units)
+        (resolve_unit symbol)
+    then false
+    else
+      match (owner_of_path symbol).owner_class with
+      | Interpretation.Contract_of _
+       |Contract_data _
+       |ExternalLibrary _ ->
+          false
+      | _ -> not (generated_member symbol)
   in
   let entry_point symbol =
     let owner = owner_of_path symbol in
@@ -1678,7 +1829,7 @@ let interpret
   in
   let execution_interactions =
     Repetition.project
-      ~execution:obs.execution
+      ~execution
       ~owner_of:execution_owner
       ~eligible
       ~entry_point
@@ -1730,13 +1881,158 @@ let interpret
   in
   let execution_flows =
     Ordered_flow.project
-      ~execution:obs.execution
+      ~execution
       ~owner_of:execution_owner
       ~available:(fun api ->
         (not (unavailable_target api)) || resource_of_api api <> None )
       ~eligible
       ~entry_point
       ~classify:classify_flow
+  in
+  let callbacks =
+    List.concat_map
+      (fun (call : Observation.execution_call) ->
+        List.map
+          (fun (argument : Observation.execution_arg) ->
+            let phase =
+              if
+                Hashtbl.mem definitions call.execution_callee
+                && eligible call.execution_callee
+                && same_boundary
+                     (owner_of_path call.execution_caller)
+                     (owner_of_path call.execution_callee)
+              then Interpretation.Deferred
+              else
+                match
+                  Repetition.callback_mode call.execution_callee argument
+                with
+                | Repetition.Iteration
+                 |Once
+                  when call.execution_resumed
+                       || not (List.mem call.execution_site deferred_calls) ->
+                    Interpretation.Same_path
+                | Activation -> Interpretation.Independent
+                | Ignored -> Interpretation.Deferred
+                | _
+                  when (not call.execution_resumed)
+                       && List.mem call.execution_site deferred_calls ->
+                    Interpretation.Deferred
+                | _ -> Interpretation.Unknown_callback
+            in
+            let phase =
+              if
+                List.mem phase [Interpretation.Same_path; Independent]
+                && Option.fold
+                     ~none:false
+                     ~some:(fun arity ->
+                       arity > Repetition.callback_arity call.execution_callee )
+                     (Hashtbl.find_opt arities argument.target)
+              then Interpretation.Deferred
+              else phase
+            in
+            if
+              argument.target = ""
+              && List.mem phase [Interpretation.Same_path; Independent]
+              && eligible call.execution_caller
+            then
+              gaps :=
+                { Observation.gap_code= "GAP-UNRESOLVED-CALL"
+                ; gap_path= call.execution_site.site_path
+                ; gap_detail=
+                    "callback target provenance cannot be resolved for "
+                    ^ call.execution_callee }
+                :: !gaps ;
+            if
+              phase = Interpretation.Unknown_callback
+              && eligible call.execution_caller
+              && ( argument.target = ""
+                 || Hashtbl.mem definitions argument.target
+                 || resource_of_api argument.target <> None )
+            then
+              gaps :=
+                { Observation.gap_code= "GAP-CALLBACK-SEMANTICS"
+                ; gap_path= call.execution_site.site_path
+                ; gap_detail=
+                    "callback execution is unknown for API "
+                    ^ call.execution_callee
+                    ^ "; closure construction/passing does not prove invocation"
+                }
+                :: !gaps ;
+            { Interpretation.callback_site= call.execution_site
+            ; callback_target= argument.target
+            ; callback_resumed= call.execution_resumed
+            ; callback_phase= phase } )
+          call.execution_args )
+      obs.execution.invocations
+    |> List.sort_uniq compare
+  in
+  List.iter
+    (fun (call : Observation.execution_call) ->
+      if call.execution_resumed && eligible call.execution_caller
+      then
+        let arity =
+          match Hashtbl.find_opt arities call.execution_callee with
+          | Some _ as value -> value
+          | None -> Repetition.collection_arity call.execution_callee
+        in
+        if
+          Option.fold
+            ~none:true
+            ~some:(fun arity -> arity <= call.execution_supplied)
+            arity
+        then
+          let sites =
+            List.filter_map
+              (fun (use : Observation.execution_call) ->
+                if use.execution_callee = call.execution_caller
+                then Some use.execution_site
+                else None )
+              obs.execution.invocations
+            @ List.filter_map
+                (fun (callback : Interpretation.callback_evidence) ->
+                  if
+                    callback.callback_target = call.execution_caller
+                    && List.mem
+                         callback.callback_phase
+                         [Interpretation.Same_path; Independent]
+                  then Some callback.callback_site
+                  else None )
+                callbacks
+          in
+          List.iter
+            (fun site ->
+              gaps :=
+                { Observation.gap_code= "GAP-RETURNED-CLOSURE"
+                ; gap_path= site.Observation.site_path
+                ; gap_detail=
+                    "returned function execution target cannot be established \
+                     from factory "
+                    ^ call.execution_callee }
+                :: !gaps )
+            sites )
+    obs.execution.invocations ;
+  let callback_interactions =
+    execution_interactions
+    |> List.filter_map (fun (e : Interpretation.execution_interaction) ->
+        let i = e.execution_interaction in
+        if
+          e.execution_context.unknown_reasons <> []
+          || (not
+                (List.mem
+                   i.kind
+                   [Interpretation.ServiceRequest; ResourceAccess; QueuedCommand] ) )
+          || List.exists
+               (fun (previous : Interpretation.interaction) ->
+                 previous.kind = i.kind
+                 && previous.from_owner = i.from_owner
+                 && previous.to_service = i.to_service
+                 && previous.api = i.api
+                 && List.exists
+                      (fun site -> List.mem site previous.sites)
+                      i.sites )
+               !interactions
+        then None
+        else Some i )
   in
   { Interpretation.ownerships
   ; bindings=
@@ -1750,7 +2046,9 @@ let interpret
             , b.Interpretation.binding_service
             , b.Interpretation.binding_kind ) )
         bindings
-  ; interactions= merge_interactions !interactions
+  ; interactions= merge_interactions (!interactions @ callback_interactions)
   ; execution_interactions
   ; execution_flows
+  ; callbacks
+  ; deferred_calls
   ; gaps= List.sort_uniq compare !gaps }

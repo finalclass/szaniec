@@ -234,14 +234,18 @@ let shadowed ctx title = List.map (fun () -> fetch ctx title) [()]
     );
     const unknown = entryContexts("Repeat.unknown");
     assert(
-      unknown.some((c) => c.unknownReasons.length > 0),
-      "custom callback semantics remain unknown",
+      unknown.some((c) =>
+        c.unknownReasons.length === 0 &&
+        c.evidencePath.some((s) => s.endsWith("Repeat.opaque"))
+      ),
+      "compiler-known local callback execution is resolved",
     );
     const shadowed = entryContexts("Repeat.shadowed");
     assert(
       shadowed.every((c) => !c.loops.some((r) => r.api === "Stdlib.List.map")),
       "a user module named List is not a standard iterator",
     );
+    assert(shadowed.length === 0, "known local List.map ignores its callback");
     assert(
       contexts.some((c) =>
         c.loops.some((r) => r.site.line === line("for _i = 0 to Repeat.bound"))

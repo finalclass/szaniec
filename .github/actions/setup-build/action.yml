@@ -25,8 +25,10 @@ runs:
         git -C "$RUNNER_TEMP/well-source" remote add origin https://github.com/finalclass/well.git
         git -C "$RUNNER_TEMP/well-source" fetch --depth 1 origin "$WELL_REVISION"
         git -C "$RUNNER_TEMP/well-source" checkout --detach FETCH_HEAD
-        opam exec -- dune build --root "$RUNNER_TEMP/well-source" bin/main.exe
+        opam exec -- dune build --root "$RUNNER_TEMP/well-source" bin/main.exe lib/well_mlx_pp/pp.exe
         mkdir -p "$RUNNER_TEMP/well-cli"
         cp "$RUNNER_TEMP/well-source/_build/default/bin/main.exe" "$RUNNER_TEMP/well-cli/well"
+        cp "$RUNNER_TEMP/well-source/_build/default/lib/well_mlx_pp/pp.exe" "$RUNNER_TEMP/well-cli/well-mlx-pp"
         chmod +x "$RUNNER_TEMP/well-cli/well"
+        chmod +x "$RUNNER_TEMP/well-cli/well-mlx-pp"
         echo "$RUNNER_TEMP/well-cli" >> "$GITHUB_PATH"

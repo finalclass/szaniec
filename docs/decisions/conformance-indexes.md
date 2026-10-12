@@ -13,8 +13,9 @@ used by both Engines, with domain-local memoization bounded to the most recently
 used observation resolver. The full performance extension is recorded in
 [full-program performance](full-program-performance.md).
 
-Recursive expansion retains its visiting set, depth limit of eight, alternative
-limit of 48, and ambiguity failures. Expansion results are not memoized: a helper
+Recursive expansion retains its visiting set and uses the
+[bounded execution summaries](../contracts/observation-schema.md#completeness).
+Expansion results are not memoized: a helper
 that succeeds under one entry can exceed the depth limit or revisit a symbol under
 another. Missing paths and missing ownership/metadata retain their existing defaults.
 

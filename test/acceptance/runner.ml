@@ -490,11 +490,15 @@ let tasks_handler req =
       "client-multi-manager-and-gap"
       ~mutations:
         [ ( "lib/web_client/tasks_page.ml"
+          , "let tasks_handler req ="
+          , "let tasks_handler unresolved =" )
+        ; ("lib/web_client/tasks_page.ml", "ignore req ;", "ignore unresolved ;")
+        ; ( "lib/web_client/tasks_page.ml"
           , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
   ignore _task ;|}
           , {|  let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in
   let _ok = Notification_manager.publish ~ctx:ctx_w ~text:req.title in
-  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
+  let dispatcher = unresolved in
   let _hidden = dispatcher "x" in
   ignore _task ;
   ignore _ok ;
@@ -730,9 +734,8 @@ let ctx_w = Well.{session_id= "s"; user_id= None}|}
         [ ( "lib/web_client/tasks_page.ml"
           , {|  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
   let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
-          , {|  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
-  let _task = dispatcher "x" in|}
-          ) ]
+          , {|  let dispatcher = req in
+  let _task = dispatcher "x" in|} ) ]
   ; sc
       "stale-artifacts"
       ~mutations:
@@ -760,9 +763,8 @@ let ping () = 0
         [ ( "lib/web_client/tasks_page.ml"
           , {|  let req = {Task_manager.AddReq.title= Shared.render_title "new"} in
   let _task = Task_manager.add ~ctx:ctx_w ~title:req.title in|}
-          , {|  let dispatcher = (fun t -> Task_manager.add ~ctx:ctx_w ~title:t) in
-  let _task = dispatcher "x" in|}
-          )
+          , {|  let dispatcher = req in
+  let _task = dispatcher "x" in|} )
         ; ( "lib/web_client/help_page.ml"
           , {|  let _s = Shared.render_title "help" in|}
           , {|  let _s = Shared.render_title "help" in
@@ -933,6 +935,7 @@ let verify_generated_contracts work name =
     ; approved_shared_modules= ["App.Clock"]
     ; contract_bindings= []
     ; public_contracts= []
+    ; local_services= []
     ; resources= [] }
   in
   let observation =

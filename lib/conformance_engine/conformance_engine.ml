@@ -435,6 +435,9 @@ let evaluate_with_domains
         List.mem
           g.Observation.gap_code
           [ "GAP-STALE-ARTIFACT"
+          ; "GAP-MISSING-INPUT"
+          ; "GAP-INCOMPLETE-ARTIFACT"
+          ; "GAP-UNVERIFIABLE-TRANSFORMATION"
           ; "GAP-UNOBSERVED-SOURCE"
           ; "GAP-ARTIFACT-READ"
           ; "GAP-UNSUPPORTED-COMPILER" ] )
@@ -450,7 +453,7 @@ let evaluate_with_domains
               s.Szaniec_architecture_access.Cyrograf.svc_name )
           interpretation.Interpretation.bindings
       in
-      if (not bound) && not evidence_missing
+      if s.svc_methods <> [] && (not bound) && not evidence_missing
       then
         add
           (mk_finding
@@ -489,7 +492,11 @@ let evaluate_with_domains
     else
       match unit_prefix target_path with
       | None -> ()
-      | Some target_unit when Hashtbl.mem unavailable_units target_unit -> ()
+      | Some target_unit
+        when target_unit = caller_unit
+             || Hashtbl.mem unavailable_units caller_unit
+             || Hashtbl.mem unavailable_units target_unit ->
+          ()
       | Some target_unit -> (
         match (owner_of target_unit).Interpretation.owner_class with
         | Interpretation.Unclassified when not (approved_shared target_unit)
@@ -665,40 +672,69 @@ let evaluate_with_domains
         Some (u, rel)
     | None -> None
   in
-  let max_alts = 48 in
+  let callbacks = Hashtbl.create 32 in
+  List.iter
+    (fun (callback : Interpretation.callback_evidence) ->
+      let previous =
+        Option.value
+          ~default:[]
+          (Hashtbl.find_opt callbacks callback.callback_site)
+      in
+      Hashtbl.replace callbacks callback.callback_site (callback :: previous) )
+    interpretation.callbacks ;
   let rec expand
       (unit : string)
       (caller : string)
       (depth : int)
-      (visiting : (string * string) list) :
-      (Observation.path_step list list, unit) result =
-    if
-      depth > 8
-      || List.exists
-           (fun (u, c) -> String.equal u unit && String.equal c caller)
-           visiting
-    then Error ()
+      (visiting : (string * string) list)
+      (budget : int ref) : (Observation.path_step list list, string) result =
+    if depth > 64
+    then Error "helper expansion depth exceeds 64"
+    else if
+      List.exists
+        (fun (u, c) -> String.equal u unit && String.equal c caller)
+        visiting
+    then
+      Error
+        ( "recursive helper has no finite execution summary: "
+        ^ unit
+        ^ "."
+        ^ caller )
     else
       match paths_of unit caller with
-      | None -> Error ()
-      | Some p when p.Observation.ambiguous -> Error ()
-      | Some p ->
+      | None -> Error ("helper body unavailable: " ^ unit ^ "." ^ caller)
+      | Some p when p.Observation.ambiguous -> Error p.limiting_reason
+      | Some p -> (
           let visiting = (unit, caller) :: visiting in
           let acc_alts = ref [] in
-          let failed = ref false in
+          let failed = ref None in
           List.iter
             (fun alt ->
-              if !failed
+              if !failed <> None
               then ()
               else
                 let acc = ref [[]] in
                 List.iter
                   (fun (step : Observation.path_step) ->
-                    if !failed
+                    decr budget ;
+                    if
+                      !failed <> None
+                      || List.for_all
+                           (List.exists (fun (step : Observation.path_step) ->
+                                step.step_exit ) )
+                           !acc
                     then ()
                     else
                       let pieces =
                         if
+                          (not step.step_resumed)
+                          && List.mem
+                               step.step_site
+                               interpretation.deferred_calls
+                        then Ok [[]]
+                        else if !budget < 0
+                        then Error "helper summary traversal exceeds 4096 steps"
+                        else if
                           step.Observation.step_resolution
                           <> Observation.Resolved
                           || step.Observation.step_callee = ""
@@ -708,28 +744,75 @@ let evaluate_with_domains
                           | Some (tu, sym)
                             when same_boundary (owner_of unit) (owner_of tu)
                                  && paths_of tu sym <> None ->
-                              expand tu sym (depth + 1) visiting
+                              expand tu sym (depth + 1) visiting budget
                           | Some (tu, _sym)
                             when same_boundary (owner_of unit) (owner_of tu) ->
-                              Error ()
+                              Error
+                                ( "helper execution body unavailable: "
+                                ^ tu
+                                ^ "."
+                                ^ _sym )
                           | _ -> Ok [[step]]
                       in
+                      let pieces =
+                        List.fold_left
+                          (fun pieces
+                               (callback : Interpretation.callback_evidence)
+                             ->
+                            match pieces with
+                            | Error reason -> Error reason
+                            | Ok previous
+                              when callback.callback_phase
+                                   = Interpretation.Same_path
+                                   && callback.callback_resumed
+                                      = step.step_resumed -> (
+                                let next =
+                                  match target_of callback.callback_target with
+                                  | Some (target, symbol)
+                                    when same_boundary
+                                           (owner_of unit)
+                                           (owner_of target) ->
+                                      expand
+                                        target
+                                        symbol
+                                        (depth + 1)
+                                        visiting
+                                        budget
+                                  | _ when callback.callback_target = "" ->
+                                      Error
+                                        "callback target provenance unavailable"
+                                  | _ ->
+                                      Ok
+                                        [ [ { step with
+                                              Observation.step_callee=
+                                                callback.callback_target } ] ]
+                                in
+                                match next with
+                                | Error reason -> Error reason
+                                | Ok next ->
+                                    Execution_paths.sequence previous next )
+                            | Ok _ -> pieces )
+                          pieces
+                          (Option.value
+                             ~default:[]
+                             (Hashtbl.find_opt callbacks step.step_site) )
+                      in
                       match pieces with
-                      | Error () -> failed := true
-                      | Ok parts ->
-                          let next =
-                            List.concat_map
-                              (fun left ->
-                                List.map (fun right -> left @ right) parts )
-                              !acc
-                          in
-                          if List.length next > max_alts
-                          then failed := true
-                          else acc := next )
+                      | Error reason -> failed := Some reason
+                      | Ok parts -> (
+                        match Execution_paths.sequence !acc parts with
+                        | Error reason -> failed := Some reason
+                        | Ok next -> acc := next ) )
                   alt ;
-                if not !failed then acc_alts := !acc @ !acc_alts )
+                if !failed = None
+                then
+                  match Execution_paths.union !acc !acc_alts with
+                  | Ok next -> acc_alts := next
+                  | Error reason -> failed := Some reason )
             p.Observation.alternatives ;
-          if !failed then Error () else Ok !acc_alts
+          match !failed with
+          | Some reason -> Error reason
+          | None -> Ok !acc_alts )
   in
   let targeted : (string, unit) Hashtbl.t = Hashtbl.create 32 in
   List.iter
@@ -744,6 +827,15 @@ let evaluate_with_domains
             Hashtbl.replace targeted (tu ^ "\n" ^ sym) ()
         | _ -> () )
     observation.Observation.calls ;
+  List.iter
+    (fun (callback : Interpretation.callback_evidence) ->
+      if callback.callback_phase <> Interpretation.Independent
+      then
+        match target_of callback.callback_target with
+        | Some (unit, symbol) ->
+            Hashtbl.replace targeted (unit ^ "\n" ^ symbol) ()
+        | None -> () )
+    interpretation.callbacks ;
   let source_of unit =
     match Hashtbl.find_opt unit_index unit with
     | Some u -> u.Observation.source_path
@@ -753,18 +845,112 @@ let evaluate_with_domains
     interactions_on
       (index_interaction_sites interpretation.Interpretation.interactions)
   in
+  let recursive_bound unit caller =
+    let visited = Hashtbl.create 16 in
+    let budget = ref 4096 in
+    let rec collect unit caller =
+      let key = (unit, caller) in
+      if Hashtbl.mem visited key
+      then Ok []
+      else if !budget <= 0
+      then Error ()
+      else (
+        Hashtbl.replace visited key () ;
+        match paths_of unit caller with
+        | None -> Error ()
+        | Some paths when paths.ambiguous -> Error ()
+        | Some paths ->
+            let steps = List.concat paths.alternatives in
+            List.fold_left
+              (fun result (step : Observation.path_step) ->
+                decr budget ;
+                match result with
+                | Error () -> Error ()
+                | Ok previous ->
+                    if step.step_resolution <> Observation.Resolved
+                    then Error ()
+                    else if
+                      (not step.step_resumed)
+                      && List.mem step.step_site interpretation.deferred_calls
+                    then Ok previous
+                    else
+                      let direct =
+                        match target_of step.step_callee with
+                        | Some (target, symbol)
+                          when same_boundary (owner_of unit) (owner_of target)
+                          -> (
+                          match collect target symbol with
+                          | Error () -> Error ()
+                          | Ok nested -> Ok (nested @ previous) )
+                        | _ -> Ok (step :: previous)
+                      in
+                      List.fold_left
+                        (fun result
+                             (callback : Interpretation.callback_evidence)
+                           ->
+                          match result with
+                          | Error () -> Error ()
+                          | Ok _
+                            when callback.callback_phase
+                                 = Interpretation.Unknown_callback ->
+                              Error ()
+                          | Ok previous
+                            when callback.callback_phase
+                                 = Interpretation.Same_path
+                                 && callback.callback_resumed
+                                    = step.step_resumed -> (
+                            match target_of callback.callback_target with
+                            | Some (target, symbol)
+                              when same_boundary
+                                     (owner_of unit)
+                                     (owner_of target) -> (
+                              match collect target symbol with
+                              | Error () -> Error ()
+                              | Ok nested -> Ok (nested @ previous) )
+                            | _ when callback.callback_target = "" -> Error ()
+                            | _ ->
+                                Ok
+                                  ( { step with
+                                      step_callee= callback.callback_target }
+                                  :: previous ) )
+                          | Ok _ -> result )
+                        direct
+                        (Option.value
+                           ~default:[]
+                           (Hashtbl.find_opt callbacks step.step_site) ) )
+              (Ok [])
+              steps )
+    in
+    match collect unit caller with
+    | Error () -> false
+    | Ok steps ->
+        let interactions = interactions_on steps in
+        let targets kind =
+          interactions
+          |> List.filter (fun (i : Interpretation.interaction) ->
+              i.kind = kind
+              && role_of_name i.to_service
+                 = Szaniec_architecture_access.Cyrograf.Manager )
+          |> List.map (fun i -> i.Interpretation.to_service)
+          |> List.sort_uniq compare
+        in
+        List.length (targets Interpretation.ServiceRequest) <= 1
+        && List.length (targets Interpretation.QueuedCommand) <= 1
+  in
   let evaluate_path (p : Observation.exec_paths) =
     let findings = ref [] in
     let add f = findings := f :: !findings in
-    let gap_path unit caller =
+    let gap_path unit caller reason =
       add
         { Finding.rule= "GAP-AMBIGUOUS-PATH"
         ; severity= Finding.GapFinding
         ; message=
             Printf.sprintf
-              "executable paths of %s.%s cannot be built"
+              "executable paths of %s.%s cannot be built: %s; Client \
+               multi-Manager and queued fan-out checks are unverified"
               unit
               caller
+              reason
         ; participants= []
         ; locations=
             [{Finding.loc_path= source_of unit; loc_line= 0; loc_col= 0}]
@@ -772,7 +958,15 @@ let evaluate_with_domains
     in
 
     let key = p.Observation.paths_unit ^ "\n" ^ p.Observation.paths_caller in
-    ( if Hashtbl.mem targeted key
+    let anonymous = Execution_paths.local_symbol p.paths_caller in
+    let independent =
+      List.exists
+        (fun (callback : Interpretation.callback_evidence) ->
+          callback.callback_target = p.paths_unit ^ "." ^ p.paths_caller
+          && callback.callback_phase = Interpretation.Independent )
+        interpretation.callbacks
+    in
+    ( if Hashtbl.mem targeted key || (anonymous && not independent)
       then ()
       else
         let owner = owner_of p.Observation.paths_unit in
@@ -783,11 +977,31 @@ let evaluate_with_domains
             ()
         | _ -> (
           match
-            expand p.Observation.paths_unit p.Observation.paths_caller 0 []
+            expand
+              p.Observation.paths_unit
+              p.Observation.paths_caller
+              0
+              []
+              (ref 4096)
           with
-          | Error () ->
-              gap_path p.Observation.paths_unit p.Observation.paths_caller
-          | Ok alts ->
+          | result ->
+              let alts =
+                match result with
+                | Error reason
+                  when Canonical.starts_with ~prefix:"recursive helper" reason
+                       && recursive_bound p.paths_unit p.paths_caller ->
+                    []
+                | Error reason -> (
+                    gap_path
+                      p.Observation.paths_unit
+                      p.Observation.paths_caller
+                      reason ;
+                    match paths_of p.paths_unit p.paths_caller with
+                    | Some original when not original.ambiguous ->
+                        original.alternatives
+                    | _ -> [] )
+                | Ok alts -> alts
+              in
               let boundary = boundary_name owner in
               let role = role_of_name boundary in
               let seen_uc = Hashtbl.create 4 in
