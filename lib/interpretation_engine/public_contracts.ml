@@ -278,9 +278,10 @@ let validate_surfaces
         let unit = resolve_unit p.public_module in
         let owner = Option.bind unit (Hashtbl.find_opt ownerships) in
         let valid =
-          List.exists
-            (fun (s : Cy.service) -> s.svc_name = p.public_service)
-            cy.services
+          ( List.exists
+              (fun (s : Cy.service) -> s.svc_name = p.public_service)
+              cy.services
+          || Cy.role_of_suffix p.public_service = Cy.Client )
           && ( match owner with
             | Some o -> (
                 o.Interpretation.owner_service = p.public_service

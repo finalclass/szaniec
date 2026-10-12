@@ -8,80 +8,106 @@ type callback_mode =
   | Unknown
 
 let collection_arity api =
-  match Canonical.split_dots api with
-  | ["Stdlib"; ("List" | "Array"); name] -> (
-    match name with
-    | "fold_left2"
-     |"fold_right2" ->
-        Some 4
-    | "fold_left"
-     |"fold_right"
-     |"fold_left_map"
-     |"iter2"
-     |"map2"
-     |"exists2"
-     |"for_all2"
-     |"merge" ->
-        Some 3
-    | "init"
-     |"iter"
-     |"iteri"
-     |"map"
-     |"mapi"
-     |"concat_map"
-     |"filter"
-     |"filteri"
-     |"filter_map"
-     |"partition"
-     |"partition_map"
-     |"exists"
-     |"for_all"
-     |"find"
-     |"find_opt"
-     |"find_index"
-     |"find_map"
-     |"find_mapi"
-     |"sort"
-     |"stable_sort"
-     |"fast_sort"
-     |"sort_uniq" ->
-        Some 2
-    | _ -> None )
-  | _ -> None
+  if api = "Well.Db.with_conn"
+  then Some 2
+  else
+    match Canonical.split_dots api with
+    | ["Stdlib"; ("List" | "Array"); name] -> (
+      match name with
+      | "fold_left2"
+       |"fold_right2" ->
+          Some 4
+      | "fold_left"
+       |"fold_right"
+       |"fold_left_map"
+       |"iter2"
+       |"map2"
+       |"exists2"
+       |"for_all2"
+       |"merge" ->
+          Some 3
+      | "init"
+       |"iter"
+       |"iteri"
+       |"map"
+       |"mapi"
+       |"concat_map"
+       |"filter"
+       |"filteri"
+       |"filter_map"
+       |"partition"
+       |"partition_map"
+       |"exists"
+       |"for_all"
+       |"find"
+       |"find_opt"
+       |"find_index"
+       |"find_map"
+       |"find_mapi"
+       |"sort"
+       |"stable_sort"
+       |"fast_sort"
+       |"sort_uniq" ->
+          Some 2
+      | _ -> None )
+    | _ -> None
 
 let callback_mode api (argument : Observation.execution_arg) =
-  let collection =
-    match Canonical.split_dots api with
-    | ["Stdlib"; ("List" | "Array"); method_name] -> Some method_name
-    | _ -> None
-  in
-  match collection with
-  | Some "init" when argument.position = 1 -> Iteration
-  | Some
-      ( "iter" | "iteri" | "map" | "mapi" | "iter2" | "map2" | "fold_left"
-      | "fold_right" | "fold_left2" | "fold_right2" | "fold_left_map"
-      | "concat_map" | "filter" | "filteri" | "filter_map" | "partition"
-      | "partition_map" | "exists" | "exists2" | "for_all" | "for_all2" | "find"
-      | "find_opt" | "find_index" | "find_map" | "find_mapi" | "sort"
-      | "stable_sort" | "fast_sort" | "sort_uniq" | "merge" )
-    when argument.position = 0 ->
-      Iteration
-  | _ when api = "Well.every" -> Activation
-  | _
-    when List.mem
-           api
-           [ "Well.subscribe"
-           ; "Well.subscribe_keyed"
-           ; "Well.MessageBus.subscribe" ] ->
-      Activation
-  | _ when List.mem api ["Well.get"; "Well.post"; "Well.live"] -> Activation
-  | _ when api = "Well.MessageBus.once" -> Once
-  | _ when api = "Stdlib.ignore" -> Ignored
-  | _ when api = "Stdlib.@@" && argument.position = 0 -> Once
-  | _ when api = "Stdlib.|>" && argument.position = 1 -> Once
-  | _ when List.mem api ["Stdlib.@@"; "Stdlib.|>"] -> Ignored
-  | _ when collection_arity api <> None -> Ignored
-  | _ -> Unknown
+  if argument.embedded
+  then
+    if api = "Stdlib.ignore" || collection_arity api <> None
+    then Ignored
+    else Unknown
+  else
+    let collection =
+      match Canonical.split_dots api with
+      | ["Stdlib"; ("List" | "Array"); method_name] -> Some method_name
+      | _ -> None
+    in
+    match collection with
+    | Some "init" when argument.position = 1 -> Iteration
+    | Some
+        ( "iter" | "iteri" | "map" | "mapi" | "iter2" | "map2" | "fold_left"
+        | "fold_right" | "fold_left2" | "fold_right2" | "fold_left_map"
+        | "concat_map" | "filter" | "filteri" | "filter_map" | "partition"
+        | "partition_map" | "exists" | "exists2" | "for_all" | "for_all2"
+        | "find" | "find_opt" | "find_index" | "find_map" | "find_mapi" | "sort"
+        | "stable_sort" | "fast_sort" | "sort_uniq" | "merge" )
+      when argument.position = 0 ->
+        Iteration
+    | _ when api = "Well.every" -> Activation
+    | _
+      when List.mem
+             api
+             [ "Well.subscribe"
+             ; "Well.subscribe_keyed"
+             ; "Well.MessageBus.subscribe" ] ->
+        Activation
+    | _ when List.mem api ["Well.get"; "Well.post"; "Well.live"] -> Activation
+    | _ when api = "Well.MessageBus.once" -> Once
+    | _ when api = "Well.Db.with_conn" -> Once
+    | _
+      when List.mem api ["Sqlite3.exec"; "Sqlite3.exec_no_headers"]
+           && argument.label = "cb" ->
+        Iteration
+    | _ when api = "Stdlib.ignore" -> Ignored
+    | _ when api = "Stdlib.@@" && argument.position = 0 -> Once
+    | _ when api = "Stdlib.|>" && argument.position = 1 -> Once
+    | _ when List.mem api ["Stdlib.@@"; "Stdlib.|>"] -> Ignored
+    | _ when collection_arity api <> None -> Ignored
+    | _ -> Unknown
+
+let callback_arity api =
+  match Canonical.split_dots api with
+  | [ "Stdlib"
+    ; ("List" | "Array")
+    ; ( "iteri" | "mapi" | "iter2" | "map2" | "fold_left" | "fold_right"
+      | "fold_left_map" | "exists2" | "for_all2" | "sort" | "stable_sort"
+      | "fast_sort" | "sort_uniq" | "merge" ) ] ->
+      2
+  | ["Stdlib"; "List"; ("fold_left2" | "fold_right2")] -> 3
+  | ["Sqlite3"; "exec"] -> 2
+  | _ -> 1
 
 let project ~execution ~owner_of ~eligible ~entry_point ~classify =
   let definitions = Hashtbl.create 64 in
@@ -205,7 +231,9 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
         && ( entry_point d.symbol
            || d.definition_initializer
            || (not (Hashtbl.mem incoming d.symbol))
-           || Hashtbl.mem recursions d.symbol ) )
+              && not (Execution_paths.local_symbol d.symbol)
+           || Hashtbl.mem recursions d.symbol
+              && not (Execution_paths.local_symbol d.symbol) ) )
       execution.definitions
   in
   List.iter
@@ -321,7 +349,13 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
                 List.iter
                   (fun (argument : Observation.execution_arg) ->
                     let mode = callback_mode call.execution_callee argument in
-                    if mode <> Ignored
+                    if
+                      mode <> Ignored
+                      && not
+                           ( Hashtbl.mem definitions call.execution_callee
+                           && eligible call.execution_callee
+                           && owner_of call.execution_callee
+                              = owner_of origin.symbol )
                     then begin
                       let context =
                         { Interpretation.kind=
@@ -364,6 +398,14 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
                         else unknown
                       in
                       let invocation =
+                        let supplied = callback_arity call.execution_callee in
+                        let partial =
+                          Option.fold
+                            ~none:false
+                            ~some:(fun d ->
+                              d.Observation.definition_arity > supplied )
+                            (Hashtbl.find_opt definitions argument.target)
+                        in
                         { call with
                           execution_callee= argument.target
                         ; execution_resolution=
@@ -371,6 +413,9 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
                               then Observation.Unresolved_dynamic
                               else Observation.Resolved )
                         ; execution_args= []
+                        ; execution_supplied= supplied
+                        ; execution_partial= partial
+                        ; execution_resumed= false
                         ; execution_loops= [] }
                       in
                       follow

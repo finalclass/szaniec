@@ -75,6 +75,8 @@ let () =
     ; interactions= ordinary @ external_calls @ external_calls
     ; execution_interactions= []
     ; execution_flows= []
+    ; callbacks= []
+    ; deferred_calls= []
     ; gaps= [] }
   in
   Gc.full_major () ;

@@ -77,6 +77,18 @@ type execution_flow =
   ; flow_owner: string
   ; flow: flow }
 
+type callback_phase =
+  | Same_path
+  | Independent
+  | Deferred
+  | Unknown_callback
+
+type callback_evidence =
+  { callback_site: Observation.site
+  ; callback_target: string
+  ; callback_resumed: bool
+  ; callback_phase: callback_phase }
+
 let kind_name = function
   | ServiceRequest -> "service-request"
   | ImplementationAccess -> "implementation-access"
@@ -102,4 +114,6 @@ type t =
   ; interactions: interaction list (* sorted, deduplicated *)
   ; execution_interactions: execution_interaction list
   ; execution_flows: execution_flow list
+  ; callbacks: callback_evidence list
+  ; deferred_calls: Observation.site list
   ; gaps: Observation.gap list }

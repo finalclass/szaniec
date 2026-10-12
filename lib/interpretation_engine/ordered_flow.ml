@@ -37,7 +37,8 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
         && ( entry_point d.symbol
            || d.definition_initializer
            || Hashtbl.mem activations d.symbol
-           || not (Hashtbl.mem incoming d.symbol) ) )
+           || (not (Hashtbl.mem incoming d.symbol))
+              && not (Execution_paths.local_symbol d.symbol) ) )
       execution.definitions
   in
   List.map
@@ -182,46 +183,58 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
             else []
           in
           let callbacks =
-            List.concat_map
-              (fun (argument : Observation.execution_arg) ->
-                let mode = Repetition.callback_mode api argument in
-                let run () =
-                  let callback =
-                    { call with
-                      execution_callee= argument.target
-                    ; execution_resolution=
-                        ( if argument.target = ""
-                          then Observation.Unresolved_dynamic
-                          else Observation.Resolved )
-                    ; execution_args= []
-                    ; execution_partial= false
-                    ; execution_resumed= false }
+            if own_body
+            then []
+            else
+              List.concat_map
+                (fun (argument : Observation.execution_arg) ->
+                  let mode = Repetition.callback_mode api argument in
+                  let run () =
+                    let supplied = Repetition.callback_arity api in
+                    let partial =
+                      Option.fold
+                        ~none:false
+                        ~some:(fun d ->
+                          d.Observation.definition_arity > supplied )
+                        (Hashtbl.find_opt definitions argument.target)
+                    in
+                    let callback =
+                      { call with
+                        execution_callee= argument.target
+                      ; execution_resolution=
+                          ( if argument.target = ""
+                            then Observation.Unresolved_dynamic
+                            else Observation.Resolved )
+                      ; execution_args= []
+                      ; execution_partial= partial
+                      ; execution_supplied= supplied
+                      ; execution_resumed= false }
+                    in
+                    invoke (depth + 1) (path @ [api]) callback
                   in
-                  invoke (depth + 1) (path @ [api]) callback
-                in
-                match mode with
-                | Repetition.Ignored
-                 |Activation ->
-                    []
-                | Once when api = "Well.MessageBus.once" ->
-                    unknown
-                      call.execution_site
-                      "one-shot callback execution order unknown"
-                    @ [ Interpretation.Flow_choice
-                          [ ("callback-not-invoked", [])
-                          ; ("callback-invoked", run ()) ] ]
-                | Once -> run ()
-                | Iteration ->
-                    [ Interpretation.Flow_loop
-                        ("iterator", call.execution_site, api, [], run ()) ]
-                | Unknown ->
-                    unknown
-                      call.execution_site
-                      ("unknown callback semantics: " ^ api)
-                    @ [ Interpretation.Flow_choice
-                          [ ("callback-not-invoked", [])
-                          ; ("callback-invoked", run ()) ] ] )
-              call.execution_args
+                  match mode with
+                  | Repetition.Ignored
+                   |Activation ->
+                      []
+                  | Once when api = "Well.MessageBus.once" ->
+                      unknown
+                        call.execution_site
+                        "one-shot callback execution order unknown"
+                      @ [ Interpretation.Flow_choice
+                            [ ("callback-not-invoked", [])
+                            ; ("callback-invoked", run ()) ] ]
+                  | Once -> run ()
+                  | Iteration ->
+                      [ Interpretation.Flow_loop
+                          ("iterator", call.execution_site, api, [], run ()) ]
+                  | Unknown ->
+                      unknown
+                        call.execution_site
+                        ("unknown callback semantics: " ^ api)
+                      @ [ Interpretation.Flow_choice
+                            [ ("callback-not-invoked", [])
+                            ; ("callback-invoked", run ()) ] ] )
+                call.execution_args
           in
           phase @ steps @ callbacks
       in

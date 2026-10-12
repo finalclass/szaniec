@@ -122,7 +122,10 @@ let () =
       [ { (call "rpc" "Stdlib.List.map") with
           execution_partial= true
         ; execution_args=
-            [{Observation.position= 0; label= ""; target= "callback"}] }
+            [ { Observation.position= 0
+              ; label= ""
+              ; target= "callback"
+              ; embedded= false } ] }
       ; call "callback" "Other.request" ]
   in
   check
@@ -134,7 +137,10 @@ let () =
       ["rpc"; "callback"]
       [ { (call ~loops:[loop] "rpc" "Well.every") with
           execution_args=
-            [{Observation.position= 0; label= ""; target= "callback"}] }
+            [ { Observation.position= 0
+              ; label= ""
+              ; target= "callback"
+              ; embedded= false } ] }
       ; call ~loops:[inner] "callback" "Other.request" ]
   in
   let callback_contexts =

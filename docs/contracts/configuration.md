@@ -33,7 +33,9 @@ path resolution follow the rules above. The policy name is the project
 directory's basename, roots are `["lib"]`, and approved sharing is empty.
 No approval, resources, service declarations, or command defaults are written.
 Review the roots before approving. Services and methods are discovered from
-`.cyrograf` contracts during analysis, not copied into TOML. Initialization
+`.cyrograf` contracts during analysis, not copied into TOML. Explicit RPC-free
+local boundaries may be added through the policy's `local_services` declarations
+described in [the policy contract](policy-format.md#services-and-roles). Initialization
 exits 0 after creation; an existing file or symbolic link is preserved and
 reported with exit 2. Parent directories for an explicit path must exist.
 

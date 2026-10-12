@@ -37,6 +37,7 @@ let () =
     ; approved_shared_modules= []
     ; contract_bindings= []
     ; public_contracts= []
+    ; local_services= []
     ; resources= [] }
   in
   let interpretation =

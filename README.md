@@ -206,9 +206,10 @@ roots to include the intended source directories. Initialization does not
 approve the policy and refuses to replace any existing file or symbolic link.
 Use `--project-root <dir>` or `--config <path>` to select a different location.
 
-Services and methods continue to come from `.cyrograf` contracts; TOML only
-configures analysis scope, approved sharing, protected resources, and command
-defaults. It does not duplicate the service architecture.
+RPC services and methods come from `.cyrograf` contracts. RPC-free local
+services use approved `[[policy.local_services]]` entries naming an exact root;
+their callable facets use `public_contracts`. TOML also configures analysis
+scope, approved sharing, protected resources, and command defaults.
 
 An example with a protected resource is:
 
@@ -275,8 +276,9 @@ Data-only Cyrograf contracts, generated message constructors/codecs, and RPC
 proxies are public contracts and work with `approved_shared_modules = []`.
 Source pairs establish ordinary bindings; differently named or relocated
 server/browser projections use `[[policy.contract_bindings]]`. An owned
-server API uses `[[policy.public_contracts]]` with its service, exact module,
-members and consumers. Both declarations require policy approval. A directory
+server API or recognized implicit Client facet uses `[[policy.public_contracts]]`
+with its owner, exact module, members and consumers. Both declarations require
+policy approval. A directory
 named `api` or an `.mli` alone does not approve executable code. See
 [the declaration syntax and evidence requirements](docs/contracts/policy-format.md#public-contracts).
 
@@ -778,12 +780,25 @@ not source files.
 | CRAP unavailable | Supply a matching complexity inventory and verify the function has points |
 | Suggestions unavailable | Check credentials, `curl`, timeout, fixture/decision files, and fresh compiler artifacts |
 
-Declared architecture exclusions are `.mlx` views, interface bodies, Dune
+Declared architecture exclusions are interface bodies, Dune
 wrapper execution, and resource access beyond policy-declared API prefixes.
 Interface freshness and compiler module aliases are included in the evidence.
-Unresolved locally bound calls are gaps, not exclusions that permit a pass.
+Fresh compiler-mapped MLX units are included with authored source locations;
+unavailable or unmapped transformations remain gaps. The real Well MLX
+preprocessor is used by the capability acceptance suite. `--rebuild` records
+local transformation receipts; later checks revalidate their input and tool
+identities. Missing inputs, stale content and unverifiable transformation
+provenance have distinct diagnostics. Receipts stay under `_build`.
+Typed local functions, aliases, exact passed callbacks and immutable record
+callbacks are supported. Dynamic or mutable targets remain explicit gaps.
 Commands/events and Client use-case paths are supported with explicit evidence
-limits; the path builder caps executable alternatives at 48.
+limits: equivalent target summaries are merged before composition, with 256
+distinct summaries, 4096 compositions/traversal steps and helper depth 64.
+Explicit exceptions select their typed handlers. Unknown throwing points and
+multi-target recursion retain gaps. Single-target recursive fan-out can be
+verified by a conservative reachability bound; its execution graph still
+retains recursion uncertainty. See
+[capability acceptance](docs/decisions/capability-extensions.md).
 
 Coverage excludes `.mli`, branch/path/assertion coverage, and undeclared MLX
 view files. An in-scope `.mlx` under a declared `mlx` dialect is a gap.

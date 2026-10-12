@@ -451,6 +451,16 @@ let check (req : request) : Finding.report =
       req
       policy
   in
+  let cy, local_gaps =
+    Szaniec_architecture_access.Architecture_access.local_services
+      ~approved:resolution.approved
+      ~policy
+      ~cy
+      observation
+  in
+  let observation =
+    {observation with Observation.gaps= observation.gaps @ local_gaps}
+  in
   (* 3. interpret *)
   let interpretation =
     Szaniec_interpretation_engine.Well_adapter.interpret
@@ -591,6 +601,16 @@ let prepare
     | Error e -> raise (Policy_error e)
   in
   let observation = observe_program ~evidence req policy in
+  let cy, local_gaps =
+    Szaniec_architecture_access.Architecture_access.local_services
+      ~approved:resolution.approved
+      ~policy
+      ~cy
+      observation
+  in
+  let observation =
+    {observation with Observation.gaps= observation.gaps @ local_gaps}
+  in
   let interpretation =
     Szaniec_interpretation_engine.Well_adapter.interpret
       ~approved:

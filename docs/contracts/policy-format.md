@@ -3,8 +3,8 @@
 Policy is the `[policy]` section of [project configuration](configuration.md).
 
 Policy is an approved-architecture input. It declares program roots,
-approved sharing, and protected resources. Services, roles and methods are
-NOT declared here: they are discovered from cyrograf contract files and
+approved sharing, protected resources and explicitly owned local boundaries.
+RPC services, roles and methods are discovered from cyrograf contract files and
 from compiler-resolved evidence (see
 [the decision record](../decisions/donts-based-rules.md)).
 
@@ -42,10 +42,26 @@ api_prefixes = ["Well.Db.", "Sqlite3."]
   resource; the rule catalog still decides who may perform that access.
 - `resources[]` — protected resources; `api_prefixes` are resolved-call
   path prefixes that count as access to the resource. Which roles may
-  perform access is fixed by the rule catalog (Access-role services and
-  shared-approved modules), not by the policy.
+  perform access is fixed by the rule catalog (declared Access/Utility services
+  and approved infrastructure), not by the policy.
 
-## Services and roles (not in the policy)
+## Services and roles
+
+An RPC-free local boundary requires an approved, exact source root:
+
+```toml
+[[policy.local_services]]
+name = "ReplayUtility"
+root = "lib/replay_utility"
+```
+
+The name must end in Client, Manager, Engine, Access or Utility. The root
+must contain fresh typed implementation evidence, lie inside a program root,
+and match the service stem. Duplicate names, overlapping roots, RPC/local
+collisions and contradictory compiler ownership remain gaps. Approval includes
+these declarations. Local services do not require remote registration; their
+only cross-boundary entry points are exact `public_contracts` declarations.
+Data-only contracts, helper names and interfaces alone declare no service.
 
 - A `.cyrograf` file under a program root whose stem is a service name
   and which declares `rpc` methods is a service; the file's stem is the
@@ -53,8 +69,8 @@ api_prefixes = ["Well.Db.", "Sqlite3."]
 - The role of a service is inferred from its name suffix,
   case-insensitively: `manager` → Manager, `client` → Client,
   `engine` → Engine, `access` → Access, any other name → Utility.
-- A service whose contract declares no `rpc` methods is not a service.
-- A service never registered in the composition root is a
+- A contract with no `rpc` methods does not establish a service by itself.
+- An RPC service never registered in the composition root is a
   `SPEC-UNREGISTERED-SERVICE` violation.
 
 ## Module path matching
@@ -91,7 +107,8 @@ source = "lib/contract/Common.cyrograf"
 module = "App_browser.App_service_common"
 ```
 
-An in-process, server-only facet of an existing service is declared explicitly:
+An in-process facet of an RPC service, approved local service, or independently
+recognized implicit Client family is declared explicitly:
 
 ```toml
 [[policy.public_contracts]]

@@ -147,7 +147,8 @@ let parse_policy fields =
     ; "approved_shared_modules"
     ; "resources"
     ; "contract_bindings"
-    ; "public_contracts" ]
+    ; "public_contracts"
+    ; "local_services" ]
     fields ;
   let contract_bindings =
     table_list
@@ -181,6 +182,25 @@ let parse_policy fields =
             required p strings "consumers" f |> nonempty (p ^ ".consumers") } )
       fields
   in
+  let local_services =
+    table_list
+      "local_services"
+      (fun f ->
+        let p = "policy.local_services" in
+        keys p ["name"; "root"] f ;
+        let name = required p symbol_path "name" f in
+        if
+          String.contains name '.'
+          || not
+               (List.exists
+                  (fun suffix ->
+                    String.ends_with ~suffix (String.lowercase_ascii name) )
+                  ["client"; "manager"; "engine"; "access"; "utility"] )
+        then invalid (p ^ ".name") "expected a service name with a role suffix" ;
+        { Policy.local_name= name
+        ; local_root= required p string "root" f |> relative (p ^ ".root") } )
+      fields
+  in
   let resources =
     match List.assoc_opt "resources" fields with
     | None -> []
@@ -202,6 +222,7 @@ let parse_policy fields =
       default p strings "approved_shared_modules" [] fields
   ; contract_bindings
   ; public_contracts
+  ; local_services
   ; resources }
 
 let decode ~project_root ~path document =

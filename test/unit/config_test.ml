@@ -112,6 +112,35 @@ consumers = ["Task_manager"]
       )
   in
   let owned_policy = policy owned in
+  let local =
+    decode
+      ( base
+      ^ {|
+[[policy.local_services]]
+name = "ReplayUtility"
+root = "lib/replay_utility"
+|}
+      )
+    |> policy
+  in
+  check
+    (Policy.digest local <> Policy.digest original)
+    "local ownership requires approval" ;
+  check
+    ( Policy.digest
+        { local with
+          local_services=
+            [{Policy.local_name= "ReplayUtility"; local_root= "lib/other"}] }
+    <> Policy.digest local )
+    "local root edits invalidate approval" ;
+  rejects
+    ( base
+    ^ {|
+[[policy.local_services]]
+name = "arbitrary_helper"
+root = "lib/helper"
+|}
+    ) ;
   check
     (Policy.digest owned_policy <> Policy.digest original)
     "public contracts are approved-policy inputs" ;

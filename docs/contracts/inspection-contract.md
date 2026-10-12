@@ -74,11 +74,10 @@ extracted from a dune `_build` tree, interpreted by the Well adapter
 
 Declared exclusions of the profile (reported in the report, never gaps):
 
-- `.mlx` view files (MLX preprocessor not in profile),
 - `.mli` interfaces (implementation facts only),
 - dune wrapper units (`.ml-gen`),
-- resource access beyond policy-declared `api_prefixes` (e.g. direct
-  `Sqlite3.*` calls) — recorded as external calls, not resource
+- resource access beyond framework-known and policy-declared `api_prefixes`
+  — recorded as external calls, not resource
   interactions.
 
 Queued commands, publications, subscriptions and Client use-case paths
@@ -100,8 +99,8 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.5.0",
-      "interpretation": "szaniec-well-adapter/3.4.1",
+      "programAccess": "szaniec-ocaml-adapter/1.6.0",
+      "interpretation": "szaniec-well-adapter/3.5.0",
       "rules": "szaniec-rules/3.1.0"
     },
     "exclusions": ["...", "..."]

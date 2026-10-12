@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/4`.
+Format identifier (conceptual): `szaniec-observation/5`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -67,8 +67,8 @@ One entry per observed compilation unit (implementation module):
   this text without interpreting generator names. InterpretationEngine uses
   recognized generator headers as provenance evidence.
 - `sourcePath` — mapped back from the recorded preprocessed source: dune
-  pp targets `x.pp.ml` (from `x.ml`) and `x.mlx.pp.ml` (from `x.mlx`);
-  units derived from `.mlx` view files are a declared profile exclusion.
+  pp targets `x.pp.ml` (from `x.ml`) and `x.mlx.pp.ml`/`x.mlx.ml` (from `x.mlx`);
+  compiler-mapped `.mlx` units retain authored locations.
 - `sourceDigest` — hexadecimal compiler-recorded input digest (MD5 in OCaml
   5.4). It describes the compiler input, which may be preprocessed; it is
   distinct from the SHA-256 source snapshot.
@@ -80,19 +80,17 @@ One entry per observed compilation unit (implementation module):
   Rewriting or touching identical content does not invalidate those artifacts.
   Explicit interfaces must match their `.cmti` input digest and the implementation's
   interface CRC. Resolvable imported interface CRCs must also remain current;
-  missing local dependencies cannot prove freshness. For preprocessed inputs,
-  the adapter additionally requires the original source to precede both the
-  transformed input and artifact. A transformed digest alone never establishes
+  missing local dependencies cannot prove freshness. Preprocessed inputs and
+  compiler-applied `-pp`/`-ppx` transformations require a matching local receipt
+  from a successful requested build. A transformed digest alone never establishes
   original-source freshness. Unproven transformation evidence requires rebuilding.
-  Compiler-applied `-pp`/`-ppx` transformations require a successful rebuild:
-  their transformation dependencies are not proven by the recorded input digest.
 - `generated` — dune-generated wrapper units (`.ml-gen` sources); they
   are excluded from rules and diagnostics.
 
 Dune wrapper units (`.ml-gen`) are observed for completeness but carry no
 ownership or findings; their aliases are retained. `.mli` interfaces contribute
 snapshot and freshness evidence, not executable bodies.
-`.mlx` view files are not in the supported profile.
+`.mlx` bodies require compiler-backed authored source mapping.
 
 ## Symbols, calls, references
 
@@ -128,13 +126,15 @@ unchanged plain interface rewrite preserves its compiler identity.
 - `execPaths` — per `(unit, caller)`, the executable alternatives of
   that value when it runs. Each alternative is the list of direct
   calls that co-occur on it. `if` and `match` arms are different
-  alternatives; a sequence concatenates alternatives (bounded at 48,
-  above which the function is `ambiguous` and its alternatives are
-  dropped). A `try`/`with` with calls both in the body and in a
-  handler is `ambiguous`. Evaluating a function value does not execute
+  alternatives; a sequence composes bounded target summaries. `limitingReason`
+  explains an ambiguous function. Explicit `raise` of a typed nullary exception
+  selects the first matching unguarded handler; unknown throwing points or
+  effect handlers remain ambiguous. Evaluating a function value does not execute
   its body; the body's alternatives belong to that function. These
   paths are the evidence for use-case and queue fan-out rules. They
   do not replace `calls`.
+  Path steps retain resumed-function and terminal-raise facts. Composition
+  does not append calls after a proven terminal exit, including helper expansion.
 - `valueRefs` — non-call identifier references to module members
   (`M.value` reads and function values passed as callbacks), with site.
   These are executable dependencies: registration evidence,
@@ -208,6 +208,42 @@ from the conformance unit list.
 
 ## Completeness
 
+Transformation diagnostics distinguish missing compiler inputs
+(`GAP-MISSING-INPUT`), unverified transformation provenance
+(`GAP-UNVERIFIABLE-TRANSFORMATION`), and confirmed content/interface mismatch
+(`GAP-STALE-ARTIFACT`). After a successful requested build, ProgramAccess stores
+a local transformation receipt keyed by compiler artifact/input bytes, project
+source/build/preprocessor dependencies and transformation executable identity.
+Receipts are revalidated independently of extraction caches; changed or missing
+dependencies invalidate them. No receipt is published after a failed build.
+
+Compiler-mapped MLX units are included when their typed source locations point
+to the authored `.mlx` input. ProgramAccess retains the preprocessor command,
+input digest and receipt identity in local provenance. Rendering syntax is never
+parsed for architectural calls. Unmapped executable locations produce
+`GAP-SOURCE-MAPPING`; unavailable transformations remain incomplete. Generated
+and authored projections of the same compilation unit are acquired once.
+
+Known immutable local function aliases, closures and record callbacks use typed
+binding identities. Locally called higher-order helpers are specialized only
+when their observed function arguments establish one exact target; other
+callback parameters retain ambiguity. Mutable fields and unknown API callback
+semantics never establish execution. Structural references remain visible.
+
+Execution_paths is neutral model infrastructure owned by ProgramAccess, consumed
+by ProgramAccess and both Engines for deterministic set composition and local
+symbol identity. It
+contains no framework or conformance policy.
+Execution alternatives are summarized by ordered direct targets and argument
+identities, retaining occurrence multiplicity and representative source evidence.
+Order is required when an expanded helper exits before later calls. Equivalent alternatives
+are merged before bounded composition, with at most 256 distinct summaries and
+4096 compositions/traversal steps per operation and helper depth 64. Exceptions
+with unknown throwing points and recursive helpers without a safe target bound
+retain concrete limiting reasons
+and mark Client multi-Manager and queued fan-out checks unverified. Structural
+and private-access checks remain independent of this limit.
+
 - A source file in a program root with no artifact →
   `GAP-UNOBSERVED-SOURCE` (the program was not built for analysis).
 - Artifact digest ≠ source file digest → `GAP-STALE-ARTIFACT`; the unit is
@@ -215,6 +251,9 @@ from the conformance unit list.
 - Artifact compiler series outside the adapter's supported series →
   `GAP-UNSUPPORTED-COMPILER`; the unit is not analyzed.
 - Unreadable artifact → `GAP-ARTIFACT-READ`; the unit is not analyzed.
+- A partial typed implementation → `GAP-INCOMPLETE-ARTIFACT`; architecture
+  checks do not interpret it as an empty complete body. The measurement command
+  retains its separate unmeasurable result.
 - An unsuccessful requested rebuild → `GAP-BUILD`; any retained findings
   accompany incomplete analysis, never a successful report.
 

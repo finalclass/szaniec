@@ -9,10 +9,16 @@ let step ?(resolution = Observation.Resolved) callee line =
   { Observation.step_callee= callee
   ; step_resolution= resolution
   ; step_site= site line
-  ; step_args= [] }
+  ; step_args= []
+  ; step_resumed= false
+  ; step_exit= false }
 
 let paths ?(unit = "App.Page") ?(ambiguous = false) caller alternatives =
-  {Observation.paths_unit= unit; paths_caller= caller; alternatives; ambiguous}
+  { Observation.paths_unit= unit
+  ; paths_caller= caller
+  ; alternatives
+  ; ambiguous
+  ; limiting_reason= "fixture ambiguity" }
 
 let unit_info ?(fresh = true) canonical =
   { Observation.unit_id= canonical
@@ -77,6 +83,7 @@ let policy =
   ; approved_shared_modules= []
   ; contract_bindings= []
   ; public_contracts= []
+  ; local_services= []
   ; resources= [] }
 
 let evaluate
@@ -102,6 +109,8 @@ let evaluate
     ; interactions
     ; execution_interactions= []
     ; execution_flows= []
+    ; callbacks= []
+    ; deferred_calls= []
     ; gaps }
   in
   let run domains observation =
@@ -180,10 +189,7 @@ let () =
     [ [ paths "entry" [[step "App.Helper.missing" 1]]
       ; paths ~unit:"App.Helper" "other" [[]] ]
     ; [ paths "entry" [[step "App.Helper.leaf" 1]]
-      ; paths ~unit:"App.Helper" ~ambiguous:true "leaf" [both] ]
-    ; [ paths "entry" [[step "App.Helper.a" 1]]
-      ; paths ~unit:"App.Helper" "a" [[step "App.Helper.b" 2]]
-      ; paths ~unit:"App.Helper" "b" [[step "App.Helper.a" 3]] ] ]
+      ; paths ~unit:"App.Helper" ~ambiguous:true "leaf" [both] ] ]
   in
   List.iter
     (fun ps ->
@@ -196,6 +202,14 @@ let () =
         = [{Finding.loc_path= "lib/App.Page.ml"; loc_line= 0; loc_col= 0}] )
         "gap source uses unit metadata" )
     failures ;
+  check
+    ( evaluate
+        [ paths "entry" [[step "App.Helper.a" 1]]
+        ; paths ~unit:"App.Helper" "a" [[step "App.Helper.b" 2]]
+        ; paths ~unit:"App.Helper" "b" [[step "App.Helper.a" 3]] ]
+        (requests @ queued)
+    = [] )
+    "recursive graph without fan-out has a safe target bound" ;
   let chain count =
     List.init count (fun n ->
         paths
@@ -209,16 +223,16 @@ let () =
     (rules (evaluate (chain 9) requests) = ["UC-CLIENT-MULTI-MANAGER"])
     "depth eight remains supported" ;
   check
-    (rules (evaluate (chain 10) requests) = ["GAP-AMBIGUOUS-PATH"])
-    "depth nine stays incomplete" ;
+    (rules (evaluate (chain 66) requests) = ["GAP-AMBIGUOUS-PATH"])
+    "depth 65 stays incomplete" ;
   let context =
     paths "short" [[step "App.Page.leaf" 1]]
     :: paths "leaf" [both]
-    :: List.init 9 (fun n ->
+    :: List.init 65 (fun n ->
         paths
           ("long" ^ string_of_int n)
           [ [ step
-                ( if n = 8
+                ( if n = 64
                   then "App.Page.leaf"
                   else "App.Page.long" ^ string_of_int (n + 1) )
                 (100 + n) ] ] )
@@ -235,8 +249,8 @@ let () =
     (rules (evaluate (wide 6) requests) = ["UC-CLIENT-MULTI-MANAGER"])
     "36 expanded alternatives are supported" ;
   check
-    (rules (evaluate (wide 7) requests) = ["GAP-AMBIGUOUS-PATH"])
-    "49 expanded alternatives exceed the existing cap" ;
+    (rules (evaluate (wide 100) requests) = ["UC-CLIENT-MULTI-MANAGER"])
+    "equivalent alternatives are summarized before composition" ;
   let duplicates = [paths "entry" [both]; paths ~ambiguous:true "entry" []] in
   check
     (rules (evaluate duplicates requests) = ["UC-CLIENT-MULTI-MANAGER"])
