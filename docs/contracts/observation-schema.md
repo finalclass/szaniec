@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/5`.
+Format identifier (conceptual): `szaniec-observation/6`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -94,6 +94,24 @@ snapshot and freshness evidence, not executable bodies.
 
 ## Symbols, calls, references
 
+Typed function arguments retain their position, label and immutable record-field
+selector. A symbolic `<parameter@N>` target identifies the owning function input;
+field projections append their selector. Variable patterns, compiler parameter
+identifiers and final function-case parameters describe the same input. Mutable
+fields and unknown computed values do not acquire a concrete target.
+Optional function defaults retain a typed target and invocations retain proven
+omitted/None slots. Repeated omitted slots in a curried application replace the
+existing slot in place. Reconstructing the compiler's recorded environment and
+load path permits function-type aliases to retain the same evidence as arrows.
+
+Execution facts include syntactically proven returned function targets and
+functor instances (instance module, functor, argument module and source site).
+Standard `Set.Make` and `Map.Make` applications retain their concrete comparator;
+other unsupported functor applications still require a gap. Locally opened
+structures contribute their definitions and initialization calls. Typed nodes
+are identified by object identity, so different PPX nodes at a ghost location do
+not replace one another. Shared ordered-flow nodes remain shared during conversion.
+
 `moduleAliases` records each structure-level module alias with its full source
 and resolved target path, including Dune wrappers and aliases with explicit
 module signatures (`module Alias : Signature = Target`). Alias resolution uses the
@@ -140,8 +158,9 @@ unchanged plain interface rewrite preserves its compiler identity.
   These are executable dependencies: registration evidence,
   implementation access and sharing all see them. A structure-level
   `module Alias = Path` is resolved to `Path` in the recorded callee or
-  target. First-class module unpacks and functor applications are not
-  resolved; they are `GAP-UNSUPPORTED-CONSTRUCT`.
+  target. Local aliases and first-class module methods retain their compiler
+  targets and input-field selectors. Unbound packages retain unresolved calls;
+  computed unpacks and unsupported functor applications retain gaps.
 - `typeRefs` — type-constructor references with site (`Task_access.ListReq.t`).
   Type-only references are contract or data usage. They do not count as
   executable sharing, implementation access or calls.
@@ -155,6 +174,9 @@ before the observation is consumed, so downstream stages are deterministic.
 alternatives used by conformance rules. Definitions have compiler-resolved symbol
 identities and source sites, including local functions, anonymous callbacks and
 module initializers. Anonymous identities include their source position.
+The raw call view consumes the matching typed invocation by node identity,
+including generated nodes that share a source location. Source coordinates do
+not establish invocation identity.
 Definitions retain parameter arity (including the final argument bound by
 `function` cases) and whether they are module initializers.
 

@@ -7,6 +7,7 @@ type approval =
 
 type check =
   { rebuild: bool
+  ; build: string list
   ; json: bool
   ; out: string option
   ; no_callgraph: bool }
@@ -189,14 +190,8 @@ let parse_policy fields =
         let p = "policy.local_services" in
         keys p ["name"; "root"] f ;
         let name = required p symbol_path "name" f in
-        if
-          String.contains name '.'
-          || not
-               (List.exists
-                  (fun suffix ->
-                    String.ends_with ~suffix (String.lowercase_ascii name) )
-                  ["client"; "manager"; "engine"; "access"; "utility"] )
-        then invalid (p ^ ".name") "expected a service name with a role suffix" ;
+        if String.contains name '.'
+        then invalid (p ^ ".name") "expected a single service name" ;
         { Policy.local_name= name
         ; local_root= required p string "root" f |> relative (p ^ ".root") } )
       fields
@@ -266,9 +261,11 @@ let decode ~project_root ~path document =
   in
   let p = "check" in
   let f = Option.value ~default:[] (section p top) in
-  keys p ["rebuild"; "json"; "out"; "no_callgraph"] f ;
+  keys p ["rebuild"; "build"; "json"; "out"; "no_callgraph"] f ;
   let check =
     { rebuild= default p bool "rebuild" false f
+    ; build=
+        nonempty (p ^ ".build") (default p strings "build" ["dune"; "build"] f)
     ; json= default p bool "json" false f
     ; out= optional p string "out" f
     ; no_callgraph= default p bool "no_callgraph" false f }

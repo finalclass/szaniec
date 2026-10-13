@@ -5,12 +5,23 @@ type t =
   ; inputs: string
   ; tools: string
   ; tools_available: bool
+  ; unavailable: string list
   ; digests: (string, string) Hashtbl.t }
 
 let hash text = Digestif.SHA256.to_hex (Digestif.SHA256.digest_string text)
 
-let digest path =
-  try Digest.to_hex (Digest.file path) with
+let rec digest path =
+  try
+    if Sys.is_directory path
+    then
+      Sys.readdir path
+      |> Array.to_list
+      |> List.sort compare
+      |> List.map (fun name -> name ^ ":" ^ digest (Filename.concat path name))
+      |> String.concat "\n"
+      |> hash
+    else Digest.to_hex (Digest.file path)
+  with
   | Sys_error _ -> "missing"
 
 let executable_on_path name =
@@ -60,13 +71,18 @@ let dune_dependencies tokens =
   let rec inside depth = function
     | [] -> []
     | ")" :: _ when depth = 0 -> []
+    | "(" :: "universe" :: ")" :: rest -> inside depth rest
+    | "(" :: ("alias" | "alias_rec") :: _ :: ")" :: rest -> inside depth rest
+    | "(" :: ("file" | "source_tree") :: path :: ")" :: rest ->
+        path :: inside depth rest
     | "(" :: rest -> inside (depth + 1) rest
     | ")" :: rest -> inside (depth - 1) rest
     | token :: rest ->
         let rest = inside depth rest in
         if
-          String.starts_with ~prefix:"%{" token
-          || String.starts_with ~prefix:":" token
+          String.starts_with ~prefix:":" token
+          || String.starts_with ~prefix:"%{" token
+             && not (String.starts_with ~prefix:"%{workspace_root}" token)
         then rest
         else token :: rest
   in
@@ -77,6 +93,46 @@ let dune_dependencies tokens =
     | [] -> []
   in
   collect tokens
+
+let expand_workspace ~root value =
+  let prefix = "%{workspace_root}" in
+  if String.starts_with ~prefix value
+  then
+    root
+    ^ String.sub
+        value
+        (String.length prefix)
+        (String.length value - String.length prefix)
+  else value
+
+(* Build-only OCaml inputs need an authored generator declaration. Merely
+   finding a file under _build must not admit an unowned or stale source. *)
+let generated_source ~root relative =
+  let dune =
+    Filename.concat root (Filename.concat (Filename.dirname relative) "dune")
+  in
+  let target = Filename.basename relative in
+  let rec declared = function
+    | "(" :: ("target" | "targets") :: rest ->
+        let rec names = function
+          | []
+           |")" :: _ ->
+              false
+          | name :: rest -> name = target || names rest
+        in
+        names rest || declared rest
+    | _ :: rest -> declared rest
+    | [] -> false
+  in
+  try
+    let generated =
+      Filename.concat root (Filename.concat "_build/default" relative)
+    in
+    if declared (dune_tokens dune) && Sys.file_exists generated
+    then Some generated
+    else None
+  with
+  | Sys_error _ -> None
 
 let create ~root ~inputs =
   let tools_available = ref true in
@@ -94,9 +150,16 @@ let create ~root ~inputs =
             dune_dependencies tokens
             |> List.map (fun dependency ->
                 let relative =
-                  Filename.concat (Filename.dirname file) dependency
+                  let dependency = expand_workspace ~root dependency in
+                  if Filename.is_relative dependency
+                  then Filename.concat (Filename.dirname file) dependency
+                  else dependency
                 in
-                let source = Filename.concat root relative in
+                let source =
+                  if Filename.is_relative relative
+                  then Filename.concat root relative
+                  else relative
+                in
                 let path =
                   if Sys.file_exists source
                   then source
@@ -181,10 +244,12 @@ let create ~root ~inputs =
                   String.starts_with ~prefix:"%{bin:" command
                   && String.ends_with ~suffix:"}" command
                 then String.sub command 6 (String.length command - 7)
-                else command
+                else expand_workspace ~root command
               in
               let executable =
-                if String.contains command '/'
+                if not (Filename.is_relative command)
+                then Some command
+                else if String.contains command '/'
                 then
                   let build =
                     Filename.concat
@@ -215,6 +280,12 @@ let create ~root ~inputs =
     |> List.sort_uniq compare
   in
   { root
+  ; unavailable=
+      List.filter
+        (fun identity ->
+          String.ends_with ~suffix:":missing" identity
+          || String.ends_with ~suffix:":unavailable" identity )
+        (dependencies @ tools)
   ; tools=
       String.concat
         "\n"

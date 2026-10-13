@@ -27,7 +27,9 @@ let observe ~site_of_loc ~invocation expression =
                  (fun i groups ->
                    (Printf.sprintf "operand-order-%d" i, List.concat groups) )
                  (permutations groups) ) ]
-    | _ -> unknown e "operand ordering alternatives exceed limit"
+    | groups ->
+        unknown e "operand ordering alternatives exceed limit"
+        @ [Observation.Choose [("unordered-call-union", List.concat groups)]]
   in
   let rec walk e =
     match e.exp_desc with
@@ -64,7 +66,8 @@ let observe ~site_of_loc ~invocation expression =
     | Texp_apply (fn, args) -> (
         let rec collapse fn args =
           match fn.exp_desc with
-          | Texp_apply (inner, more) -> collapse inner (more @ args)
+          | Texp_apply (inner, more) ->
+              collapse inner (Application_args.merge more args)
           | _ -> (fn, args)
         in
         let fn, args = collapse fn args in
@@ -128,12 +131,40 @@ let observe ~site_of_loc ~invocation expression =
               [ ("assertion-passes", [])
               ; ( "assertion-fails"
                 , [Observation.Leave ("raise", site_of_loc e.exp_loc)] ) ] ]
-    | Texp_open (_, body) ->
-        unknown e "local module initialization unsupported" @ walk body
-    | Texp_letmodule (_, _, _, _, body) ->
-        unknown e "local module initialization unsupported" @ walk body
+    | Texp_open (opened, body) -> walk_module opened.open_expr @ walk body
+    | Texp_letmodule (_, _, _, m, body) -> walk_module m @ walk body
     | Texp_unreachable -> unknown e "unreachable expression"
     | _ -> unknown e "execution construct unsupported"
+  and walk_module m =
+    match m.mod_desc with
+    | Tmod_ident _ -> []
+    | Tmod_constraint (body, _, _, _) -> walk_module body
+    | Tmod_structure s ->
+        List.concat_map
+          (fun item ->
+            match item.str_desc with
+            | Tstr_value (_, bindings) ->
+                List.concat_map (fun vb -> walk vb.vb_expr) bindings
+            | Tstr_eval (e, _) -> walk e
+            | Tstr_module mb -> walk_module mb.mb_expr
+            | Tstr_include inc -> walk_module inc.incl_mod
+            | Tstr_open od -> walk_module od.open_expr
+            | Tstr_primitive _
+             |Tstr_type _
+             |Tstr_typext _
+             |Tstr_exception _
+             |Tstr_modtype _
+             |Tstr_attribute _ ->
+                []
+            | _ ->
+                [ Observation.Unknown_order
+                    ( "module initialization construct unsupported"
+                    , site_of_loc item.str_loc ) ] )
+          s.str_items
+    | _ ->
+        [ Observation.Unknown_order
+            ("local module initialization unsupported", site_of_loc m.mod_loc)
+        ]
   and case_steps : type k.
       k case list -> (string * Observation.ordered_step list) list =
    fun cases ->

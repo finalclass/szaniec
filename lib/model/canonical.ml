@@ -184,3 +184,34 @@ let alias_resolver aliases =
         result
 
 let resolve_alias aliases path = alias_resolver aliases path
+
+let parameter_symbol symbol =
+  let marker = ".<parameter@" in
+  let rec find i =
+    if i + String.length marker > String.length symbol
+    then None
+    else if String.sub symbol i (String.length marker) = marker
+    then
+      let start = i + String.length marker in
+      match String.index_from_opt symbol start '>' with
+      | Some finish ->
+          Option.map
+            (fun position -> (String.sub symbol 0 i, position))
+            (int_of_string_opt (String.sub symbol start (finish - start)))
+      | None -> None
+    else find (i + 1)
+  in
+  find 0
+
+let parameter_field symbol =
+  match parameter_symbol symbol with
+  | Some (owner, position) ->
+      let prefix = owner ^ ".<parameter@" ^ string_of_int position ^ ">." in
+      if String.starts_with ~prefix symbol
+      then
+        String.sub
+          symbol
+          (String.length prefix)
+          (String.length symbol - String.length prefix)
+      else ""
+  | _ -> ""

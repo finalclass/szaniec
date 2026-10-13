@@ -338,6 +338,11 @@ Once artifacts are fresh, omit `--rebuild`:
 szaniec check --json
 ```
 
+For applications whose build is orchestrated by Make, set
+`build = ["make", "build"]` in `[check]`. `check --rebuild` then uses that
+command before recording transformation evidence. A plain application build
+does not create Szaniec's transformation receipts. Build logs go to stderr.
+
 ProgramAccess caches current per-artifact extraction under
 `_build/.szaniec-observations`. Every run discovers the current program and
 validates source, interface and compiler evidence before reuse. Policy and
@@ -349,11 +354,13 @@ Checks use one evaluation domain by default. Set `SZANIEC_DOMAINS=2`, `4` or
 `8` to evaluate sufficiently large independent path inventories in parallel.
 This helps some branching workloads and can slow simple ones; reports, graph
 bytes and exit statuses remain the same. `SZANIEC_ACQUISITION_STATS=1` writes
-artifact-selection, typed-read and cache counters to stderr. See the
+artifact-selection, typed-read and cache counters to stderr.
+`SZANIEC_INSPECTION_STATS=1` records elapsed inspection stages, and
+`SZANIEC_ACQUISITION_TRACE=1` lists units as they are acquired. See the
 [performance decisions and measurements](docs/decisions/full-program-performance.md).
 
 Configuration comes from the selected root's `szaniec.toml`. `--rebuild` runs
-`dune build` before extraction.
+`[check].build` (default `["dune", "build"]`) before extraction.
 Missing, stale, unreadable, or unsupported artifacts produce gaps.
 
 ### What the checker catches

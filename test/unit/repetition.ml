@@ -19,12 +19,16 @@ let call ?(loops = []) caller callee =
   ; execution_partial= false
   ; execution_resumed= false
   ; execution_supplied= 1
+  ; execution_defaults= []
   ; execution_args= [] }
 
 let project names invocations =
   let execution =
     { Observation.definitions= List.map definition names
     ; invocations
+    ; returned_functions= []
+    ; parameter_defaults= []
+    ; functor_instances= []
     ; ordered= [] }
   in
   Szaniec_interpretation_engine.Repetition.project
@@ -125,6 +129,7 @@ let () =
             [ { Observation.position= 0
               ; label= ""
               ; target= "callback"
+              ; field= ""
               ; embedded= false } ] }
       ; call "callback" "Other.request" ]
   in
@@ -140,6 +145,7 @@ let () =
             [ { Observation.position= 0
               ; label= ""
               ; target= "callback"
+              ; field= ""
               ; embedded= false } ] }
       ; call ~loops:[inner] "callback" "Other.request" ]
   in

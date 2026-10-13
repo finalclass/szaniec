@@ -11,15 +11,15 @@ let complexity_metric = "szaniec-cc/1"
 
 let config_format = "szaniec-config/1"
 
-let observation_format = "szaniec-observation/5"
+let observation_format = "szaniec-observation/6"
 
-let interpretation_format = "szaniec-interpretation/5"
+let interpretation_format = "szaniec-interpretation/6"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.6.0"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.7.0"
 
-let adapter_well = "szaniec-well-adapter/3.5.0"
+let adapter_well = "szaniec-well-adapter/3.6.0"
 
-let rules = "szaniec-rules/3.1.0"
+let rules = "szaniec-rules/3.2.0"
 
 let coverage_format = "szaniec-coverage/1"
 

@@ -37,7 +37,7 @@ let env_unsets_for_nested_dune : string list =
       else None )
   |> List.sort_uniq compare
 
-let run_dune_build (project_root : string) : int =
+let run_build (project_root : string) (command : string list) : int =
   let old_cwd = Sys.getcwd () in
   ( try Unix.chdir project_root with
   | Sys_error _ -> () ) ;
@@ -47,7 +47,12 @@ let run_dune_build (project_root : string) : int =
   (* DUNE_CACHE=disabled: cache-restored artifacts carry old mtimes, which
      would defeat the mtime-based freshness check *)
   let code =
-    Sys.command ("unset " ^ unsets ^ "; DUNE_CACHE=disabled dune build")
+    Sys.command
+      ( "unset "
+      ^ unsets
+      ^ "; DUNE_CACHE=disabled "
+      ^ String.concat " " (List.map Filename.quote command)
+      ^ " >&2" )
   in
   ( try Unix.chdir old_cwd with
   | Sys_error _ -> () ) ;
@@ -58,7 +63,9 @@ let observe_program
     (req : request)
     (policy : Policy.t) =
   let build_code =
-    if req.rebuild then Some (run_dune_build req.project_root) else None
+    if req.rebuild
+    then Some (run_build req.project_root req.config.check.build)
+    else None
   in
   let observation =
     Szaniec_program_access.Ocaml_adapter.observe
@@ -406,6 +413,17 @@ let build_callgraph
   ; unclassified_units= List.sort_uniq compare unclassified }
 
 let check (req : request) : Finding.report =
+  let last_stage = ref (Unix.gettimeofday ()) in
+  let checkpoint stage =
+    if Sys.getenv_opt "SZANIEC_INSPECTION_STATS" = Some "1"
+    then (
+      let now = Unix.gettimeofday () in
+      Printf.eprintf
+        "szaniec inspection: %s %.3fs\n%!"
+        stage
+        (now -. !last_stage) ;
+      last_stage := now )
+  in
   (* 1. resolve the approved policy *)
   let resolution, approval_gap =
     match
@@ -451,6 +469,7 @@ let check (req : request) : Finding.report =
       req
       policy
   in
+  checkpoint "observation" ;
   let cy, local_gaps =
     Szaniec_architecture_access.Architecture_access.local_services
       ~approved:resolution.approved
@@ -470,6 +489,23 @@ let check (req : request) : Finding.report =
       ~cy
       observation
   in
+  checkpoint "interpretation" ;
+  if Sys.getenv_opt "SZANIEC_INSPECTION_STATS" = Some "1"
+  then (
+    Printf.eprintf
+      "szaniec evidence: units=%d calls=%d paths=%d interpretation_gaps=%d\n%!"
+      (List.length observation.units)
+      (List.length observation.calls)
+      (List.length observation.exec_paths)
+      (List.length interpretation.gaps) ;
+    List.iter
+      (fun (g : Observation.gap) ->
+        Printf.eprintf
+          "szaniec interpretation gap: %s %s %s\n%!"
+          g.gap_code
+          g.gap_path
+          g.gap_detail )
+      interpretation.gaps ) ;
   (* 4. evaluate *)
   let violations =
     Szaniec_conformance_engine.Conformance_engine.evaluate
@@ -480,7 +516,9 @@ let check (req : request) : Finding.report =
       ~observation
       ~interpretation
   in
+  checkpoint "conformance" ;
   let callgraph = build_callgraph ~cy ~observation ~interpretation in
+  checkpoint "callgraph" ;
   let obs_gaps =
     List.map
       Szaniec_conformance_engine.Conformance_engine.gap_finding

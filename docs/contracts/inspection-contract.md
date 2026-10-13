@@ -36,7 +36,8 @@ run conformance rules and it does not require an approved policy.
 - Every successful `check` writes the call network artifact
   (`szaniec.json`, see below) into the project root; `--out <path>`
   moves it, `--no-callgraph` disables writing it.
-- `--rebuild` runs `dune build` in the project root before observation.
+- `--rebuild` runs `[check].build` (default `["dune", "build"]`) in the
+  project root before observation. Build output is sent to stderr.
   Without it, stale or missing artifacts are reported as gaps, never used
   as current evidence.
 - `--json` emits the machine-readable report instead of the text report.
@@ -99,9 +100,9 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.6.0",
-      "interpretation": "szaniec-well-adapter/3.5.0",
-      "rules": "szaniec-rules/3.1.0"
+      "programAccess": "szaniec-ocaml-adapter/1.7.0",
+      "interpretation": "szaniec-well-adapter/3.6.0",
+      "rules": "szaniec-rules/3.2.0"
     },
     "exclusions": ["...", "..."]
   },

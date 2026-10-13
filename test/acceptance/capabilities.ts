@@ -150,6 +150,53 @@ Deno.test("compiled local ownership, SQLite, callbacks, path summaries, transfor
       `fresh fixture baseline: ${baseline.err}${baseline.out}`,
     );
     await write(
+      "_release/static/dune",
+      "(rule (target unused) (deps missing.release.input) (action (run missing.release.tool)))\n",
+    );
+    const generatedDune = "lib/task_access/dune";
+    const generatedOriginal = await Deno.readTextFile(
+      `${root}/${generatedDune}`,
+    );
+    await write(
+      generatedDune,
+      generatedOriginal +
+        '\n(rule (target generated.ml) (deps (universe)) (action (write-file generated.ml "let value = 7\\n")))\n',
+    );
+    result = await check();
+    assert(
+      result.code === 0,
+      "generated source and release copies: " + result.err + result.out,
+    );
+    assert(
+      (await check(false)).out === result.out,
+      "generated source survives incremental checks",
+    );
+    await Deno.chmod(
+      `${root}/_build/default/lib/task_access/generated.ml`,
+      0o644,
+    );
+    await Deno.writeTextFile(
+      `${root}/_build/default/lib/task_access/generated.ml`,
+      "let value = 8\n",
+    );
+    result = await check(false);
+    assert(
+      result.code === 2 &&
+        result.report.findings.some((f) => f.rule === "GAP-STALE-ARTIFACT"),
+      "changed generated input stays incomplete: " + result.out,
+    );
+    await Deno.remove(`${root}/_build/default/lib/task_access/generated.ml`);
+    result = await check(false);
+    assert(
+      result.code === 2 &&
+        result.report.findings.some((f) => f.rule === "GAP-MISSING-INPUT"),
+      "missing generated input stays incomplete: " + result.out,
+    );
+    await write(generatedDune, generatedOriginal);
+    await Deno.remove(`${root}/_release`, { recursive: true });
+    result = await check();
+    assert(result.code === 0, result.err + result.out);
+    await write(
       "support/sqlite3/dune",
       "(library (name sqlite3) (wrapped false))\n",
     );
@@ -222,6 +269,15 @@ let errmsg (_ : db) = "error"
       "typed local function and alias",
       `let show () = let callback () = ${manager} in let alias = callback in alias ()\n`,
     );
+    let nestedOperands = "apply () () () ()";
+    for (let depth = 0; depth < 3; depth++) {
+      nestedOperands =
+        `apply (${nestedOperands}) (apply () () () ()) (apply () () () ()) (apply () () () ())`;
+    }
+    await scenario(
+      "shared nested operand-order nodes stay bounded",
+      `let apply a b c d = ignore (a, b, c, d)\nlet show () = ${nestedOperands}\n`,
+    );
     await scenario(
       "typed callback reaches Access",
       `let show () = let callback () = ${access} in let alias = callback in alias ()\n`,
@@ -237,6 +293,94 @@ let errmsg (_ : db) = "error"
     await scenario(
       "known callback passed to local helper",
       `let invoke callback = callback ()\nlet show () = let callback () = ${access} in invoke callback\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "a literal method witness passed to an unused helper input never executes",
+      `let unused _ () = ${manager}\nlet show () = unused (fun (obj : < witness : unit >) -> obj#witness) ()\n`,
+    );
+    await scenario(
+      "an activated object method witness retains unresolved evidence",
+      `let invoke callback arg = callback arg\nlet show obj = invoke (fun (arg : < witness : unit >) -> arg#witness) obj\n`,
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "an omitted optional function invokes its default",
+      `let invoke ?(callback=(fun () -> ${access})) () = callback ()\nlet show () = invoke ()\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "a supplied optional function retains its target",
+      `let invoke ?(callback=(fun () -> ())) () = callback ()\nlet show () = invoke ~callback:(fun () -> ${access}) ()\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "a first-class module retains its typed method target",
+      `module type Handler = sig val run : unit -> unit end\nlet invoke (module Handler : Handler) = Handler.run ()\nlet show () = invoke (module struct let run () = ${access} end)\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "an unbound first-class module remains incomplete",
+      "module type Handler = sig val run : unit -> unit end\nlet show (module Handler : Handler) = Handler.run ()\n",
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "callback from a locally opened structure retains ownership",
+      `open struct let invoke callback = callback () end\nlet show () = invoke (fun () -> ${access})\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "a pipeline invokes a function produced by an immutable let binding",
+      `let show () = () |> (let value=() in fun () -> ignore value; ${access})\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "a locally aliased public module retains layer checks",
+      `let show () = let module Alias = App_contract.Task_access in ignore (Alias.read ~ctx:() (${message}))\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "immutable record passed through helpers retains its callback",
+      `type handler = {run : unit -> unit}\nlet invoke handler = handler.run ()\nlet forward handler = invoke handler\nlet show () = forward {run = (fun () -> ${access})}\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    const wellSource = await Deno.readTextFile(`${root}/lib/well/well.ml`);
+    await write(
+      "lib/well/well.ml",
+      wellSource +
+        `\nmodule Db = struct\n  type row = {int : int -> int}\n  let query _db _sql _params f = [f {int = (fun _ -> 0)}]\n  let query_one _db _sql _params f = Some (f {int = (fun _ -> 0)})\nend\n`,
+    );
+    await scenario(
+      "database row getter has producer provenance",
+      'let show () = ignore (Well.Db.query () "select 1" [] (fun row -> row.int 0))\n',
+      ["RESOURCE-BOUNDARY"],
+      1,
+    );
+    await scenario(
+      "database row producer survives a helper with an exception handler",
+      'let query db sql params f = try Well.Db.query db sql params f with Failure _ -> []\nlet show () = ignore (query () "select 1" [] (fun row -> row.int 0))\n',
+      ["RESOURCE-BOUNDARY"],
+      1,
+    );
+    await scenario(
+      "database row producer reaches the remaining input of a partial mapper",
+      'let read db row = ignore db; row.Well.Db.int 0\nlet show () = ignore (Well.Db.query () "select 1" [] (read ()))\n',
+      ["RESOURCE-BOUNDARY"],
+      1,
+    );
+    await scenario(
+      "an application-created database row retains its function field",
+      `let read (row : Well.Db.row) = row.int 0\nlet show () = ignore (read {int = (fun _ -> ${access}; 0)})\n`,
       ["ID-CLIENT-ACCESS"],
       1,
     );
@@ -328,14 +472,121 @@ let errmsg (_ : db) = "error"
       `let callback first second = ignore (first, second); ${manager}; Second_manager.run ()\nlet show () = ignore (List.map callback [()])\n`,
     );
     await scenario(
-      "invoked returned closure keeps uncertainty",
+      "invoked known returned closure retains provenance",
       `let factory () = let value = () in ignore value; (fun () -> ${manager})\nlet show () = let callback = factory () in callback ()\n`,
+    );
+    await scenario(
+      "invoked returned closure retains a multi-Manager violation",
+      `let factory () = let value = () in ignore value; (fun () -> ${manager}; Second_manager.run ())\nlet show () = let callback = factory () in callback ()\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "an unknown returned function keeps uncertainty",
+      "let factory choice = if choice then (fun () -> ()) else (fun () -> ())\nlet show choice = let callback = factory choice in callback ()\n",
       ["GAP-RETURNED-CLOSURE"],
       2,
     );
     await scenario(
       "executed iterator callback retains multi-Manager path",
       `let hidden () = ${manager}; Second_manager.run ()\nlet show () = List.iter hidden [()]\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "String callbacks retain service interactions",
+      `let show () = String.iter (fun _ -> ${manager}; Second_manager.run ()) "x"\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "String predicates have known callback execution",
+      `let show () = ignore (String.for_all (fun _ -> ${manager}; true) "x")\n`,
+    );
+    await write(
+      "lib/web_client/dune",
+      (await Deno.readTextFile(`${root}/lib/web_client/dune`)).replace(
+        /\(libraries ([^)]*)\)/,
+        "(libraries $1 str)",
+      ),
+    );
+    await scenario(
+      "regular-expression substitutions retain callback interactions",
+      `let show () = ignore (Str.global_substitute (Str.regexp "x") (fun _ -> ${manager}; Second_manager.run (); "y") "xx")\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "exception uncertainty retains a single helper callback input",
+      `let invoke f = try f () with _ -> ()\nlet show () = invoke (fun () -> ${manager})\n`,
+    );
+    await scenario(
+      "exception uncertainty with distinct callback inputs stays incomplete",
+      `let invoke first second = try first () with _ -> second ()\nlet show () = invoke (fun () -> ${manager}) (fun () -> Second_manager.run ())\n`,
+      ["GAP-AMBIGUOUS-PATH"],
+      2,
+    );
+    await scenario(
+      "a declared native scalar primitive has a concrete external dependency",
+      'external native_length : string -> int = "%string_length"\nlet show () = ignore (native_length "x")\n',
+    );
+    assert(
+      (await Deno.readTextFile(`${root}/_build/graph.json`)).includes(
+        "Native_primitive.%string_length",
+      ),
+      "the native dependency remains in the graph",
+    );
+    await scenario(
+      "a native callback primitive retains unknown invocation semantics",
+      'external native_callback : (unit -> unit) -> unit -> unit = "caml_callback"\nlet show () = native_callback (fun () -> ()) ()\n',
+      ["GAP-CALLBACK-SEMANTICS"],
+      2,
+    );
+    const nativeProvider = "lib/task_access/task_access_impl.ml";
+    const nativeProviderSource = await Deno.readTextFile(
+      `${root}/${nativeProvider}`,
+    );
+    await write(
+      nativeProvider,
+      nativeProviderSource +
+        '\nexternal native_length : string -> int = "%string_length"\n',
+    );
+    await scenario(
+      "a foreign native declaration keeps its owning private service boundary",
+      'let show () = ignore (Task_access_lib.Task_access_impl.native_length "x")\n',
+      ["IMPL-ACCESS-CROSS-SERVICE"],
+      1,
+    );
+    await write(nativeProvider, nativeProviderSource);
+    await scenario(
+      "formatted input fully invokes its typed callback",
+      `let show () = Scanf.sscanf "1:2" "%d:%d" (fun a b -> ignore (a,b); ${manager}; Second_manager.run ())\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "an unforced lazy sequence does not execute its callback",
+      `let show () = let unused = Seq.map (fun () -> ${manager}; Second_manager.run ()) (List.to_seq [()]) in ignore unused\n`,
+    );
+    await scenario(
+      "forcing a lazy sequence retains service interactions",
+      `let show () = ignore (List.of_seq (Seq.map (fun () -> ${manager}; Second_manager.run ()) (List.to_seq [()])))\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "a standard Set functor retains its concrete comparator",
+      `module Keys = struct type t = unit let compare a b = ignore (a,b); ${manager}; Second_manager.run (); 0 end\nmodule Bag = Set.Make(Keys)\nlet show () = ignore (Bag.add () Bag.empty)\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "a standard Set with a library comparator is complete",
+      'module Bag = Set.Make(String)\nlet show () = ignore (Bag.mem "x" (Bag.add "x" Bag.empty))\n',
+    );
+    await scenario(
+      "Fun.protect body and finalizer retain service interactions",
+      `let show () = Fun.protect (fun () -> ${manager}) ~finally:(fun () -> Second_manager.run ())\n`,
       ["UC-CLIENT-MULTI-MANAGER"],
       1,
     );
@@ -376,20 +627,57 @@ let errmsg (_ : db) = "error"
       "wrapped closure does not prove invocation",
     );
     const ambiguousCallback = await scenario(
-      "ambiguous passed callback provenance",
+      "separate callback bindings preserve mutually exclusive paths",
       `let invoke callback = callback ()\nlet first () = ${manager}\nlet second () = Second_manager.run ()\nlet show yes = if yes then invoke first else invoke second\n`,
-      ["GAP-UNRESOLVED-CALL"],
-      2,
+      [],
+      0,
     );
     assert(
-      ambiguousCallback.report.findings.some((f) =>
-        f.rule === "GAP-UNRESOLVED-CALL" &&
-        f.message.includes("ambiguous compiler-known")
-      ),
-      "ambiguity differs from unavailable artifacts",
+      ambiguousCallback.report.summary.violations === 0,
+      "separate callback bindings do not create a combined Manager path",
     );
-    const bounded = await scenario(
-      "distinct summary bound",
+    const callbackPolicy = await Deno.readTextFile(`${root}/szaniec.toml`);
+    const callbackDune = await Deno.readTextFile(`${root}/lib/web_client/dune`);
+    await write(
+      "lib/callback_utility/dune",
+      "(library (name callback_utility))\n",
+    );
+    await write(
+      "lib/callback_utility/api.ml",
+      "let choose yes ~first ~second = if yes then first () else second ()\n",
+    );
+    await Deno.writeTextFile(
+      `${root}/szaniec.toml`,
+      callbackPolicy +
+        `\n[[policy.local_services]]\nname = "CallbackUtility"\nroot = "lib/callback_utility"\n[[policy.public_contracts]]\nservice = "CallbackUtility"\nmodule = "Callback_utility.Api"\nmembers = ["choose"]\nconsumers = ["Web_client"]\n`,
+    );
+    await write(
+      "lib/web_client/dune",
+      callbackDune.replace("(libraries ", "(libraries callback_utility "),
+    );
+    await approve();
+    await scenario(
+      "callbacks across a public Utility retain branch correlation",
+      `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${manager}) ~second:(fun () -> Second_manager.run ())\n`,
+    );
+    await scenario(
+      "public Utility callback retains a two-Manager violation",
+      `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${manager}; Second_manager.run ()) ~second:(fun () -> ())\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    await scenario(
+      "public Utility callback retains protected Access calls",
+      `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${access}) ~second:(fun () -> ())\n`,
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await Deno.writeTextFile(`${root}/szaniec.toml`, callbackPolicy);
+    await write("lib/web_client/dune", callbackDune);
+    await Deno.remove(`${root}/lib/callback_utility`, { recursive: true });
+    await approve();
+    await scenario(
+      "wide path alternatives with one reachable Manager have a safe bound",
       `${
         Array.from({ length: 9 }, (_, i) => `let h${i} () = ${manager}`).join(
           "\n",
@@ -400,14 +688,20 @@ let errmsg (_ : db) = "error"
           (_, i) => `(if n land ${1 << i} <> 0 then h${i} ());`,
         ).join("\n")
       }\n()\n`,
+    );
+    await scenario(
+      "wide path alternatives with two possible Managers remain incomplete",
+      `${
+        Array.from({ length: 9 }, (_, i) =>
+          `let h${i} () = ${i === 8 ? "Second_manager.run ()" : manager}`).join(
+            "\n",
+          )
+      }\nlet show n =\n${
+        Array.from({ length: 9 }, (_, i) =>
+          `(if n land ${1 << i} <> 0 then h${i} ());`).join("\n")
+      }\n()\n`,
       ["GAP-AMBIGUOUS-PATH"],
       2,
-    );
-    assert(
-      bounded.report.findings.some((f) =>
-        f.rule === "GAP-AMBIGUOUS-PATH" && f.message.includes("256")
-      ),
-      "concrete summary bound",
     );
     const recursiveUnknown = await scenario(
       "recursive multi-target uncertainty",
@@ -423,9 +717,15 @@ let errmsg (_ : db) = "error"
       "concrete recursive limit",
     );
     await scenario(
-      "unknown exception completion",
+      "exception reachability bound preserves structural violations",
       `let show () = try ${manager} with _ -> ${access}\n`,
-      ["GAP-AMBIGUOUS-PATH", "ID-CLIENT-ACCESS"],
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "unknown exception completion with multiple possible Managers",
+      `let show () = try ${manager} with _ -> Second_manager.run ()\n`,
+      ["GAP-AMBIGUOUS-PATH"],
       2,
     );
     await write(
@@ -455,6 +755,21 @@ let errmsg (_ : db) = "error"
       `let rec helper n = if n > 0 then (${access}; helper (n - 1))\nlet show n = helper n\n`,
       ["ID-CLIENT-ACCESS"],
       1,
+    );
+    const recursiveCallbacks =
+      "let with_lock f = if Random.bool () then f () else Fun.protect ~finally:(fun () -> ()) f\n" +
+      "let rec with_write f = match with_lock (fun () -> if Random.bool () then None else Some (f ())) with Some result -> result | None -> with_write f\n";
+    await scenario(
+      "recursive write callbacks have a closed single-Manager upper bound",
+      recursiveCallbacks +
+        `let show () = with_lock (fun () -> ()); with_write (fun () -> ${manager})\n`,
+    );
+    await scenario(
+      "recursive write callbacks with distinct Managers remain incomplete",
+      recursiveCallbacks +
+        `let first () = with_write (fun () -> ${manager})\nlet second () = with_write (fun () -> Second_manager.run ())\nlet show () = first (); second ()\n`,
+      ["GAP-AMBIGUOUS-PATH"],
+      2,
     );
     assert(
       (await Deno.readTextFile(`${root}/_build/graph.json`)).includes(

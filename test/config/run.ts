@@ -47,6 +47,54 @@ decisions = "decisions.json"
     await Deno.remove(root, { recursive: true });
   }
 }
+Deno.test("configured build preserves literal arguments and JSON output", () =>
+  project(async (root, nested) => {
+    const literal = "$HOME `id` argument with spaces";
+    const builder = `${root}/builder.ts`;
+    await Deno.writeTextFile(
+      builder,
+      'Deno.writeTextFileSync("build-argument.txt", Deno.args[0]); console.log("build output"); Deno.exit(Number(Deno.args[1]));\n',
+    );
+    let config = await Deno.readTextFile(`${root}/szaniec.toml`);
+    const build = (code: number) =>
+      JSON.stringify([
+        Deno.execPath(),
+        "run",
+        "--allow-write",
+        builder,
+        literal,
+        String(code),
+      ]);
+    config = config.replace("[check]", `[check]\nbuild = ${build(0)}`);
+    await Deno.writeTextFile(`${root}/szaniec.toml`, config);
+    assert((await run(nested, "approve")).code === 0, "fixture approval");
+    let result = await run(nested, "check", "--rebuild");
+    assert(
+      result.code === 0 && JSON.parse(result.out).summary.gaps === 0,
+      result.err + result.out,
+    );
+    assert(
+      result.err.includes("build output"),
+      "build output must go to stderr",
+    );
+    assert(
+      await Deno.readTextFile(`${root}/build-argument.txt`) === literal,
+      "literal argument in project cwd",
+    );
+    await Deno.writeTextFile(
+      `${root}/szaniec.toml`,
+      config.replace(build(0), build(7)),
+    );
+    assert((await run(nested, "approve")).code === 0, "fixture approval");
+    result = await run(nested, "check", "--rebuild");
+    assert(
+      result.code === 2 &&
+        JSON.parse(result.out).findings.some((f: { rule: string }) =>
+          f.rule === "GAP-BUILD"
+        ),
+      result.err + result.out,
+    );
+  }));
 Deno.test("discover repository configuration from a nested worktree directory", () =>
   project(async (root, nested) => {
     // A local decoy config must not override the repository root.

@@ -110,6 +110,11 @@ let evaluate
     ; execution_interactions= []
     ; execution_flows= []
     ; callbacks= []
+    ; callback_paths= []
+    ; bound_parameters= []
+    ; parameter_targets= []
+    ; returned_calls= []
+    ; parameter_defaults= []
     ; deferred_calls= []
     ; gaps }
   in

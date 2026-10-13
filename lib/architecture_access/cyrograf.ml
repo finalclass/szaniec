@@ -58,7 +58,9 @@ let parse_messages content =
         String.split_on_char ' ' (String.trim line) |> List.filter (( <> ) "")
       in
       match words with
-      | ("struct" | "enum" | "union" | "variant") :: name :: _ ->
+      | ("struct" | "enum" | "union" | "variant" | "alias" | "type")
+        :: name
+        :: _ ->
           let name = String.split_on_char '{' name |> List.hd in
           if name = "" then None else Some name
       | _ -> None )

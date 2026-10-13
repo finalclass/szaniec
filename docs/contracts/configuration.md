@@ -53,6 +53,7 @@ api_prefixes = ["Well.Db.", "Sqlite3."]
 
 [check]
 rebuild = false
+build = ["dune", "build"]
 json = false
 no_callgraph = false
 out = "szaniec.json"
@@ -102,6 +103,15 @@ Command settings shown use the defaults, except project-specific paths, scope
 and API candidates. Omitted `[check].out` defaults to `szaniec.json`.
 
 `[approval]` is specified by [the policy contract](policy-format.md).
+
+`[check].build` is a non-empty argument array executed in the project root
+when an inspection rebuild is requested (check or complexity). The default
+is `["dune", "build"]`; applications with a build orchestrator can use
+`["make", "build"]`. Arguments are passed literally, without shell expansion.
+Build output goes to stderr so JSON on stdout stays parseable. A failed
+build remains `GAP-BUILD` and cannot certify transformation evidence.
+The command must build all declared program roots with the supported Dune
+toolchain; a successful unrelated command is not a valid build configuration.
 
 ## Acceptance
 

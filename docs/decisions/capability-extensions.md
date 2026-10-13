@@ -33,6 +33,22 @@ points retain explicit uncertainty. Recursion may prove a safe single-target
 fan-out bound without proving termination. Multiple possible recursive Manager
 targets remain incomplete, with no fabricated co-occurrence finding.
 
+The same bound can discharge fan-out checks for ordinary `try/with` bodies
+and handlers whose entire reachable call union is resolved and has at most
+one Manager of each relevant interaction kind. Multiple possible Managers,
+unresolved calls, unknown callbacks, effect handlers and guarded explicit
+exception selection retain gaps. Structural checks still inspect every
+observed call, and ordered graphs keep exception uncertainty.
+
+Program acquisition excludes build/distribution directories (`_build`,
+`_release`, `_artifacts`, `dist`) and `node_modules`. Dune dependency constructors
+`file` and `source_tree` identify real inputs; `universe` and aliases are build
+scheduling dependencies. Workspace-root expansions resolve to the selected
+project. Build-only OCaml inputs require an explicit authored Dune target;
+their generated content contributes to the snapshot and stays subject to
+compiler-input and transformation freshness checks. Copied release Dune
+files do not become independent authored transformations.
+
 ## Acceptance
 
 `test/acceptance/capabilities.ts` copies the public owned-contract fixture,
@@ -63,3 +79,40 @@ Reproducible commands are `make build`, `make verify` and the targeted
 test/acceptance/capabilities.ts`. Development verification can select the
 development executable with `SZANIEC_TEST_BINARY`; release acceptance defaults
 to `_release/szaniec`. No private downstream source or credentials are required.
+
+The conservative fan-out bound traverses retained typed invocation trees rather
+than flattening raw calls from nested closure declarations into their creator.
+Only constructs whose observation retains every executable branch may use this
+bound; extraction failures and unsupported operand summaries remain gaps.
+Public RPC members of a verified contract are service-boundary calls, including
+self calls; their generated mutable dispatcher is not application helper code.
+Registered implementations are checked separately.
+
+Callback-provider facts propagate through typed helper arguments, including
+framework-produced database rows. A literal closure supplied exclusively to
+compiler-known helper inputs that never invoke or forward it is inert. This
+covers JS PPX method type witnesses without an exemption for browser transports:
+the raw unresolved method evidence remains, while activated or escaping unknown
+closures still make the check incomplete.
+
+When contextual path expansion reaches a callable input with several closed,
+compiler-proven providers, the fan-out upper bound traverses all those providers.
+It never picks one provider to make a path pass. The union can prove a single
+Manager bound; multiple Manager targets keep the uncertainty gap. Anonymous
+closures are excluded from their creator's call union and entered only through
+proven invocation/callback evidence. This preserves recursive storage helpers
+without claiming their termination or exception completion.
+
+Compiler-declared `external` values retain their exact OCaml symbol and the named
+native primitive as an external dependency. Native implementation bodies are
+outside the OCaml adapter's scope. They have no invented OCaml helper body or
+callback contract; function-valued inputs to an unmodeled native primitive retain
+unknown callback semantics. Regular-expression `Str.global_substitute` and
+`Str.substitute_first` use their documented one-argument replacement callbacks;
+the former retains iteration context and the latter is a single possible call.
+
+A helper's complete retained call tree may establish one callback input despite
+unknown exception completion or guard selection. The projection keeps possible
+invocation and non-invocation branches. It rejects this recovery when distinct
+callback inputs could be confused; their co-execution remains unproven. Unknown
+APIs, missing bodies and unsupported constructs still prevent the recovery.

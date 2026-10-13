@@ -129,7 +129,12 @@ let data_member ?(generated = false) (c : Cy.contract) member =
         ; "wire_of_storage"
         ; "storage_of_wire"
         ; "to_storage_value"
-        ; "from_storage_value" ]
+        ; "from_storage_value"
+        ; "to_yojson"
+        ; "of_yojson"
+        ; "pp"
+        ; "show"
+        ; "equal" ]
       && (generated || List.mem message c.contract_messages)
   | _ -> false
 
@@ -156,6 +161,7 @@ let rpc_member (cy : Cy.t) (c : Cy.contract) member =
 let mechanic ?(generated = false) c member =
   data_member ~generated c member
   || List.mem member ["make_spec"; "spec"; "_service_ref"]
+  || (generated && String.starts_with ~prefix:"make_spec." member)
 
 (* Value-level serializer helpers are private, not additional public codecs.
    Their dependencies need interpretation even when the public conversion
@@ -164,6 +170,10 @@ let serializer_body ?(generated = false) c member =
   data_member ~generated c member
   ||
   match Canonical.split_dots member with
+  | message :: fn :: _ when data_member ~generated c (message ^ "." ^ fn) ->
+      true
+  | message :: "<toplevel>" :: _ ->
+      generated || List.mem message c.Cy.contract_messages
   | [message; ("encode_value" | "decode_value")] ->
       generated || List.mem message c.Cy.contract_messages
   | _ -> false
@@ -301,15 +311,49 @@ let validate_surfaces
                  Some u.canonical = unit && u.fresh )
                obs.units
         in
-        if not valid
-        then
-          gaps :=
-            { Observation.gap_code= "GAP-PUBLIC-CONTRACT"
-            ; gap_path= p.public_module
-            ; gap_detail=
-                "owned public surface lacks consistent owner, members or fresh \
-                 compiler evidence" }
-            :: !gaps ;
+        ( if not valid
+          then
+            let reasons =
+              (if unit = None then ["compiled module unavailable"] else [])
+              @ ( match owner with
+                | None -> ["owner unavailable"]
+                | Some o when o.Interpretation.owner_service <> p.public_service
+                  ->
+                    [ "owner "
+                      ^ o.owner_service
+                      ^ " differs from "
+                      ^ p.public_service ]
+                | Some o -> (
+                  match o.owner_class with
+                  | Interpretation.Implementation_of _
+                   |Helper_of _ ->
+                      []
+                  | _ -> ["owner is not a service implementation or helper"] )
+                )
+              @ ( p.public_members
+                |> List.filter_map (fun member ->
+                    if
+                      List.mem
+                        (p.public_module ^ "." ^ member)
+                        obs.defined_values
+                    then None
+                    else Some ("member unavailable: " ^ member) ) )
+              @
+              if
+                List.exists
+                  (fun (u : Observation.unit_info) ->
+                    Some u.canonical = unit && u.fresh )
+                  obs.units
+              then []
+              else ["fresh compiler evidence unavailable"]
+            in
+            gaps :=
+              { Observation.gap_code= "GAP-PUBLIC-CONTRACT"
+              ; gap_path= p.public_module
+              ; gap_detail=
+                  "owned public surface cannot be verified: "
+                  ^ String.concat "; " reasons }
+              :: !gaps ) ;
         valid )
       surfaces
   in

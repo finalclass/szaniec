@@ -1,6 +1,6 @@
 # Contract: rule catalog
 
-Catalog version: `szaniec-rules/3.1.0`.
+Catalog version: `szaniec-rules/3.2.0`.
 
 Rules evaluate the interpretation model against the service roles and
 the policy. There is no permitted-calls list: conformance follows the
@@ -108,9 +108,11 @@ An entry is a value with no caller in the same boundary. When a
 function's alternatives cannot be built within the bounded summary contract,
 it contributes `GAP-AMBIGUOUS-PATH` naming the limiting construct and unevaluated
 checks. Direct, established witnesses remain findings alongside the gap.
-For recursive graphs with all targets resolved, a conservative reachable-target
+For recursive graphs and uncertain ordinary exception completion with all targets resolved, a conservative reachable-target
 bound proves fan-out absent when there is at most one Manager and one queued
-Manager. This does not claim recursion terminates or order its invocations.
+Manager. The exception bound includes every call in the body and handlers;
+it does not infer which handler executes or fabricate a co-execution path.
+This does not claim recursion terminates or order its invocations.
 Multiple recursive targets remain unverified rather than being combined into
 an invented execution path. See [observation limits](observation-schema.md#completeness).
 

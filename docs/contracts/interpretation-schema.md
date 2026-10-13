@@ -75,14 +75,14 @@ edited policy, stale artifacts, missing members and
 ambiguous ownership retain violations or gaps. Browser RPC calls retain layer
 checks. Data-only contracts are absent from the service graph.
 
-Format identifier (conceptual): `szaniec-interpretation/5`.
+Format identifier (conceptual): `szaniec-interpretation/6`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.5.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.6.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -101,6 +101,26 @@ refer to invocation of the resulting function and do not inherit construction's
 deferred phase. Callback APIs retain their actual argument arity, so mapping a
 curried function may construct further functions without executing their bodies.
 Unverifiable invoked returned closures produce `GAP-RETURNED-CLOSURE`.
+
+`callbackPaths` retains alternative groups of callable inputs consumed by an
+observed helper. Each invocation substitutes its own arguments, preserving
+mutually exclusive callback branches. `boundParameters` and `parameterTargets`
+record finite, closed input provenance, including immutable record fields;
+recursive forwarding contributes no new target and cannot alone prove a binding.
+Default targets apply only to proven omitted optional arguments. Known codec
+primitives execute their supplied encoder/decoder callbacks with their declared
+once/iteration semantics; their concrete callback bodies remain inspected.
+Known library producers supply additional evidence: Well database query callbacks
+receive row getters, whereas application-created rows retain their actual fields.
+`returnedCalls` binds resumed execution to a proven returned function. Construction
+and invocation remain separate. Unknown providers, mutable fields, unproven
+returned functions and unknown callback semantics remain incomplete.
+
+Standard collection functor instances supply their concrete comparator to the
+interpreted method call. Comparators retain their service/resource interactions.
+Lazy sequence construction is deferred; forcing the sequence executes its
+callback. Formatted input invokes the callback with the arity fixed by its typed
+format. Framework and library spellings stay in InterpretationEngine.
 Wrapped callback values supplied to unknown APIs retain unknown execution rather
 than becoming independent entries merely because their closures were created.
 

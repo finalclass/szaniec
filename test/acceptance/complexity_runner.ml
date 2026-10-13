@@ -79,16 +79,14 @@ let provenance_of = function
       "authored"
 
 let ownership_of = function
-  | Sample
-   |Probe ->
-      "unclassified"
+  | Sample -> "helper of Metric.Samples"
+  | Probe -> "unclassified"
   | Recur -> "helper of Metric.Recursion"
   | Widget -> "implementation of Widget_manager"
 
 let service_of = function
-  | Sample
-   |Probe ->
-      ""
+  | Sample -> "Metric.Samples"
+  | Probe -> ""
   | Recur -> "Metric.Recursion"
   | Widget -> "Widget_manager"
 
@@ -309,7 +307,7 @@ let check_inventory errors (j : Yojson.Safe.t) =
   let inputs = member "inputs" j in
   if jbool inputs "approved"
   then fail errors "approval must stay a recorded flag" ;
-  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.6.0"
+  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.7.0"
   then fail errors "adapter version" ;
   ( match member "programRoots" inputs with
   | `List [`String "metric"; `String "test"] -> ()

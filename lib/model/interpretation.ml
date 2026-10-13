@@ -115,5 +115,10 @@ type t =
   ; execution_interactions: execution_interaction list
   ; execution_flows: execution_flow list
   ; callbacks: callback_evidence list
+  ; callback_paths: (Observation.site * string list list) list
+  ; bound_parameters: string list
+  ; parameter_targets: (string * string list) list
+  ; returned_calls: (Observation.site * string * string) list
+  ; parameter_defaults: (string * string) list
   ; deferred_calls: Observation.site list
   ; gaps: Observation.gap list }

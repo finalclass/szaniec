@@ -206,6 +206,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
                             then Observation.Unresolved_dynamic
                             else Observation.Resolved )
                       ; execution_args= []
+                      ; execution_defaults= []
                       ; execution_partial= partial
                       ; execution_supplied= supplied
                       ; execution_resumed= false }

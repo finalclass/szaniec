@@ -788,6 +788,16 @@ let interpret
               ~generated:(Hashtbl.mem generated_units unit)
               contract
               member
+            || Public_contracts.serializer_body
+                 ~generated:(Hashtbl.mem generated_units unit)
+                 contract
+                 member
+            ||
+            match Canonical.split_dots member with
+            | [_]
+             |["Proxy"; _] ->
+                false
+            | _ -> true
           then None
           else
             Option.map
@@ -901,6 +911,71 @@ let interpret
       | None -> None )
   in
   let arities = Hashtbl.create 32 in
+  let instance_call (call : Observation.execution_call) =
+    List.find_map
+      (fun (instance, fn, arg, _) ->
+        let prefix = instance ^ "." in
+        if
+          List.mem fn ["Stdlib.Set.Make"; "Stdlib.Map.Make"]
+          && String.starts_with ~prefix call.execution_callee
+        then
+          let method_ =
+            String.sub
+              call.execution_callee
+              (String.length prefix)
+              (String.length call.execution_callee - String.length prefix)
+          in
+          if String.contains method_ '.'
+          then None
+          else
+            let api = String.sub fn 0 (String.length fn - 5) ^ "." ^ method_ in
+            let compared =
+              List.mem
+                method_
+                [ "mem"
+                ; "add"
+                ; "remove"
+                ; "union"
+                ; "inter"
+                ; "diff"
+                ; "compare"
+                ; "equal"
+                ; "subset"
+                ; "disjoint"
+                ; "find"
+                ; "find_opt"
+                ; "split"
+                ; "of_list"
+                ; "of_seq"
+                ; "map"
+                ; "update"
+                ; "merge" ]
+            in
+            let args =
+              if compared
+              then
+                { Observation.position= -1
+                ; label= "compare"
+                ; target= arg ^ ".compare"
+                ; field= ""
+                ; embedded= false }
+                :: call.execution_args
+              else call.execution_args
+            in
+            Some {call with execution_callee= api; execution_args= args}
+        else None )
+      obs.execution.functor_instances
+  in
+  let functor_targets =
+    obs.execution.invocations
+    |> List.filter_map (fun call ->
+        Option.map
+          (fun mapped ->
+            ( call.Observation.execution_callee
+            , [mapped.Observation.execution_callee] ) )
+          (instance_call call) )
+    |> List.sort_uniq compare
+  in
   List.iter
     (fun (d : Observation.execution_definition) ->
       Hashtbl.replace arities d.symbol d.definition_arity )
@@ -917,9 +992,49 @@ let interpret
               (arity - call.execution_supplied)
         | _ -> () )
     obs.execution.invocations ;
+  let returned_calls =
+    obs.execution.invocations
+    |> List.filter_map (fun (call : Observation.execution_call) ->
+        if
+          call.execution_resumed
+          && Option.fold
+               ~none:false
+               ~some:(fun arity -> arity <= call.execution_supplied)
+               (Hashtbl.find_opt arities call.execution_callee)
+        then
+          Option.map
+            (fun target -> (call.execution_site, call.execution_callee, target))
+            (List.assoc_opt
+               call.execution_callee
+               obs.execution.returned_functions )
+        else None )
+    |> List.sort_uniq compare
+  in
+  let returned_target (call : Observation.execution_call) =
+    if call.execution_resumed
+    then
+      List.find_map
+        (fun (site, source, target) ->
+          if site = call.execution_site && source = call.execution_callee
+          then Some target
+          else None )
+        returned_calls
+    else None
+  in
   let execution =
     { obs.execution with
-      Observation.definitions=
+      invocations=
+        List.map
+          (fun call ->
+            let call = Option.value ~default:call (instance_call call) in
+            match returned_target call with
+            | Some target ->
+                { call with
+                  execution_callee= target
+                ; execution_resolution= Observation.Resolved }
+            | None -> call )
+          obs.execution.invocations
+    ; Observation.definitions=
         List.map
           (fun (d : Observation.execution_definition) ->
             { d with
@@ -1078,6 +1193,85 @@ let interpret
     let o = owner_of_path path in
     if String.equal o.owner_service "" then o.owner_module else o.owner_service
   in
+  let known_callback_mode api argument =
+    match resolve_unit api with
+    | Some unit
+      when Hashtbl.mem serialization_runtimes unit
+           && argument.Observation.position = 0 -> (
+      match Public_contracts.relative unit api with
+      | Some ("enc_list" | "dec_list") -> Repetition.Iteration
+      | Some ("enc_option" | "dec_option") -> Repetition.Once
+      | _ -> Repetition.callback_mode api argument )
+    | _ -> Repetition.callback_mode api argument
+  in
+  let parameter_callbacks =
+    Parameter_callbacks.create
+      ~callback_mode:known_callback_mode
+      ~supplied_parameter:(fun api argument position field ->
+        if
+          List.mem api ["Well.Db.query"; "Well.Db.query_one"]
+          && argument.Observation.position = 3
+          && argument.field = ""
+          && position = 0
+          && List.mem
+               field
+               [ "int"
+               ; "float"
+               ; "text"
+               ; "bool"
+               ; "int_opt"
+               ; "float_opt"
+               ; "text_opt"
+               ; "bool_opt" ]
+        then Some ["Well.Db.Row_getter." ^ field]
+        else if
+          api = "Well.use"
+          && argument.position = 0
+          && position = 0
+          && field = ""
+        then Some ["Well.Middleware.next"]
+        else None )
+      execution
+  in
+  Parameter_callbacks.bind_calls parameter_callbacks execution ;
+  let execution =
+    { execution with
+      Observation.invocations=
+        List.map
+          (fun (call : Observation.execution_call) ->
+            if Canonical.parameter_symbol call.execution_callee = None
+            then call
+            else
+              match
+                Parameter_callbacks.possible_targets
+                  parameter_callbacks
+                  []
+                  call.execution_callee
+              with
+              | Some [target] ->
+                  { call with
+                    execution_callee= target
+                  ; execution_resolution= Observation.Resolved }
+              | _ -> call )
+          execution.invocations }
+  in
+  let bound_parameter target =
+    Parameter_callbacks.parameter target <> None
+    && Option.fold
+         ~none:false
+         ~some:(fun targets -> targets <> [])
+         (Parameter_callbacks.possible_targets parameter_callbacks [] target)
+  in
+  let bound_parameters =
+    obs.execution.invocations
+    |> List.concat_map (fun (c : Observation.execution_call) ->
+        c.execution_callee
+        :: List.map
+             (fun (a : Observation.execution_arg) -> a.target)
+             c.execution_args )
+    |> List.filter bound_parameter
+    |> List.sort_uniq compare
+  in
   let unresolved_gap (c : Observation.call) =
     let site = c.Observation.site in
     let allowed_unit =
@@ -1092,7 +1286,15 @@ let interpret
           (not (generated_member (c.call_unit ^ "." ^ c.caller)))
           || serializer_body (c.call_unit ^ "." ^ c.caller)
     in
-    if allowed_unit
+    let inactive_literal =
+      List.exists
+        (String.starts_with ~prefix:"<callback@")
+        (Canonical.split_dots c.caller)
+      && Parameter_callbacks.inert_callback
+           parameter_callbacks
+           (c.call_unit ^ "." ^ c.caller)
+    in
+    if allowed_unit && (not inactive_literal) && not (bound_parameter c.callee)
     then
       let key2 =
         c.Observation.call_unit
@@ -1489,6 +1691,14 @@ let interpret
               ~consumer:(from_name v.ref_unit)
               v.ref_target
           in
+          let public_surface_module =
+            List.exists
+              (fun (p : Policy.public_contract) ->
+                v.ref_target = p.public_module
+                && ( from_name v.ref_unit = p.public_service
+                   || List.mem (from_name v.ref_unit) p.public_consumers ) )
+              surfaces
+          in
           if
             (not is_wiring_ref)
             && (not (Hashtbl.mem ambiguous_units target_unit))
@@ -1500,7 +1710,8 @@ let interpret
                   (serialization_dependency
                      (v.ref_unit ^ "." ^ v.ref_caller)
                      v.ref_target ) )
-            && not (public_module_path v.ref_target)
+            && (not (public_module_path v.ref_target))
+            && not public_surface_module
           then
             match public_surface with
             | Some p ->
@@ -1828,7 +2039,39 @@ let interpret
               make kind "" "" "" ) )
   in
   let execution_interactions =
-    Repetition.project
+    Repetition.project_with_callbacks
+      ~callback_mode:(fun api arg ->
+        let factory_method =
+          match contract_member api with
+          | Some (contract, "make_spec") ->
+              List.exists
+                (fun (service : Szaniec_architecture_access.Cyrograf.service) ->
+                  service.svc_name = contract.contract_name
+                  && List.exists
+                       (fun method_ ->
+                         method_.Szaniec_architecture_access.Cyrograf.m_name
+                         = arg.Observation.field )
+                       service.svc_methods )
+                cy.services
+          | _ -> false
+        in
+        if factory_method
+        then Repetition.Activation
+        else if
+          Hashtbl.mem definitions api
+          && Hashtbl.mem parameter_callbacks.uses api
+        then
+          match Parameter_callbacks.summary parameter_callbacks [] api with
+          | Some groups
+            when List.exists
+                   (List.exists (fun (position, field) ->
+                        position = arg.Observation.position
+                        && (arg.field = field || arg.field = "") ) )
+                   groups ->
+              Repetition.Once
+          | Some _ -> Repetition.Ignored
+          | None -> known_callback_mode api arg
+        else known_callback_mode api arg )
       ~execution
       ~owner_of:execution_owner
       ~eligible
@@ -1895,7 +2138,50 @@ let interpret
         List.map
           (fun (argument : Observation.execution_arg) ->
             let phase =
-              if
+              let factory_method =
+                match contract_member call.execution_callee with
+                | Some (contract, "make_spec") ->
+                    List.exists
+                      (fun (service :
+                             Szaniec_architecture_access.Cyrograf.service )
+                         ->
+                        service.svc_name = contract.contract_name
+                        && List.exists
+                             (fun method_ ->
+                               method_
+                                 .Szaniec_architecture_access.Cyrograf.m_name
+                               = argument.Observation.field )
+                             service.svc_methods )
+                      cy.services
+                | _ -> false
+              in
+              if factory_method
+              then Interpretation.Independent
+              else if
+                Hashtbl.mem definitions call.execution_callee
+                && Parameter_callbacks.summary
+                     parameter_callbacks
+                     []
+                     call.execution_callee
+                   <> None
+                && Hashtbl.mem parameter_callbacks.uses call.execution_callee
+              then
+                let groups =
+                  Option.get
+                    (Parameter_callbacks.summary
+                       parameter_callbacks
+                       []
+                       call.execution_callee )
+                in
+                if
+                  List.exists
+                    (List.exists (fun (position, field) ->
+                         position = argument.position
+                         && (argument.field = field || argument.field = "") ) )
+                    groups
+                then Interpretation.Same_path
+                else Interpretation.Deferred
+              else if
                 Hashtbl.mem definitions call.execution_callee
                 && eligible call.execution_callee
                 && same_boundary
@@ -1903,9 +2189,7 @@ let interpret
                      (owner_of_path call.execution_callee)
               then Interpretation.Deferred
               else
-                match
-                  Repetition.callback_mode call.execution_callee argument
-                with
+                match known_callback_mode call.execution_callee argument with
                 | Repetition.Iteration
                  |Once
                   when call.execution_resumed
@@ -1922,10 +2206,21 @@ let interpret
             let phase =
               if
                 List.mem phase [Interpretation.Same_path; Independent]
+                && call.execution_callee <> "Stdlib.Scanf.sscanf"
                 && Option.fold
                      ~none:false
                      ~some:(fun arity ->
-                       arity > Repetition.callback_arity call.execution_callee )
+                       arity
+                       > Option.value
+                           ~default:
+                             (Repetition.argument_arity
+                                call.execution_callee
+                                argument )
+                           (Parameter_callbacks.input_arity
+                              parameter_callbacks
+                              []
+                              call.execution_callee
+                              argument.position ) )
                      (Hashtbl.find_opt arities argument.target)
               then Interpretation.Deferred
               else phase
@@ -1963,12 +2258,43 @@ let interpret
             ; callback_resumed= call.execution_resumed
             ; callback_phase= phase } )
           call.execution_args )
-      obs.execution.invocations
+      execution.invocations
     |> List.sort_uniq compare
+  in
+  let callback_paths =
+    obs.execution.invocations
+    |> List.filter_map (fun (call : Observation.execution_call) ->
+        if
+          call.execution_resumed
+          || List.mem call.execution_site deferred_calls
+          || not (Hashtbl.mem parameter_callbacks.uses call.execution_callee)
+        then None
+        else
+          Option.map
+            (fun paths -> (call.execution_site, paths))
+            (Parameter_callbacks.paths
+               parameter_callbacks
+               ~invoked:(fun position target ->
+                 Option.fold
+                   ~none:true
+                   ~some:(fun arity ->
+                     arity
+                     <= Option.value
+                          ~default:1
+                          (Parameter_callbacks.input_arity
+                             parameter_callbacks
+                             []
+                             call.execution_callee
+                             position ) )
+                   (Hashtbl.find_opt arities target) )
+               call ) )
   in
   List.iter
     (fun (call : Observation.execution_call) ->
-      if call.execution_resumed && eligible call.execution_caller
+      if
+        call.execution_resumed
+        && eligible call.execution_caller
+        && returned_target call = None
       then
         let arity =
           match Hashtbl.find_opt arities call.execution_callee with
@@ -2050,5 +2376,17 @@ let interpret
   ; execution_interactions
   ; execution_flows
   ; callbacks
+  ; callback_paths
+  ; bound_parameters
+  ; returned_calls
+  ; parameter_defaults= obs.execution.parameter_defaults
+  ; parameter_targets=
+      List.filter_map
+        (fun symbol ->
+          Option.map
+            (fun targets -> (symbol, targets))
+            (Parameter_callbacks.possible_targets parameter_callbacks [] symbol) )
+        bound_parameters
+      @ functor_targets
   ; deferred_calls
   ; gaps= List.sort_uniq compare !gaps }

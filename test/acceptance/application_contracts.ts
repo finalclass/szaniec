@@ -556,7 +556,7 @@ let callback value = List.map Access.Request.to_drut [Access.Request.make value]
           [client]: clientSource +
             '\nlet bypass () = Project_browser.Nested.Task_manager.Store.to_drut "private"\n',
         },
-        ["IMPL-ACCESS-CROSS-SERVICE", "SPEC-UNDECLARED-METHOD"],
+        ["IMPL-ACCESS-CROSS-SERVICE"],
       );
       await check();
       const future = new Date(Date.now() + 60_000);

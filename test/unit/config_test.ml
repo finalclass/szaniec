@@ -133,11 +133,20 @@ root = "lib/replay_utility"
             [{Policy.local_name= "ReplayUtility"; local_root= "lib/other"}] }
     <> Policy.digest local )
     "local root edits invalidate approval" ;
+  ignore
+    (decode
+       ( base
+       ^ {|
+[[policy.local_services]]
+name = "RequestReplay"
+root = "lib/request_replay"
+|}
+       ) ) ;
   rejects
     ( base
     ^ {|
 [[policy.local_services]]
-name = "arbitrary_helper"
+name = "Invalid.Helper"
 root = "lib/helper"
 |}
     ) ;

@@ -13,6 +13,7 @@ type execution_arg =
   { position: int
   ; label: string
   ; target: string
+  ; field: string
   ; embedded: bool }
 
 type execution_definition =
@@ -37,6 +38,7 @@ type execution_call =
   ; execution_partial: bool
   ; execution_resumed: bool
   ; execution_supplied: int
+  ; execution_defaults: int list
   ; execution_args: execution_arg list }
 
 type ordered_step =
@@ -49,9 +51,18 @@ type ordered_step =
 type execution =
   { definitions: execution_definition list
   ; invocations: execution_call list
+  ; returned_functions: (string * string) list
+  ; parameter_defaults: (string * string) list
+  ; functor_instances: (string * string * string * site) list
   ; ordered: (string * ordered_step list) list }
 
-let empty_execution = {definitions= []; invocations= []; ordered= []}
+let empty_execution =
+  { definitions= []
+  ; invocations= []
+  ; returned_functions= []
+  ; parameter_defaults= []
+  ; functor_instances= []
+  ; ordered= [] }
 
 type call_arg =
   { arg_label: string (* "" for a positional argument *)

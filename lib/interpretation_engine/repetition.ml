@@ -10,8 +10,39 @@ type callback_mode =
 let collection_arity api =
   if api = "Well.Db.with_conn"
   then Some 2
+  else if List.mem api ["Otoml.get_array"; "Otoml.find_opt"]
+  then Some 3
+  else if List.mem api ["Str.global_substitute"; "Str.substitute_first"]
+  then Some 3
   else
     match Canonical.split_dots api with
+    | ["Stdlib"; "Seq"; ("map" | "filter" | "filter_map")] -> Some 3
+    | ["Stdlib"; ("List" | "String"); "to_seq"] -> Some 2
+    | ["Stdlib"; "Seq"; ("return" | "singleton")] -> Some 2
+    | [ "Stdlib"
+      ; "Set"
+      ; ( "mem" | "add" | "remove" | "union" | "inter" | "diff" | "compare"
+        | "equal" | "subset" | "disjoint" | "find" | "find_opt" | "split"
+        | "iter" | "map" | "filter" | "filter_map" | "partition" | "exists"
+        | "for_all" ) ] ->
+        Some 2
+    | ["Stdlib"; "Set"; "fold"] -> Some 3
+    | ["Stdlib"; "Fun"; "flip"] -> Some 3
+    | ["Stdlib"; ("=" | "<>" | "<" | ">" | "<=" | ">=")] -> Some 2
+    | ["Stdlib"; "Option"; "value"] -> Some 2
+    | ["Stdlib"; "String"; "make"] -> Some 2
+    | ["Stdlib"; "Option"; ("map" | "iter" | "bind" | "fold")] -> Some 2
+    | [ "Stdlib"
+      ; "Result"
+      ; ("map" | "map_error" | "bind" | "iter" | "iter_error") ] ->
+        Some 2
+    | ["Stdlib"; "Hashtbl"; "iter"] -> Some 2
+    | ["Stdlib"; "Hashtbl"; "fold"] -> Some 3
+    | [ "Stdlib"
+      ; "String"
+      ; ("iter" | "iteri" | "map" | "mapi" | "for_all" | "exists" | "init") ] ->
+        Some 2
+    | ["Stdlib"; "String"; ("fold_left" | "fold_right")] -> Some 3
     | ["Stdlib"; ("List" | "Array"); name] -> (
       match name with
       | "fold_left2"
@@ -28,6 +59,7 @@ let collection_arity api =
           Some 3
       | "init"
        |"iter"
+       |"rev_map"
        |"iteri"
        |"map"
        |"mapi"
@@ -53,7 +85,20 @@ let collection_arity api =
     | _ -> None
 
 let callback_mode api (argument : Observation.execution_arg) =
-  if argument.embedded
+  if
+    List.mem
+      api
+      ["Stdlib.ref"; "Stdlib.:="; "Stdlib.Atomic.make"; "Stdlib.Atomic.set"]
+  then Ignored
+  else if
+    api = "Well.api_token_auth"
+    && List.mem argument.label ["verify"; "applies_to"]
+  then Activation
+  else if
+    List.mem api ["Sqlite3.exec"; "Sqlite3.exec_no_headers"]
+    && argument.label = "cb"
+  then Iteration
+  else if argument.embedded
   then
     if api = "Stdlib.ignore" || collection_arity api <> None
     then Ignored
@@ -61,18 +106,79 @@ let callback_mode api (argument : Observation.execution_arg) =
   else
     let collection =
       match Canonical.split_dots api with
-      | ["Stdlib"; ("List" | "Array"); method_name] -> Some method_name
+      | ["Stdlib"; ("List" | "Array" | "String"); method_name] ->
+          Some method_name
       | _ -> None
     in
     match collection with
+    | _
+      when List.mem
+             (List.nth_opt (Canonical.split_dots api) 1)
+             [Some "Set"; Some "Map"]
+           && argument.position = -1 ->
+        Iteration
+    | _
+      when String.starts_with ~prefix:"Stdlib.Set." api
+           && argument.position = 0
+           && List.mem
+                (List.hd (List.rev (Canonical.split_dots api)))
+                [ "iter"
+                ; "map"
+                ; "filter"
+                ; "filter_map"
+                ; "partition"
+                ; "exists"
+                ; "for_all"
+                ; "fold"
+                ; "find_first"
+                ; "find_first_opt"
+                ; "find_last"
+                ; "find_last_opt" ] ->
+        Iteration
+    | _ when api = "Stdlib.Scanf.sscanf" && argument.position = 2 -> Once
+    | _ when api = "Str.global_substitute" && argument.position = 1 -> Iteration
+    | _ when api = "Str.substitute_first" && argument.position = 1 -> Once
+    | _
+      when List.mem
+             api
+             [ "Stdlib.List.of_seq"
+             ; "Stdlib.String.of_seq"
+             ; "Stdlib.Hashtbl.of_seq" ]
+           && argument.position = 0 ->
+        Iteration
+    | _
+      when List.mem
+             api
+             ["Stdlib.Seq.map"; "Stdlib.Seq.filter"; "Stdlib.Seq.filter_map"]
+           && argument.position = 0 ->
+        Iteration
+    | _ when api = "Stdlib.Option.fold" && argument.label = "some" -> Once
+    | _ when api = "Stdlib.Option.bind" && argument.position = 1 -> Once
+    | _ when api = "Stdlib.Result.bind" && argument.position = 1 -> Once
+    | _
+      when List.mem
+             api
+             [ "Stdlib.Option.map"
+             ; "Stdlib.Option.iter"
+             ; "Stdlib.Result.map"
+             ; "Stdlib.Result.map_error"
+             ; "Stdlib.Result.iter"
+             ; "Stdlib.Result.iter_error" ]
+           && argument.position = 0 ->
+        Once
+    | _
+      when List.mem api ["Stdlib.Hashtbl.iter"; "Stdlib.Hashtbl.fold"]
+           && argument.position = 0 ->
+        Iteration
     | Some "init" when argument.position = 1 -> Iteration
     | Some
         ( "iter" | "iteri" | "map" | "mapi" | "iter2" | "map2" | "fold_left"
-        | "fold_right" | "fold_left2" | "fold_right2" | "fold_left_map"
-        | "concat_map" | "filter" | "filteri" | "filter_map" | "partition"
-        | "partition_map" | "exists" | "exists2" | "for_all" | "for_all2"
-        | "find" | "find_opt" | "find_index" | "find_map" | "find_mapi" | "sort"
-        | "stable_sort" | "fast_sort" | "sort_uniq" | "merge" )
+        | "rev_map" | "fold_right" | "fold_left2" | "fold_right2"
+        | "fold_left_map" | "concat_map" | "filter" | "filteri" | "filter_map"
+        | "partition" | "partition_map" | "exists" | "exists2" | "for_all"
+        | "for_all2" | "find" | "find_opt" | "find_index" | "find_map"
+        | "find_mapi" | "sort" | "stable_sort" | "fast_sort" | "sort_uniq"
+        | "merge" )
       when argument.position = 0 ->
         Iteration
     | _ when api = "Well.every" -> Activation
@@ -86,6 +192,34 @@ let callback_mode api (argument : Observation.execution_arg) =
     | _ when List.mem api ["Well.get"; "Well.post"; "Well.live"] -> Activation
     | _ when api = "Well.MessageBus.once" -> Once
     | _ when api = "Well.Db.with_conn" -> Once
+    | _ when api = "Stdlib.Fun.protect" -> Once
+    | _ when api = "Well.Env.with_timeout" -> Once
+    | _ when List.mem api ["Well.Db.query"; "Well.Db.query_one"] -> Iteration
+    | _ when api = "Well.api_token_auth" -> Activation
+    | _ when api = "Well.use" && argument.position = 0 -> Activation
+    | _
+      when List.mem
+             api
+             [ "Stdlib.In_channel.with_open_bin"
+             ; "Stdlib.In_channel.with_open_text"
+             ; "Stdlib.Out_channel.with_open_bin"
+             ; "Stdlib.Out_channel.with_open_text" ]
+           && argument.position = 1 ->
+        Once
+    | _ when List.mem api ["Well.stream_open"; "Well.stream"] -> Activation
+    | _ when api = "Js_of_ocaml.Js.Opt.case" && argument.position > 0 -> Once
+    | _ when api = "Otoml.get_array" && argument.position = 1 -> Iteration
+    | _ when api = "Stdlib.ref" -> Ignored
+    | _ when api = "Stdlib.:=" -> Ignored
+    | _ when api = "Stdlib.Fun.flip" && argument.position = 0 -> Once
+    | _ when List.mem api ["Eio.Cancel.protect"; "Well.Db.with_well_db"] -> Once
+    | _ when api = "Eio.Fiber.with_binding" && argument.position = 2 -> Once
+    | _ when api = "Eio.Fiber.with_binding" -> Ignored
+    | _ when api = "Eio.Mutex.use_rw" && argument.position = 2 -> Once
+    | _ when api = "Eio.Time.with_timeout_exn" && argument.position = 2 -> Once
+    | _ when api = "Otoml.find_opt" && argument.position = 1 -> Once
+    | _ when api = "Stdlib.Printf.ksprintf" && argument.position = 0 -> Once
+    | _ when api = "Js_of_ocaml.Js.wrap_callback" -> Ignored
     | _
       when List.mem api ["Sqlite3.exec"; "Sqlite3.exec_no_headers"]
            && argument.label = "cb" ->
@@ -100,16 +234,32 @@ let callback_mode api (argument : Observation.execution_arg) =
 let callback_arity api =
   match Canonical.split_dots api with
   | [ "Stdlib"
-    ; ("List" | "Array")
+    ; ("List" | "Array" | "String")
     ; ( "iteri" | "mapi" | "iter2" | "map2" | "fold_left" | "fold_right"
       | "fold_left_map" | "exists2" | "for_all2" | "sort" | "stable_sort"
       | "fast_sort" | "sort_uniq" | "merge" ) ] ->
       2
   | ["Stdlib"; "List"; ("fold_left2" | "fold_right2")] -> 3
   | ["Sqlite3"; "exec"] -> 2
+  | ["Stdlib"; "Hashtbl"; "iter"] -> 2
+  | ["Stdlib"; "Hashtbl"; "fold"] -> 3
+  | ["Stdlib"; "Set"; "fold"] -> 2
+  | ["Well"; "use"] -> 2
+  | ["Stdlib"; "Fun"; "flip"] -> 2
   | _ -> 1
 
-let project ~execution ~owner_of ~eligible ~entry_point ~classify =
+let argument_arity api (argument : Observation.execution_arg) =
+  if argument.position = -1 && argument.label = "compare"
+  then 2
+  else callback_arity api
+
+let project_with_callbacks
+    ~callback_mode
+    ~execution
+    ~owner_of
+    ~eligible
+    ~entry_point
+    ~classify =
   let definitions = Hashtbl.create 64 in
   let outgoing = Hashtbl.create 64 in
   let incoming = Hashtbl.create 64 in
@@ -398,7 +548,15 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
                         else unknown
                       in
                       let invocation =
-                        let supplied = callback_arity call.execution_callee in
+                        let supplied =
+                          if call.execution_callee = "Stdlib.Scanf.sscanf"
+                          then
+                            Option.fold
+                              ~none:1
+                              ~some:(fun d -> d.Observation.definition_arity)
+                              (Hashtbl.find_opt definitions argument.target)
+                          else argument_arity call.execution_callee argument
+                        in
                         let partial =
                           Option.fold
                             ~none:false
@@ -413,6 +571,7 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
                               then Observation.Unresolved_dynamic
                               else Observation.Resolved )
                         ; execution_args= []
+                        ; execution_defaults= []
                         ; execution_supplied= supplied
                         ; execution_partial= partial
                         ; execution_resumed= false
@@ -432,3 +591,12 @@ let project ~execution ~owner_of ~eligible ~entry_point ~classify =
       walk 0 origin.symbol [origin.symbol] [] [] [] )
     roots ;
   List.sort_uniq compare !results
+
+let project ~execution ~owner_of ~eligible ~entry_point ~classify =
+  project_with_callbacks
+    ~callback_mode
+    ~execution
+    ~owner_of
+    ~eligible
+    ~entry_point
+    ~classify
