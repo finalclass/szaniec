@@ -30,6 +30,7 @@ let observe
   let invocations = ref [] in
   let symbols = Hashtbl.create 32 in
   let records = Hashtbl.create 16 in
+  let result_sources = Hashtbl.create 16 in
   let record_shapes = Hashtbl.create 16 in
   let module_packages = Modules.create 16 in
   let parameter_symbols = Hashtbl.create 16 in
@@ -103,6 +104,40 @@ let observe
         if base <> "" then base ^ "." ^ field else resolve path
     | _ -> resolve path
   in
+  let result_source e =
+    match e.exp_desc with
+    | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, _) ->
+        let target = resolved path in
+        if target = "" then "" else target ^ ".<result>"
+    | Texp_ident (Path.Pident id, _, _) ->
+        Option.value ~default:"" (Hashtbl.find_opt result_sources id)
+    | _ -> ""
+  in
+  let rec bind_result : type k. string -> k general_pattern -> unit =
+   fun source pattern ->
+    if source <> ""
+    then
+      match pattern.pat_desc with
+      | Tpat_var (id, _, _) ->
+          Hashtbl.replace result_sources id source ;
+          if callable_type pattern.pat_env pattern.pat_type
+          then Hashtbl.replace symbols id source
+      | Tpat_alias (pattern, id, _, _, _) ->
+          Hashtbl.replace result_sources id source ;
+          bind_result source pattern
+      | Tpat_tuple patterns ->
+          List.iteri
+            (fun index (_, pattern) ->
+              bind_result
+                (source ^ ".<tuple@" ^ string_of_int index ^ ">")
+                pattern )
+            patterns
+      | Tpat_variant (name, Some pattern, _) ->
+          bind_result (source ^ ".<variant@" ^ name ^ ">") pattern
+      | Tpat_value pattern ->
+          bind_result source (pattern :> value general_pattern)
+      | _ -> ()
+  in
   let rec module_body m =
     match m.mod_desc with
     | Tmod_constraint (m, _, _, _) -> module_body m
@@ -146,11 +181,14 @@ let observe
       | Texp_ident (Path.Pident id, _, _) -> (
         match Hashtbl.find_opt records (id, label.lbl_name) with
         | Some target -> target
-        | None ->
+        | None -> (
             let base = Option.value ~default:"" (Hashtbl.find_opt symbols id) in
             if Hashtbl.mem parameter_symbols base
             then base ^ "." ^ label.lbl_name
-            else "" )
+            else
+              match Hashtbl.find_opt result_sources id with
+              | Some source -> source ^ ".<field@" ^ label.lbl_name ^ ">"
+              | None -> "" ) )
       | Texp_record {fields; _} ->
           Array.to_list fields
           |> List.find_map (fun (field, value) ->
@@ -164,6 +202,7 @@ let observe
       | _ -> "" )
     | _ -> ""
   and register vb =
+    bind_result (result_source vb.vb_expr) vb.vb_pat ;
     match vb.vb_pat.pat_desc with
     | Tpat_var (id, _, _) -> (
       match vb.vb_expr.exp_desc with
@@ -232,6 +271,49 @@ let observe
         let target = resolved path in
         if Canonical.parameter_symbol target = None then target else ""
     | _ -> ""
+  in
+  let rec returned_members source e =
+    match e.exp_desc with
+    | Texp_let (_, _, body)
+     |Texp_sequence (_, body)
+     |Texp_open (_, body) ->
+        returned_members source body
+    | Texp_try (body, cases, _) ->
+        returned_members source body ;
+        List.iter (fun case -> returned_members source case.c_rhs) cases
+    | Texp_ifthenelse (_, yes, no) ->
+        returned_members source yes ;
+        Option.iter (returned_members source) no
+    | Texp_match (_, computation_cases, value_cases, _) ->
+        List.iter
+          (fun case -> returned_members source case.c_rhs)
+          computation_cases ;
+        List.iter (fun case -> returned_members source case.c_rhs) value_cases
+    | Texp_variant (_, None)
+     |Texp_constant _ ->
+        ()
+    | Texp_variant (name, Some value) ->
+        returned_members (source ^ ".<variant@" ^ name ^ ">") value
+    | Texp_record {fields; _} ->
+        Array.iter
+          (fun (label, value) ->
+            if
+              label.Data_types.lbl_mut = Asttypes.Immutable
+              && callable_type e.exp_env label.lbl_arg
+            then
+              match value with
+              | Overridden (_, value) ->
+                  returned_functions :=
+                    ( source ^ ".<field@" ^ label.lbl_name ^ ">"
+                    , function_symbol value )
+                    :: !returned_functions
+              | Kept _ ->
+                  returned_functions :=
+                    (source ^ ".<field@" ^ label.lbl_name ^ ">", "")
+                    :: !returned_functions )
+          fields
+    | _ ->
+        returned_functions := (source ^ ".<unknown>", "") :: !returned_functions
   in
   let within symbol regions f =
     let old_caller, old_loops = (!caller, !loops) in
@@ -392,6 +474,10 @@ let observe
                   define ~arity symbol e.exp_loc false ;
                   Hashtbl.replace bodies symbol e ;
                   within symbol [] (fun () -> default.expr self e) ;
+                  ( match body with
+                  | Tfunction_body body ->
+                      returned_members (symbol ^ ".<result>") body
+                  | _ -> () ) ;
                   match body with
                   | Tfunction_body e ->
                       let target = terminal e in
@@ -413,6 +499,15 @@ let observe
                   within symbol [] (fun () -> self.expr self body)
               | Texp_let (_, bindings, _) ->
                   List.iter register bindings ;
+                  default.expr self e
+              | Texp_match (scrutinee, computation_cases, value_cases, _) ->
+                  let source = result_source scrutinee in
+                  List.iter
+                    (fun case -> bind_result source case.c_lhs)
+                    computation_cases ;
+                  List.iter
+                    (fun case -> bind_result source case.c_lhs)
+                    value_cases ;
                   default.expr self e
               | Texp_letmodule (Some id, _, _, m, _) ->
                   ( match (module_body m).mod_desc with

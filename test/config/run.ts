@@ -116,6 +116,29 @@ Deno.test("discover repository configuration from a nested worktree directory", 
       "CLI overrides configured sort: " + r.err,
     );
   }));
+Deno.test("check summary retains status and counts in one line", () =>
+  project(async (_root, nested) => {
+    let result = await run(nested, "check", "--summary");
+    assert(result.code === 2, result.err + result.out);
+    assert(
+      /^szaniec incomplete: 0 violation\(s\), 1 gap\(s\)\n$/.test(result.out),
+      result.out,
+    );
+    assert((await run(nested, "approve")).code === 0, "fixture approval");
+    result = await run(nested, "check", "--summary");
+    assert(result.code === 0, result.err + result.out);
+    assert(result.out === "szaniec ok: 0 violation(s), 0 gap(s)\n", result.out);
+    for (
+      const args of [["complexity", "--summary"], [
+        "check",
+        "--summary",
+        "--json",
+      ]]
+    ) {
+      result = await run(nested, ...args);
+      assert(result.code === 2 && result.err.includes("--summary"), result.err);
+    }
+  }));
 Deno.test("init discovers the root and creates usable configuration without approval", () =>
   project(async (root, nested) => {
     await Deno.remove(`${root}/szaniec.toml`);

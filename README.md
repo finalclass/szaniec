@@ -338,6 +338,11 @@ Once artifacts are fresh, omit `--rebuild`:
 szaniec check --json
 ```
 
+Use `szaniec check --summary` for one line with the status, violation count
+and gap count. This changes presentation only: inspection, exit status and
+call graph remain unchanged. It overrides configured JSON output; explicit
+`--json` and `--summary` cannot be combined.
+
 For applications whose build is orchestrated by Make, set
 `build = ["make", "build"]` in `[check]`. `check --rebuild` then uses that
 command before recording transformation evidence. A plain application build

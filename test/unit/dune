@@ -84,3 +84,8 @@
  (name alias_memo)
  (modules alias_memo)
  (libraries szaniec_model))
+
+(test
+ (name result_callbacks)
+ (modules result_callbacks)
+ (libraries szaniec_interpretation_engine szaniec_model))

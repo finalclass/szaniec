@@ -15,7 +15,8 @@ let usage =
   \ szaniec approve [--config <path>] [--project-root <dir>]\n\
   \   Record approval of the configured analysis scope and policy exceptions.\n\n\
   \ szaniec check [--config <path>] [--project-root <dir>]\n\
-  \               [--rebuild] [--json] [--out <path>] [--no-callgraph]\n\
+  \               [--rebuild] [--json | --summary] [--out <path>] \
+   [--no-callgraph]\n\
   \   Check implementation against approved architecture; report violations \
    and evidence gaps.\n\n\
   \ szaniec complexity [--config <path>] [--project-root <dir>]\n\
@@ -54,6 +55,7 @@ type args =
   ; project_root: string option
   ; rebuild: bool
   ; json: bool
+  ; summary: bool
   ; out: string option
   ; no_callgraph: bool
   ; experimental: bool
@@ -91,6 +93,7 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--project-root" :: p :: rest -> parse rest {acc with project_root= Some p}
   | "--rebuild" :: rest -> parse rest {acc with rebuild= true}
   | "--json" :: rest -> parse rest {acc with json= true}
+  | "--summary" :: rest -> parse rest {acc with summary= true}
   | "--out" :: p :: rest -> parse rest {acc with out= Some p}
   | "--no-callgraph" :: rest -> parse rest {acc with no_callgraph= true}
   | "--experimental" :: rest -> parse rest {acc with experimental= true}
@@ -139,6 +142,7 @@ let default_args =
   ; project_root= None
   ; rebuild= false
   ; json= false
+  ; summary= false
   ; out= None
   ; no_callgraph= false
   ; experimental= false
@@ -189,6 +193,16 @@ let render_finding (buf : Buffer.t) (f : Finding.t) =
       (Printf.sprintf
          "  path: %s\n"
          (String.concat " -> " f.Finding.evidence_path) )
+
+let summary_report (r : Finding.report) : string =
+  Printf.sprintf
+    "szaniec %s: %d violation(s), %d gap(s)\n"
+    ( match r.Finding.status with
+    | Ok -> "ok"
+    | Violations -> "violations"
+    | Incomplete -> "incomplete" )
+    r.Finding.summary.Finding.violations
+    r.Finding.summary.Finding.gaps
 
 let text_report (r : Finding.report) : string =
   let buf = Buffer.create 512 in
@@ -1028,6 +1042,11 @@ let main () =
       then (
         prerr_endline "szaniec: --sort is only valid with complexity" ;
         exit 2 ) ;
+      if args.summary && (args.command <> "check" || args.json)
+      then (
+        prerr_endline
+          "szaniec: --summary requires check and cannot be combined with --json" ;
+        exit 2 ) ;
       ( if args.command = "init"
         then
           match
@@ -1203,7 +1222,11 @@ let main () =
           if not args.no_callgraph
           then write_callgraph report (Option.map resolve args.out) root ;
           print_string
-            (if args.json then json_report report else text_report report) ;
+            ( if args.summary
+              then summary_report report
+              else if args.json
+              then json_report report
+              else text_report report ) ;
           exit (exit_code report)
         with
         | Szaniec_inspection_manager.Inspection_manager.Policy_error e ->

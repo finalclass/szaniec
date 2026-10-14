@@ -51,6 +51,16 @@ files do not become independent authored transformations.
 
 ## Acceptance
 
+Callable results retain compiler projection paths rather than approving a field
+by its name or record type. ProgramAccess owns tuple/variant/immutable-field
+provenance; InterpretationEngine alone knows the Well HTTP iterator contract.
+The producer is verified against [Well's pinned HTTP stream implementation](https://github.com/finalclass/well/blob/12dd3cea7565641f14191b8460cf93567495f554/lib/well/fetch.ml):
+the third result is the body iterator and its argument receives each body chunk.
+Known partial scalar predicates (`List.mem`, `min`, `max`) retain their remaining
+argument instead of being mistaken for factories returning unknown closures.
+The capability scenarios cover actual typed result projections, a retained
+Client-to-Access violation, conflicting providers and an unknown return branch.
+
 `test/acceptance/capabilities.ts` copies the public owned-contract fixture,
 builds it before mutations, and runs the packaged CLI. Synthetic SQLite stand-ins
 have the documented binding signatures; they test classification, not SQLite's

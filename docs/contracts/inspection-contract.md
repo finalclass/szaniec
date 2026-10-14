@@ -14,7 +14,7 @@ separator in `coverage supervise` belong to the child command.
 szaniec init    [--config <path>] [--project-root <dir>]
 szaniec approve [--config <path>] [--project-root <dir>]
 szaniec check   [--config <path>] [--project-root <dir>]
-                [--rebuild] [--json] [--out <path>] [--no-callgraph]
+                [--rebuild] [--json | --summary] [--out <path>] [--no-callgraph]
 szaniec complexity [--config <path>] [--project-root <dir>]
                    [--rebuild] [--json] [--sort location|complexity]
 szaniec coverage [--project-root <dir>] [--config <path>] [--json] [--out <path>]
@@ -41,6 +41,10 @@ run conformance rules and it does not require an approved policy.
   Without it, stale or missing artifacts are reported as gaps, never used
   as current evidence.
 - `--json` emits the machine-readable report instead of the text report.
+- `check --summary` emits one line containing the status and violation/gap
+  counts without changing inspection, call graph or exit status. It overrides
+  configured JSON presentation, but is incompatible with explicit `--json`
+  and with other commands.
 - Exit status for `check`: `0` no violations and no gaps; `1` violations
   with complete required analysis; `2` incomplete analysis, execution
   failure, or unapproved policy — including when violations were also found.
@@ -100,8 +104,8 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.7.0",
-      "interpretation": "szaniec-well-adapter/3.6.0",
+      "programAccess": "szaniec-ocaml-adapter/1.8.0",
+      "interpretation": "szaniec-well-adapter/3.7.0",
       "rules": "szaniec-rules/3.2.0"
     },
     "exclusions": ["...", "..."]

@@ -28,7 +28,8 @@ let collection_arity api =
         Some 2
     | ["Stdlib"; "Set"; "fold"] -> Some 3
     | ["Stdlib"; "Fun"; "flip"] -> Some 3
-    | ["Stdlib"; ("=" | "<>" | "<" | ">" | "<=" | ">=")] -> Some 2
+    | ["Stdlib"; ("=" | "<>" | "<" | ">" | "<=" | ">=" | "min" | "max")] ->
+        Some 2
     | ["Stdlib"; "Option"; "value"] -> Some 2
     | ["Stdlib"; "String"; "make"] -> Some 2
     | ["Stdlib"; "Option"; ("map" | "iter" | "bind" | "fold")] -> Some 2
@@ -58,6 +59,10 @@ let collection_arity api =
        |"merge" ->
           Some 3
       | "init"
+       |"mem"
+       |"memq"
+       |"mem_assoc"
+       |"mem_assq"
        |"iter"
        |"rev_map"
        |"iteri"
@@ -207,6 +212,7 @@ let callback_mode api (argument : Observation.execution_arg) =
            && argument.position = 1 ->
         Once
     | _ when List.mem api ["Well.stream_open"; "Well.stream"] -> Activation
+    | _ when api = "Well.Http_stream.iter" && argument.position = 0 -> Iteration
     | _ when api = "Js_of_ocaml.Js.Opt.case" && argument.position > 0 -> Once
     | _ when api = "Otoml.get_array" && argument.position = 1 -> Iteration
     | _ when api = "Stdlib.ref" -> Ignored

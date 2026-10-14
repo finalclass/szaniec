@@ -132,6 +132,20 @@ Deno.test("compiled local ownership, SQLite, callbacks, path summaries, transfor
       result.out === repeated.out && repeated.out === uncached.out,
       `${name}: rebuild, repeated and uncached evidence differ\n${result.out}\n${repeated.out}\n${uncached.out}`,
     );
+    if (
+      name === "returned immutable variant record retains its callable target"
+    ) {
+      const summary = await command(binary, [
+        "check",
+        "--summary",
+        "--no-callgraph",
+      ]);
+      assert(summary.code === 1, summary.err + summary.out);
+      assert(
+        summary.out === "szaniec violations: 1 violation(s), 0 gap(s)\n",
+        summary.out,
+      );
+    }
     console.log(`${name}: ok`);
     return result;
   }
@@ -519,6 +533,51 @@ let errmsg (_ : db) = "error"
     await scenario(
       "exception uncertainty retains a single helper callback input",
       `let invoke f = try f () with _ -> ()\nlet show () = invoke (fun () -> ${manager})\n`,
+    );
+    await scenario(
+      "partially applied scalar predicates are not closure factories",
+      "let show () = ignore (Option.fold ~none:true ~some:(List.mem 1) (Some [1])); ignore (Option.fold ~none:0 ~some:(max 2) (Some 3))\n",
+    );
+    await scenario(
+      "returned immutable variant record retains its callable target",
+      "type source = { iter : (string -> unit) -> unit }\nlet open_source () = `Ok { iter = (fun write -> " +
+        access +
+        '; write "chunk") }\nlet show () = match open_source () with `Ok src -> src.iter ignore\n',
+      ["ID-CLIENT-ACCESS"],
+      1,
+    );
+    await scenario(
+      "different callable result providers remain incomplete",
+      "type source = { iter : unit -> unit }\nlet open_source yes = if yes then `Ok {iter=(fun () -> ())} else `Ok {iter=(fun () -> ())}\nlet show yes = match open_source yes with `Ok src -> src.iter ()\n",
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await write(
+      "lib/well/well.ml",
+      (await Deno.readTextFile(`${root}/lib/well/well.ml`)) +
+        '\nlet open_http_stream ~sw ~net ~method_ url = ignore (sw, net, method_, url); (200, [], fun write -> write "chunk")\n',
+    );
+    await scenario(
+      "an unknown result branch cannot inherit a known record target",
+      "type source = { iter : unit -> unit }\nlet open_source yes unknown = if yes then `Ok {iter=(fun () -> ())} else `Ok unknown\nlet show yes unknown = match open_source yes unknown with `Ok src -> src.iter ()\n",
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "returned immutable record does not resolve an unknown captured callback",
+      "type source = { iter : unit -> unit }\nlet open_source callback = `Ok {iter=callback}\nlet show callback = match open_source callback with `Ok src -> src.iter ()\n",
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "framework stream result survives tuple and immutable variant record",
+      'type source = { iter : (string -> unit) -> unit }\nlet open_source () = let _, _, iter = Well.open_http_stream ~sw:() ~net:() ~method_:"GET" "url" in `Ok {iter}\nlet show () = match open_source () with `Ok src -> src.iter ignore\n',
+    );
+    await scenario(
+      "framework iterator does not resolve an unknown application writer",
+      'let show writer = let _, _, iter = Well.open_http_stream ~sw:() ~net:() ~method_:"GET" "url" in iter writer\n',
+      [],
+      2,
     );
     await scenario(
       "exception uncertainty with distinct callback inputs stays incomplete",

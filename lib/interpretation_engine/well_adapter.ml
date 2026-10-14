@@ -695,6 +695,7 @@ let interpret
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) : Interpretation.t =
+  let obs, result_targets = Result_callbacks.bind obs in
   let contracts, contract_gaps, unavailable_contracts =
     Public_contracts.bind ~approved ~policy ~cy obs
   in
@@ -2388,5 +2389,6 @@ let interpret
             (Parameter_callbacks.possible_targets parameter_callbacks [] symbol) )
         bound_parameters
       @ functor_targets
+      @ result_targets
   ; deferred_calls
   ; gaps= List.sort_uniq compare !gaps }

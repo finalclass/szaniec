@@ -82,7 +82,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.6.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.7.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -115,6 +115,14 @@ receive row getters, whereas application-created rows retain their actual fields
 `returnedCalls` binds resumed execution to a proven returned function. Construction
 and invocation remain separate. Unknown providers, mutable fields, unproven
 returned functions and unknown callback semantics remain incomplete.
+
+Compiler-proven callable result projections contribute exact bindings to
+`parameterTargets`, alongside callable inputs and functor comparators. The Well
+adapter recognizes the third tuple member of `Well.open_http_stream` as the
+external HTTP body iterator, which executes its writer callback per chunk.
+Tuple extraction, a polymorphic-variant payload and immutable record storage
+preserve that producer identity. Unknown external producers, ambiguous return
+branches and mutable fields do not acquire that interpretation.
 
 Standard collection functor instances supply their concrete comparator to the
 interpreted method call. Comparators retain their service/resource interactions.

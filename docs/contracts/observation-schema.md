@@ -106,6 +106,11 @@ load path permits function-type aliases to retain the same evidence as arrows.
 
 Execution facts include syntactically proven returned function targets and
 functor instances (instance module, functor, argument module and source site).
+Callable result projections also retain tuple positions, polymorphic-variant
+payloads and immutable record selectors. `returned_functions` pairs a factory's
+result projection with its compiler-proven callable target. Unsupported return
+branches retain an unknown projection; one known branch cannot supply evidence
+for an unknown branch. Multiple distinct targets remain unresolved.
 Standard `Set.Make` and `Map.Make` applications retain their concrete comparator;
 other unsupported functor applications still require a gap. Locally opened
 structures contribute their definitions and initialization calls. Typed nodes
