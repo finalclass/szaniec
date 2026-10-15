@@ -18,6 +18,8 @@ verify:
 	dune exec test/performance/rendering.exe
 	deno fmt --check test/performance/acquisition.ts
 	deno check test/performance/acquisition.ts
+	deno fmt --check test/performance/complexity.ts
+	deno check test/performance/complexity.ts
 	deno test --allow-read --allow-write --allow-run --allow-env test/performance/acquisition.ts
 	deno fmt --check test/performance/conformance.ts
 	deno check test/performance/conformance.ts

@@ -135,6 +135,17 @@ let generated_source ~root relative =
   | Sys_error _ -> None
 
 let create ~root ~inputs =
+  (* Several Dune rules name the same generator or dependency. Hash each
+     path once while assembling this snapshot, rather than once per rule. *)
+  let digests = Hashtbl.create 64 in
+  let digest path =
+    match Hashtbl.find_opt digests path with
+    | Some identity -> identity
+    | None ->
+        let identity = digest path in
+        Hashtbl.add digests path identity ;
+        identity
+  in
   let tools_available = ref true in
   let dependencies =
     List.filter

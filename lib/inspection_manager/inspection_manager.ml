@@ -611,14 +611,13 @@ let evidence_gap (g : Observation.gap) : bool =
       true
   | _ -> false
 
-let prepare
+let prepare_observation
     ?(evidence = Szaniec_program_access.Ocaml_adapter.All)
     (req : request) :
     Policy.t
     * Szaniec_architecture_access.Architecture_access.resolution
     * Szaniec_architecture_access.Cyrograf.t
-    * Observation.t
-    * Interpretation.t =
+    * Observation.t =
   let resolution, _approval_gap =
     match
       Szaniec_architecture_access.Architecture_access.resolve ~config:req.config
@@ -649,6 +648,10 @@ let prepare
   let observation =
     {observation with Observation.gaps= observation.gaps @ local_gaps}
   in
+  (policy, resolution, cy, observation)
+
+let prepare ?evidence (req : request) =
+  let policy, resolution, cy, observation = prepare_observation ?evidence req in
   let interpretation =
     Szaniec_interpretation_engine.Well_adapter.interpret
       ~approved:
@@ -660,27 +663,37 @@ let prepare
   (policy, resolution, cy, observation, interpretation)
 
 let complexity (req : request) ~(sort : string) : Complexity.t =
-  let policy, resolution, cy, observation, interpretation =
-    prepare ~evidence:Szaniec_program_access.Ocaml_adapter.Measurement req
+  let policy, resolution, cy, observation =
+    prepare_observation
+      ~evidence:Szaniec_program_access.Ocaml_adapter.Measurement
+      req
   in
+  let ownerships =
+    Szaniec_interpretation_engine.Well_adapter.ownerships
+      ~approved:resolution.approved
+      ~policy
+      ~cy
+      observation
+  in
+  let owners = Hashtbl.create 64 in
+  List.iter
+    (fun (owner : Interpretation.ownership) ->
+      if not (Hashtbl.mem owners owner.owner_module)
+      then Hashtbl.add owners owner.owner_module owner )
+    ownerships ;
   let owner_of (unit_name : string) : Interpretation.ownership option =
-    List.find_opt
-      (fun (o : Interpretation.ownership) ->
-        String.equal o.Interpretation.owner_module unit_name )
-      interpretation.Interpretation.ownerships
+    Hashtbl.find_opt owners unit_name
   in
+  let rpc_methods = Hashtbl.create 64 in
+  List.iter
+    (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
+      List.iter
+        (fun (m : Szaniec_architecture_access.Cyrograf.method_decl) ->
+          Hashtbl.replace rpc_methods (s.svc_name, m.m_name) () )
+        s.svc_methods )
+    cy.services ;
   let rpc_name (service : string) (name : string) : bool =
-    service <> ""
-    && List.exists
-         (fun (s : Szaniec_architecture_access.Cyrograf.service) ->
-           String.equal s.Szaniec_architecture_access.Cyrograf.svc_name service
-           && List.exists
-                (fun (m : Szaniec_architecture_access.Cyrograf.method_decl) ->
-                  String.equal
-                    m.Szaniec_architecture_access.Cyrograf.m_name
-                    name )
-                s.Szaniec_architecture_access.Cyrograf.svc_methods )
-         cy.Szaniec_architecture_access.Cyrograf.services
+    service <> "" && Hashtbl.mem rpc_methods (service, name)
   in
   let entries =
     List.map

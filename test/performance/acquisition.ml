@@ -95,26 +95,84 @@ let () =
     (fun () ->
       let local_units = Hashtbl.create 1 in
       Hashtbl.add local_units cmt.cmt_modname artifact ;
-      let check visible hidden =
-        Szaniec_program_access.Ocaml_adapter.current_imports
-          ~project_root:root
-          ~local_units
-          { cmt with
-            cmt_imports= [(cmt.cmt_modname, expected)]
-          ; cmt_loadpath= {visible; hidden} }
+      let interfaces =
+        Szaniec_program_access.Ocaml_adapter.memoized_interface_crc ()
       in
-      write first_file "invalid first interface" ;
+      List.iter
+        (fun interface_crc ->
+          let check visible hidden =
+            Szaniec_program_access.Ocaml_adapter.current_imports
+              ~interface_crc
+              ~project_root:root
+              ~local_units
+              { cmt with
+                cmt_imports= [(cmt.cmt_modname, expected)]
+              ; cmt_loadpath= {visible; hidden} }
+          in
+          write first_file "invalid first interface" ;
+          write second_file bytes ;
+          assert (not (check [first; second] [])) ;
+          assert (check [second; first] []) ;
+          write first_file bytes ;
+          assert (check [first; second] []) ;
+          let original = Unix.stat first_file in
+          write first_file (String.make (String.length bytes) '\000') ;
+          Unix.utimes first_file original.st_atime original.st_mtime ;
+          assert (not (check [first; second] [])) ;
+          write first_file bytes ;
+          Unix.utimes first_file original.st_atime original.st_mtime ;
+          assert (check [first; second] []) ;
+          Sys.remove first_file ;
+          assert (check [first; second] []) ;
+          assert (check [first] [second]) ;
+          Sys.remove second_file ;
+          assert (not (check [first; second] [])) )
+        [Szaniec_program_access.Ocaml_adapter.interface_crc; interfaces.read_crc] ;
+      let interfaces =
+        Szaniec_program_access.Ocaml_adapter.memoized_interface_crc ()
+      in
       write second_file bytes ;
-      assert (not (check [first; second] [])) ;
-      assert (check [second; first] []) ;
+      assert (interfaces.read_crc second_file cmt.cmt_modname = expected) ;
+      interfaces.validate () ;
+      let original = Unix.stat second_file in
+      write second_file (String.make (String.length bytes) '\000') ;
+      Unix.utimes second_file original.st_atime original.st_mtime ;
+      assert (
+        try
+          interfaces.validate () ;
+          false
+        with
+        | Sys_error _ -> true ) ;
+      assert (interfaces.read_crc second_file cmt.cmt_modname = None) ;
+      write second_file bytes ;
+      assert (interfaces.read_crc second_file cmt.cmt_modname = expected) ;
+      interfaces.validate () ;
+      let paths =
+        Szaniec_program_access.Ocaml_adapter.memoized_interface_crc ()
+      in
+      assert (not (paths.file_exists first_file)) ;
+      paths.validate () ;
+      write first_file bytes ;
+      assert (
+        try
+          paths.validate () ;
+          false
+        with
+        | Sys_error _ -> true ) ;
+      let paths =
+        Szaniec_program_access.Ocaml_adapter.memoized_interface_crc ()
+      in
+      assert (paths.file_exists first_file) ;
       Sys.remove first_file ;
-      assert (check [first; second] []) ;
-      assert (check [first] [second]) ;
-      Sys.remove second_file ;
-      assert (not (check [first; second] [])) ) ;
+      assert (
+        try
+          paths.validate () ;
+          false
+        with
+        | Sys_error _ -> true ) ) ;
   print_endline
     "compiler import paths preserve first-match rejection, fallback and \
-     missing-local gaps: ok" ;
+     missing-local gaps and same-mtime content changes: ok" ;
   let architecture = observe Architecture in
   let measurement = observe Measurement in
   assert (

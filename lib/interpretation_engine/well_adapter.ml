@@ -690,11 +690,11 @@ let merge_interactions (interactions : Interpretation.interaction list) :
   |> List.map (fun (_, (i : Interpretation.interaction)) ->
       {i with Interpretation.sites= List.sort_uniq compare i.sites} )
 
-let interpret
+let resolve_ownership
     ?(approved = false)
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
-    (obs : Observation.t) : Interpretation.t =
+    (obs : Observation.t) =
   let obs, result_targets = Result_callbacks.bind obs in
   let contracts, contract_gaps, unavailable_contracts =
     Public_contracts.bind ~approved ~policy ~cy obs
@@ -710,6 +710,33 @@ let interpret
       ~local_services:policy.local_services
       cy
       obs
+  in
+  ( obs
+  , result_targets
+  , (contracts, contract_gaps, unavailable_contracts, serialization_runtimes)
+  , (ownership_map, ownership_gaps, impl_of) )
+
+let sorted_ownerships map =
+  Hashtbl.fold (fun _ o acc -> o :: acc) map []
+  |> List.sort (fun a b ->
+      compare a.Interpretation.owner_module b.Interpretation.owner_module )
+
+(* Measurement needs exactly the same ownership evidence as a full check,
+   without constructing interactions, callback paths or conformance flows. *)
+let ownerships ?approved ~policy ~cy obs =
+  let _, _, _, (map, _, _) = resolve_ownership ?approved ~policy ~cy obs in
+  sorted_ownerships map
+
+let interpret
+    ?(approved = false)
+    ~(policy : Policy.t)
+    ~(cy : Szaniec_architecture_access.Cyrograf.t)
+    (obs : Observation.t) : Interpretation.t =
+  let ( obs
+      , result_targets
+      , (contracts, contract_gaps, unavailable_contracts, serialization_runtimes)
+      , (ownership_map, ownership_gaps, impl_of) ) =
+    resolve_ownership ~approved ~policy ~cy obs
   in
   let surfaces, surface_gaps =
     Public_contracts.validate_surfaces ~approved ~policy ~cy obs ownership_map
@@ -1915,11 +1942,7 @@ let interpret
                     site )
                 targets ) )
     messaging_calls ;
-  let ownerships =
-    Hashtbl.fold (fun _ o acc -> o :: acc) ownership_map []
-    |> List.sort (fun a b ->
-        compare a.Interpretation.owner_module b.Interpretation.owner_module )
-  in
+  let ownerships = sorted_ownerships ownership_map in
   let execution_owner symbol =
     let owner = owner_of_path symbol in
     if owner.owner_service = "" then owner.owner_module else owner.owner_service
