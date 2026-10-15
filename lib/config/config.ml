@@ -13,7 +13,8 @@ type check =
   ; no_callgraph: bool }
 
 type complexity =
-  { rebuild: bool
+  { metric: string
+  ; rebuild: bool
   ; json: bool
   ; sort: string }
 
@@ -272,12 +273,16 @@ let decode ~project_root ~path document =
   in
   let p = "complexity" in
   let f = Option.value ~default:[] (section p top) in
-  keys p ["rebuild"; "json"; "sort"] f ;
+  keys p ["metric"; "rebuild"; "json"; "sort"] f ;
+  let metric = default p string "metric" "cognitive" f in
+  if metric <> "cognitive" && metric <> "cyclomatic"
+  then invalid "complexity.metric" "expected cognitive or cyclomatic" ;
   let sort = default p string "sort" "location" f in
   if sort <> "location" && sort <> "complexity"
   then invalid "complexity.sort" "expected location or complexity" ;
   let complexity =
-    { rebuild= default p bool "rebuild" false f
+    { metric
+    ; rebuild= default p bool "rebuild" false f
     ; json= default p bool "json" false f
     ; sort }
   in

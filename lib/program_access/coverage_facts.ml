@@ -911,12 +911,15 @@ let load_inventory (path : string) : (inventory_entry list, Coverage.gap) result
           ; message=
               "Function inventory format must be " ^ Version.complexity_format
           ; path }
-      else if metric <> "" && metric <> Version.complexity_metric
+      else if metric <> Version.cyclomatic_metric
       then
         Error
           { Coverage.code= "COVERAGE-INVENTORY-INVALID"
           ; message=
-              "Function inventory metric must be " ^ Version.complexity_metric
+              "CRAP requires cyclomatic complexity: use szaniec complexity \
+               --metric cyclomatic --json ("
+              ^ Version.cyclomatic_metric
+              ^ ")"
           ; path }
       else
         match List.assoc_opt "functions" fields with

@@ -1,5 +1,5 @@
-(* Recursive specimens for szaniec-cc/1. Each is one function: [recursive]
-   is 2, and [even] and [odd] are 2. Calls between them make the Well
+(* Recursive specimens for szaniec-cognitive/1. Each is one function: [recursive]
+   is 3, and [even] and [odd] are 3. Calls between them make the Well
    adapter classify this unit as a helper of itself; the inventory still
    lists every definition. *)
 

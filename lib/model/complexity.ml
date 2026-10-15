@@ -24,7 +24,8 @@ type entry =
   ; status: string (* "measured" | "unmeasurable" *) }
 
 type t =
-  { status: string (* "ok" | "incomplete" *)
+  { metric: string
+  ; status: string (* "ok" | "incomplete" *)
   ; policy_name: string
   ; policy_digest: string
   ; approved: bool
@@ -59,8 +60,9 @@ let status_name = function
   | Fn_measured _ -> "measured"
   | Fn_unmeasurable -> "unmeasurable"
 
-let complexity_of = function
-  | Fn_measured n -> Some n
+let complexity_of ~metric = function
+  | Fn_measured {cognitive; cyclomatic} ->
+      Some (if metric = "cyclomatic" then cyclomatic else cognitive)
   | Fn_unmeasurable -> None
 
 let by_location (a : entry) (b : entry) =

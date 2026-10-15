@@ -49,7 +49,7 @@ run conformance rules and it does not require an approved policy.
   with complete required analysis; `2` incomplete analysis, execution
   failure, or unapproved policy — including when violations were also found.
 - `complexity` inventories every syntactic function and reports
-  [szaniec-cc/1](complexity-metric.md). It does not write `szaniec.json`
+  [szaniec-cognitive/1](complexity-metric.md). It does not write `szaniec.json`
   and it does not judge thresholds. `--sort location` (the default) lists
   definitions in source order; `--sort complexity` lists them by
   descending complexity with `id` as the tie-break. Exit status: `0` when
@@ -104,7 +104,7 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.8.0",
+      "programAccess": "szaniec-ocaml-adapter/1.9.0",
       "interpretation": "szaniec-well-adapter/3.7.0",
       "rules": "szaniec-rules/3.2.0"
     },

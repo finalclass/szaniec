@@ -191,8 +191,8 @@ Per-function coverage for CRAP is `covered / total` over the points
 attributed to that function. When `total` is 0 the score is unavailable
 (`coverage-missing`). Complexity comes only from a `szaniec-complexity/1`
 report passed with `--function-inventory`. That report is the output of
-`szaniec complexity --json`; its metric is `szaniec-cc/1`. This command
-does not compute complexity.
+`szaniec complexity --metric cyclomatic --json`; its metric is `szaniec-cc/1`. Cognitive inventories and missing metric identifiers are rejected, because
+CRAP requires cyclomatic complexity. This command does not compute complexity.
 
 ```json
 {

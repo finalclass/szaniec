@@ -4,7 +4,7 @@
           [--update]
 
    The runner copies test/fixtures/tasks-app, rebuilds it through the
-   complexity command, and checks the inventory against the szaniec-cc/1
+   complexity command, and checks the inventory against the szaniec-cognitive/1
    specimens. --update rewrites the golden files after those checks pass.
 *)
 
@@ -32,38 +32,38 @@ let nest g q cc = spec g q cc true "named" "function"
 let anon g q cc = spec g q cc true "anonymous" "function"
 
 let specimens =
-  [ named Sample "straight" 1
+  [ named Sample "straight" 0
   ; named Sample "conditional" 2
-  ; named Sample "multi" 3
+  ; named Sample "multi" 1
   ; named Sample "guarded" 3
-  ; named Sample "short" 3
+  ; named Sample "short" 2
   ; named Sample "if_and" 3
-  ; named Sample "loop_for" 2
-  ; named Sample "loop_while" 2
-  ; named Sample "exceptional" 2
-  ; named Sample "two_handlers" 3
-  ; named Sample "match_exn" 2
-  ; named Sample "or_pat" 2
+  ; named Sample "loop_for" 1
+  ; named Sample "loop_while" 1
+  ; named Sample "exceptional" 1
+  ; named Sample "two_handlers" 2
+  ; named Sample "match_exn" 1
+  ; named Sample "or_pat" 1
   ; named Sample "partial_match" 1
-  ; named Sample "outer" 1
+  ; named Sample "outer" 0
   ; nest Sample "outer.nested" 2
   ; named Sample "curried" 2
-  ; named Sample "uses_anon" 1
+  ; named Sample "uses_anon" 0
   ; anon Sample "uses_anon.anon" 2
-  ; named Sample "returns_fun" 1
+  ; named Sample "returns_fun" 0
   ; anon Sample "returns_fun.anon" 2
-  ; named Sample "unused_plain" 1
-  ; named Sample "as_function" 3
-  ; named Sample "if_unit" 2
+  ; named Sample "unused_plain" 0
+  ; named Sample "as_function" 1
+  ; named Sample "if_unit" 1
   ; named Sample "just_raise" 2
-  ; named Sample "Local.hidden" 1
-  ; named Sample "with_effect" 2
-  ; named Recur "recursive" 2
-  ; named Recur "even" 2
-  ; named Recur "odd" 2
+  ; named Sample "Local.hidden" 0
+  ; named Sample "with_effect" 1
+  ; named Recur "recursive" 3
+  ; named Recur "even" 3
+  ; named Recur "odd" 3
   ; spec Widget "ping" 2 false "named" "rpc"
-  ; named Widget "helper" 1
-  ; named Probe "probe" 1 ]
+  ; named Widget "helper" 0
+  ; named Probe "probe" 0 ]
 
 let module_of = function
   | Sample -> "Metric.Samples"
@@ -255,7 +255,7 @@ let check_spec errors fns (s : spec) =
       eq "ownership" (ownership_of s.group) ;
       eq "service" (service_of s.group) ;
       eq "status" "measured" ;
-      eq "metric" "szaniec-cc/1" ;
+      eq "metric" "szaniec-cognitive/1" ;
       if jbool f "nested" <> s.nested
       then fail errors (Printf.sprintf "%s.%s nested flag" m s.qualname) ;
       let id = jstr f "id" in
@@ -285,8 +285,8 @@ let check_shadows errors fns =
       let ca, ia = pair a in
       let cb, ib = pair b in
       let ccs = List.sort compare [ca; cb] in
-      if ccs <> [Some 1; Some 2]
-      then fail errors "shadow complexities are not 1 and 2" ;
+      if ccs <> [Some 0; Some 2]
+      then fail errors "shadow complexities are not 0 and 2" ;
       List.iter
         (fun id ->
           let prefix = m ^ ".shadow@" in
@@ -301,13 +301,13 @@ let check_shadows errors fns =
 
 let check_inventory errors (j : Yojson.Safe.t) =
   if jstr j "format" <> "szaniec-complexity/1" then fail errors "format" ;
-  if jstr j "metric" <> "szaniec-cc/1" then fail errors "metric" ;
+  if jstr j "metric" <> "szaniec-cognitive/1" then fail errors "metric" ;
   if jstr j "status" <> "ok" then fail errors "status is not ok" ;
   if jstr j "sort" <> "location" then fail errors "sort" ;
   let inputs = member "inputs" j in
   if jbool inputs "approved"
   then fail errors "approval must stay a recorded flag" ;
-  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.8.0"
+  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.9.0"
   then fail errors "adapter version" ;
   ( match member "programRoots" inputs with
   | `List [`String "metric"; `String "test"] -> ()
@@ -463,8 +463,6 @@ let check_objects errors (j : Yojson.Safe.t) =
           then fail errors (q ^ " complexity is not null") ;
           if jstr f "status" <> "unmeasurable" then fail errors (q ^ " status") )
     ["make"; "call"] ;
-  if List.exists (fun f -> jint_opt f "complexity" = Some 0) fns
-  then fail errors "complexity 0 reported" ;
   let gaps = jlist j "gaps" in
   if
     not
@@ -617,7 +615,7 @@ let () =
       if text_code <> 0 then fail errors "text exit" ;
       if
         not
-          (let needle = "Metric.Samples.straight  1  function" in
+          (let needle = "Metric.Samples.straight  0  function" in
            let n = String.length needle in
            let rec has i =
              i + n <= String.length text

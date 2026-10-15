@@ -116,6 +116,6 @@ Do not present a manually supplied graph test as proof of language support.
   extension accepts the local observation cache and bounded parallel path
   evaluation defined in the observation and inspection contracts; see
   [performance decisions](docs/decisions/full-program-performance.md).
-  Local cyclomatic
-  complexity is the `szaniec complexity` inventory (`szaniec-cc/1`); it
+  Local Cognitive
+  complexity is the `szaniec complexity` inventory (`szaniec-cognitive/1`); it
   is not a conformance gate.
