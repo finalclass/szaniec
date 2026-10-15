@@ -516,6 +516,11 @@ policy's approval status; lack of approval alone does not fail this inventory.
 The command does not write `szaniec.json`. See the
 [metric specification](docs/contracts/complexity-metric.md) for exact counts.
 
+Repeated inventories reuse extraction entries while rechecking source, build
+and import evidence. See the [performance decision and comparison helper](
+docs/decisions/complexity-performance.md) for the optimizations, correctness
+checks and reproducible whole-command benchmarks.
+
 ## Measure coverage and CRAP
 
 Coverage runs an existing scenario against an instrumented build. It measures

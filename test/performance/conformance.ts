@@ -174,8 +174,8 @@ module Observation_cache = struct
 end
 module Execution = struct
   include Execution
-  let observe ~unit_canonical ~resolve ~site_of_loc structure =
-    Acquisition_profile.measure "execution_extract" (fun () -> observe ~unit_canonical ~resolve ~site_of_loc structure)
+  let observe ?with_ordered ~unit_canonical ~resolve ~site_of_loc structure =
+    Acquisition_profile.measure "execution_extract" (fun () -> observe ?with_ordered ~unit_canonical ~resolve ~site_of_loc structure)
 end
 `,
   );
@@ -196,24 +196,24 @@ let strip_build_prefix (p`,
   source = replaceOnce(
     source,
     "let interface_crc path name =",
-    `let current_input ~project_root ~source cmt artifact =
-  Acquisition_profile.measure "freshness_source" (fun () -> current_input ~project_root ~source cmt artifact)
+    `let current_input ~provenance ~project_root ~source cmt artifact =
+  Acquisition_profile.measure "freshness_source" (fun () -> current_input ~provenance ~project_root ~source cmt artifact)
 
 let interface_crc path name =`,
   );
   source = replaceOnce(
     source,
-    "let current_imports ~project_root",
-    `let current_interface ~project_root ~source cmt artifact =
-  Acquisition_profile.measure "freshness_interface" (fun () -> current_interface ~project_root ~source cmt artifact)
+    "let current_imports\n",
+    `let current_interface ?provenance ?interface_crc ~project_root ~source cmt artifact =
+  Acquisition_profile.measure "freshness_interface" (fun () -> current_interface ?provenance ?interface_crc ~project_root ~source cmt artifact)
 
-let current_imports ~project_root`,
+let current_imports\n`,
   );
   source = replaceOnce(
     source,
     "let sha256_hex (s",
-    `let current_imports ~project_root ~local_units cmt =
-  Acquisition_profile.measure "freshness_imports" (fun () -> current_imports ~project_root ~local_units cmt)
+    `let current_imports ?interface_crc ?file_exists ~project_root ~local_units cmt =
+  Acquisition_profile.measure "freshness_imports" (fun () -> current_imports ?interface_crc ?file_exists ~project_root ~local_units cmt)
 
 let sha256_hex (s`,
   );
@@ -258,14 +258,22 @@ function instrument(source: string) {
     '  Printf.eprintf "SZANIEC_STAGE observation=%.9f\\n%!" (Unix.gettimeofday () -. observation_started) ;\n  match build_code with\n',
   );
   source = source.replaceAll(
-    "  let interpretation =\n",
-    "  let interpretation_started = Unix.gettimeofday () in\n  let interpretation =\n",
-  );
-  source = source.replaceAll(
-    "      ~cy\n      observation\n  in\n",
-    '      ~cy\n      observation\n  in\n  Printf.eprintf "SZANIEC_STAGE interpretation=%.9f\\n%!" (Unix.gettimeofday () -. interpretation_started) ;\n',
+    /  let interpretation =\n[\s\S]*?      ~cy\n      observation\n  in\n/g,
+    (block) =>
+      "  let interpretation_started = Unix.gettimeofday () in\n" + block +
+      '  Printf.eprintf "SZANIEC_STAGE interpretation=%.9f\\n%!" (Unix.gettimeofday () -. interpretation_started) ;\n',
   );
   if (complexityCommand) {
+    source = replaceOnce(
+      source,
+      "  let ownerships =\n    Szaniec_interpretation_engine.Well_adapter.ownerships",
+      "  let ownership_started = Unix.gettimeofday () in\n  let ownerships =\n    Szaniec_interpretation_engine.Well_adapter.ownerships",
+    );
+    source = replaceOnce(
+      source,
+      "  let owners = Hashtbl.create 64 in\n",
+      '  Printf.eprintf "SZANIEC_STAGE interpretation=%.9f\\n%!" (Unix.gettimeofday () -. ownership_started) ;\n  let owners = Hashtbl.create 64 in\n',
+    );
     const marker = "  let owner_of (unit_name : string)";
     source = replaceOnce(
       source,

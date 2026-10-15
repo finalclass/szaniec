@@ -155,11 +155,15 @@ let real_source (sourcefile : string) : string option =
   then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
   else Some sourcefile
 
-let compiler_path ~project_root (cmt : Cmt_format.cmt_infos) path =
+let compiler_path
+    ?(file_exists = Sys.file_exists)
+    ~project_root
+    (cmt : Cmt_format.cmt_infos)
+    path =
   let build_root = project_root // "_build/default" in
   if Filename.is_relative path
   then build_root // path
-  else if Sys.file_exists path
+  else if file_exists path
   then path
   else
     let prefix = cmt.cmt_builddir ^ "/" in
@@ -212,16 +216,80 @@ let interface_crc path name =
   with
   | _ -> None
 
+type interface_snapshot =
+  { read_crc: string -> string -> Digest.t option
+  ; file_exists: string -> bool
+  ; validate: unit -> unit }
+
+(* Repeated imports share a decoded CRC table for this observation only.
+   Metadata changes trigger an immediate reread. Validate every used file's
+   content again before returning, even if its metadata did not change. *)
+let memoized_interface_crc () =
+  let tables = Hashtbl.create 128 in
+  let paths = Hashtbl.create 1024 in
+  let file_exists path =
+    match Hashtbl.find_opt paths path with
+    | Some exists -> exists
+    | None ->
+        let exists = Sys.file_exists path in
+        Hashtbl.add paths path exists ;
+        exists
+  in
+  let metadata path =
+    let s = Unix.stat path in
+    (s.st_dev, s.st_ino, s.st_size, s.st_mtime, s.st_ctime, s.st_perm)
+  in
+  let read_crc path name =
+    try
+      let stamp = metadata path in
+      let crcs =
+        match Hashtbl.find_opt tables path with
+        | Some (previous, _, crcs) when previous = stamp -> Some crcs
+        | _ ->
+            Hashtbl.remove tables path ;
+            let digest = Digest.file path in
+            let crcs = (Cmi_format.read_cmi path).Cmi_format.cmi_crcs in
+            if metadata path <> stamp || Digest.file path <> digest
+            then None
+            else (
+              Hashtbl.replace tables path (stamp, digest, crcs) ;
+              Some crcs )
+      in
+      Option.bind crcs (fun crcs -> List.assoc_opt name crcs |> Option.join)
+    with
+    | _ -> None
+  in
+  let validate () =
+    Hashtbl.iter
+      (fun path existed ->
+        if Sys.file_exists path <> existed
+        then
+          raise
+            (Sys_error
+               ("compiler import path changed during observation: " ^ path) ) )
+      paths ;
+    Hashtbl.iter
+      (fun path (_, expected, _) ->
+        if Digest.file path <> expected
+        then
+          raise
+            (Sys_error ("compiler interface changed during observation: " ^ path)
+            ) )
+      tables
+  in
+  {read_crc; file_exists; validate}
+
 let current_interface
     ?provenance
+    ?(interface_crc = interface_crc)
     ~project_root
     ~source
     (cmt : Cmt_format.cmt_infos)
     artifact =
   let provenance =
-    Option.value
-      ~default:(Provenance.create ~root:project_root ~inputs:[])
-      provenance
+    match provenance with
+    | Some provenance -> provenance
+    | None -> Provenance.create ~root:project_root ~inputs:[]
   in
   let interface = Filename.remove_extension source ^ ".mli" in
   if not (Sys.file_exists interface)
@@ -251,7 +319,12 @@ let current_interface
     with
     | _ -> false
 
-let current_imports ~project_root ~local_units (cmt : Cmt_format.cmt_infos) =
+let current_imports
+    ?(interface_crc = interface_crc)
+    ?(file_exists = Sys.file_exists)
+    ~project_root
+    ~local_units
+    (cmt : Cmt_format.cmt_infos) =
   let directories = cmt.cmt_loadpath.visible @ cmt.cmt_loadpath.hidden in
   List.for_all
     (fun (name, expected) ->
@@ -262,8 +335,10 @@ let current_imports ~project_root ~local_units (cmt : Cmt_format.cmt_infos) =
           let path =
             List.find_map
               (fun dir ->
-                let path = compiler_path ~project_root cmt (dir // file) in
-                if Sys.file_exists path then Some path else None )
+                let path =
+                  compiler_path ~file_exists ~project_root cmt (dir // file)
+                in
+                if file_exists path then Some path else None )
               directories
           in
           match path with
@@ -1523,6 +1598,8 @@ let observe
     () : Observation.t =
   let architecture = evidence <> Measurement in
   let measurement = evidence <> Architecture in
+  let interfaces = memoized_interface_crc () in
+  let interface_crc = interfaces.read_crc in
   let cache =
     Observation_cache.create
       ~project_root
@@ -1704,12 +1781,15 @@ let observe
                            cmt
                            (project_root // artifact)
                          && current_interface
+                              ~interface_crc
                               ~provenance
                               ~project_root
                               ~source:source_abs
                               cmt
                               (project_root // artifact)
                          && current_imports
+                              ~interface_crc
+                              ~file_exists:interfaces.file_exists
                               ~project_root
                               ~local_units:units_tbl
                               cmt )
@@ -2219,9 +2299,16 @@ let observe
     then Some "unsupported-compiler"
     else None
   in
+  let function_counts = Hashtbl.create 128 in
+  List.iter
+    (fun (f : Observation.function_def) ->
+      let count =
+        Option.value ~default:0 (Hashtbl.find_opt function_counts f.fn_path)
+      in
+      Hashtbl.replace function_counts f.fn_path (count + 1) )
+    functions ;
   let count_fns path =
-    List.length
-      (List.filter (fun f -> String.equal f.Observation.fn_path path) functions)
+    Option.value ~default:0 (Hashtbl.find_opt function_counts path)
   in
   (* Whole-file measurement failures. A function that contains an
      unmeasurable construct stays on a [measured] file and is listed
@@ -2280,6 +2367,7 @@ let observe
         in
         coverage_of path status (Measurement.file_provenance path) )
   in
+  interfaces.validate () ;
   { Observation.project_root
   ; program_roots
   ; compiler_series= !compiler_series

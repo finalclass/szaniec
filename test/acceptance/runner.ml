@@ -958,6 +958,13 @@ let verify_generated_contracts work name =
     Szaniec_interpretation_engine.Well_adapter.interpret ~policy ~cy observation
   in
   let check condition message = if not condition then failwith message in
+  check
+    ( Szaniec_interpretation_engine.Well_adapter.ownerships
+        ~policy
+        ~cy
+        observation
+    = interpretation.ownerships )
+    "measurement ownership differs from full interpretation" ;
   let graph =
     Szaniec_inspection_manager.Inspection_manager.build_callgraph
       ~cy
