@@ -77,7 +77,7 @@ constructs remain null with a gap, never 0.
 | Match scrutinee | Evaluated at the incoming depth; it is not inside an arm |
 | Match arm bodies | Walked at depth +1 |
 | `when` | +1 + arm depth, then its expression is walked at that depth |
-| Primitive `&&` / `||` | +1 per homogeneous sequence; switching operator starts another sequence; no nesting penalty |
+| Primitive `&&` / `\|\|` | +1 per homogeneous sequence; switching operator starts another sequence; no nesting penalty |
 | `for` / `while` | +1 + depth; children at depth +1 |
 | Each exception/effect `try` handler | +1 + depth; handler body/guard at depth +1 |
 | `try` body | No increment and no extra nesting |
