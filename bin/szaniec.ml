@@ -241,7 +241,12 @@ let text_report (r : Finding.report) : string =
   List.iter
     (fun e -> Buffer.add_string buf (Printf.sprintf "    - %s\n" e))
     r.Finding.inputs.Finding.exclusions ;
-  List.iter (render_finding buf) r.Finding.findings ;
+  let coach = Coaching.render_once () in
+  List.iter
+    (fun (f : Finding.t) ->
+      render_finding buf f ;
+      coach buf (Coaching.for_rule f.rule) )
+    r.Finding.findings ;
   Buffer.add_string
     buf
     (Printf.sprintf
@@ -280,7 +285,8 @@ let json_report (r : Finding.report) : string =
         , `List (List.map (fun p -> `String p) f.Finding.participants) )
       ; ("locations", `List (List.map jloc f.Finding.locations))
       ; ( "evidencePath"
-        , `List (List.map (fun p -> `String p) f.Finding.evidence_path) ) ]
+        , `List (List.map (fun p -> `String p) f.Finding.evidence_path) )
+      ; ("coaching", Coaching.to_json (Coaching.for_rule f.rule)) ]
   in
   let policy = r.Finding.inputs.Finding.policy in
   let json =
@@ -1193,8 +1199,8 @@ let main () =
           | Ok report ->
               print_string
                 ( if args.json
-                  then S.json_of_report report
-                  else S.text_of_report report ) ;
+                  then Suggestion_render.json_of_report report
+                  else Suggestion_render.text_of_report report ) ;
               exit (S.exit_code report) )
       | "complexity" -> (
           let metric = if args.metric = "" then "cognitive" else args.metric in

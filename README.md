@@ -24,6 +24,7 @@ official IDesign product.
 - [Inspect function complexity](#inspect-function-complexity)
 - [Measure coverage and CRAP](#measure-coverage-and-crap)
 - [Review code-quality suggestions](#review-code-quality-suggestions)
+- [Use diagnostic repair guidance](#use-diagnostic-repair-guidance)
 - [Exit statuses and automation](#exit-statuses-and-automation)
 - [Troubleshooting and limits](#troubleshooting-and-limits)
 - [Verification and reference documents](#verification-and-reference-documents)
@@ -757,6 +758,45 @@ Decisions are `apply`, `reject`, or `defer`, with a required non-empty rationale
 Subsequent reviews join decisions by suggestion id. See the
 [suggestion contract](docs/contracts/suggestion-contract.md) for the rubric,
 provider fixtures, cache, and decision formats.
+
+## Use diagnostic repair guidance
+
+`check` and `suggestions` automatically attach local repair guides to known
+diagnostics. Each guide explains the intent, next steps, misleading fixes to
+avoid, an illustrative before/after example, and how to verify the change.
+Text shows each guide once beside its first diagnostic. JSON items include a
+self-contained `coaching` object with catalog version `szaniec-coaching/1`;
+unknown identifiers have `coaching: null` and remain visible.
+
+For example, a Client-to-Access finding advises routing the use case through its
+existing Manager and warns against wrappers or pass-through services that only
+hide the call. A complicated-construct suggestion advises simplifying decisions
+and extracting coherent operations rather than moving branches into `function2`
+to lower a score. Reuse guides distinguish definitions inside one service from
+those in different services or with unresolved ownership.
+
+Guides are bundled in the CLI and need no provider or external guide files.
+Live suggestion detection still uses Jev; adding a guide sends no additional
+source or model questions. Guides do not edit code, approve policy, change exit
+statuses, or make experimental suggestions verified. The complexity inventory
+has no threshold. `check --summary` retains its one-line output.
+
+An agent can use the existing commands as a feedback loop:
+
+```sh
+szaniec check --rebuild
+szaniec suggestions
+```
+
+Run the first after an implementation change and inspect the original evidence
+alongside the guidance. After a refactor, run affected behavior tests and the
+full architecture check again; use another suggestion review when available.
+Recording `apply` alone does not prove a repair succeeded. The CLI provides
+feedback on invocation; it does not install agent hooks automatically.
+
+See [the coaching contract](docs/contracts/coaching.md) for selection, output,
+and acceptance coverage. Delivery checks do not establish improved agent
+refactoring quality; that requires a separate behavioral evaluation.
 
 ## Exit statuses and automation
 

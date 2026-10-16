@@ -287,6 +287,12 @@ The text report renders the same facts. Rendering belongs to
 CheckClient's command path; what counts as a suggestion is this
 contract.
 
+Every JSON suggestion and catalog gap also carries the additive `coaching`
+field defined by [diagnostic coaching](coaching.md). CheckClient selects local
+guides after report composition, including ownership-specific reuse guidance.
+Judgments, decisions, cache identity, provider accounting, experimental status,
+and exit status retain their meaning.
+
 ## Decisions file
 
 ```json
