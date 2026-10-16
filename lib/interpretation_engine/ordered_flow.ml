@@ -41,6 +41,33 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
               && not (Execution_paths.local_symbol d.symbol) ) )
       execution.definitions
   in
+  let rec resolve bindings visited target =
+    if List.mem target visited
+    then target
+    else
+      let next =
+        match List.assoc_opt target bindings with
+        | Some _ as next -> next
+        | None -> (
+          match Canonical.parameter_symbol target with
+          | Some (owner, position) when Canonical.parameter_field target <> ""
+            ->
+              Option.map
+                (fun base -> base ^ "." ^ Canonical.parameter_field target)
+                (List.assoc_opt
+                   (owner ^ ".<parameter@" ^ string_of_int position ^ ">")
+                   bindings )
+          | _ -> None )
+      in
+      match next with
+      | Some next -> resolve bindings (target :: visited) next
+      | None -> target
+  in
+  let context bindings =
+    List.map fst bindings
+    |> List.sort_uniq String.compare
+    |> List.map (fun parameter -> (parameter, resolve bindings [] parameter))
+  in
   List.map
     (fun (origin : Observation.execution_definition) ->
       let complete = ref true in
@@ -49,7 +76,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
         complete := false ;
         [Interpretation.Flow_unknown (reason, site)]
       in
-      let rec walk depth path symbol =
+      let rec walk depth path visiting bindings symbol =
         let site =
           match Hashtbl.find_opt definitions symbol with
           | Some d -> d.Observation.definition_site
@@ -60,8 +87,8 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
         else
           match Hashtbl.find_opt bodies symbol with
           | None -> unknown site "execution body unavailable"
-          | Some steps -> project_steps depth path steps
-      and project_steps depth path steps =
+          | Some steps -> project_steps depth path visiting bindings steps
+      and project_steps depth path visiting bindings steps =
         List.concat_map
           (fun step ->
             decr budget ;
@@ -76,7 +103,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
                   let branches =
                     List.map
                       (fun (label, steps) ->
-                        (label, project_steps depth path steps) )
+                        (label, project_steps depth path visiting bindings steps) )
                       branches
                   in
                   if List.for_all (fun (_, steps) -> steps = []) branches
@@ -87,12 +114,49 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
                       ( kind
                       , site
                       , ""
-                      , project_steps depth path condition
-                      , project_steps depth path body ) ]
-              | Invoke call -> invoke depth path call )
+                      , project_steps depth path visiting bindings condition
+                      , project_steps depth path visiting bindings body ) ]
+              | Invoke call -> invoke depth path visiting bindings call )
           steps
-      and invoke depth path (call : Observation.execution_call) =
-        let api = call.execution_callee in
+      and invoke depth path visiting bindings (call : Observation.execution_call)
+          =
+        let api = resolve bindings [] call.execution_callee in
+        let call =
+          { call with
+            execution_callee= api
+          ; execution_resolution=
+              ( if
+                  api <> call.execution_callee
+                  && api <> ""
+                  && Canonical.parameter_symbol api = None
+                then Observation.Resolved
+                else call.execution_resolution )
+          ; execution_args=
+              List.map
+                (fun (arg : Observation.execution_arg) ->
+                  {arg with target= resolve bindings [] arg.target} )
+                call.execution_args }
+        in
+        let local_bindings =
+          List.map
+            (fun (arg : Observation.execution_arg) ->
+              ( ( api
+                ^ ".<parameter@"
+                ^ string_of_int arg.position
+                ^ ">"
+                ^ if arg.field = "" then "" else "." ^ arg.field )
+              , arg.target ) )
+            call.execution_args
+          @ List.filter
+              (fun (symbol, _) ->
+                match Canonical.parameter_symbol symbol with
+                | Some (owner, position) ->
+                    owner = api && List.mem position call.execution_defaults
+                | None -> false )
+              execution.parameter_defaults
+          @ bindings
+        in
+        let invocation_context = (api, context local_bindings) in
         let arity =
           match Hashtbl.find_opt definitions api with
           | Some d -> Some d.Observation.definition_arity
@@ -136,7 +200,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
               unknown
                 call.execution_site
                 ("target ownership cannot be resolved: " ^ api)
-            else if own_body && List.mem api path
+            else if own_body && List.mem invocation_context visiting
             then
               let reference =
                 { Interpretation.kind= Interpretation.ExternalCall
@@ -152,7 +216,13 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
               Interpretation.Flow_call reference
               :: unknown call.execution_site "recursive helper reference"
             else if own_body
-            then walk (depth + 1) (path @ [api]) api
+            then
+              walk
+                (depth + 1)
+                (path @ [api])
+                (invocation_context :: visiting)
+                local_bindings
+                api
             else if callback_wrapper
             then []
             else
@@ -211,7 +281,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
                       ; execution_supplied= supplied
                       ; execution_resumed= false }
                     in
-                    invoke (depth + 1) (path @ [api]) callback
+                    invoke (depth + 1) (path @ [api]) visiting bindings callback
                   in
                   match mode with
                   | Repetition.Ignored
@@ -239,7 +309,7 @@ let project ~execution ~owner_of ~available ~eligible ~entry_point ~classify =
           in
           phase @ steps @ callbacks
       in
-      let steps = walk 0 [origin.symbol] origin.symbol in
+      let steps = walk 0 [origin.symbol] [] [] origin.symbol in
       let steps =
         steps @ [Interpretation.Flow_exit ("return", origin.definition_site)]
       in

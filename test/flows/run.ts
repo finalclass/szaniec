@@ -68,6 +68,14 @@ Deno.test("ordered source-to-JSON method flows and explicit uncertainty", async 
         "callback",
         "periodic",
         "queued",
+        "binding",
+        "binding_deferred",
+        "binding_twice",
+        "binding_and",
+        "binding_alias",
+        "binding_nested",
+        "binding_recursive",
+        "binding_annotated",
       ],
       WarehouseAccess: ["validate", "deduce_items"],
       PaymentEngine: ["ensure_paid"],
@@ -101,7 +109,43 @@ let rec recursive n = if n > 0 then (validate (); recursive (n - 1))
     );
     await write(
       "lib/order_app/store_manager/store_manager_impl.ml",
-      `let place_order () =
+      `open struct
+  let (let@) value next = match value with Ok value -> next value | Error response -> response
+  let (let*) _ _ = Error ()
+  let () = ignore (let*)
+  let (let*) = Result.bind
+  let (let-) () _next = ()
+  let (let+) () next = next (); next ()
+  let (let&) value next = next value
+  let (and&) a b = a, b
+  let rec again value next = next value; again value next
+  let (let^) = again
+  let finish_annotated : unit -> unit = function () -> OrdersAccess.place_order ()
+end
+let binding accept =
+  let@ () = WarehouseAccess.validate (); if accept then Ok () else Error () in
+  OrdersAccess.place_order ()
+let binding_deferred () =
+  let- () = WarehouseAccess.validate () in
+  OrdersAccess.place_order ()
+let binding_twice () =
+  let+ () = WarehouseAccess.validate () in
+  OrdersAccess.place_order ()
+let binding_and () =
+  let& () = WarehouseAccess.validate () and& () = CartAccess.check () in
+  OrdersAccess.place_order ()
+let binding_alias () =
+  let* () = Ok (WarehouseAccess.validate ()) in
+  OrdersAccess.place_order (); Ok ()
+let binding_nested first second =
+  let@ () = WarehouseAccess.validate (); if first then Ok () else Error () in
+  let@ () = CartAccess.check (); if second then Ok () else Error () in
+  OrdersAccess.place_order ()
+let binding_recursive () =
+  let^ () = () in
+  OrdersAccess.place_order ()
+let binding_annotated () = WarehouseAccess.validate () |> finish_annotated
+let place_order () =
   Helper.validate ();
   PaymentEngine.ensure_paid ();
   CartAccess.check ();
@@ -175,6 +219,87 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
       return m;
     };
     const manager = (name: string) => method("StoreManager", name);
+    const alternatives = (steps: Step[]): string[][] => {
+      let paths: string[][] = [[]];
+      for (const step of steps) {
+        const suffixes = step.kind === "choice"
+          ? step.branches!.flatMap((b) => alternatives(b.steps))
+          : [calls([step])];
+        paths = paths.flatMap((p) => suffixes.map((s) => [...p, ...s]));
+      }
+      return paths;
+    };
+    const binding = manager("binding").flow;
+    assert(binding.status === "complete", JSON.stringify(binding));
+    assert(
+      JSON.stringify(
+        alternatives(binding.steps).map((p) => p.join()).sort(),
+      ) ===
+        JSON.stringify([
+          "WarehouseAccess.validate",
+          "WarehouseAccess.validate,OrdersAccess.place_order",
+        ]),
+      "binding input runs first; only the accepting arm invokes its continuation",
+    );
+    assert(
+      manager("binding_deferred").flow.status === "complete" &&
+        JSON.stringify(alternatives(manager("binding_deferred").flow.steps)) ===
+          '[["WarehouseAccess.validate"]]',
+      "an operator may ignore its continuation without running its body",
+    );
+    assert(
+      manager("binding_twice").flow.status === "complete" &&
+        JSON.stringify(alternatives(manager("binding_twice").flow.steps)) ===
+          '[["WarehouseAccess.validate","OrdersAccess.place_order","OrdersAccess.place_order"]]',
+      "an operator invoking its continuation twice retains both occurrences",
+    );
+    assert(
+      !report.findings.some((f: { rule: string; message: string }) =>
+        f.rule === "GAP-UNRESOLVED-CALL" && f.message.includes(".let@")
+      ),
+      "binding continuations supply compiler-proven callback targets",
+    );
+    assert(
+      manager("binding_and").flow.status === "incomplete",
+      "combined bindings retain the unsupported-execution gap",
+    );
+    const alias = manager("binding_alias").flow;
+    assert(alias.status === "complete", JSON.stringify(alias));
+    assert(
+      alternatives(alias.steps).some((p) =>
+        p.join() === "WarehouseAccess.validate,OrdersAccess.place_order"
+      ),
+      "a callable alias in an opened structure retains its actual target",
+    );
+    const nested = manager("binding_nested").flow;
+    assert(nested.status === "complete", JSON.stringify(nested));
+    assert(
+      JSON.stringify(alternatives(nested.steps).map((p) => p.join()).sort()) ===
+        JSON.stringify([
+          "WarehouseAccess.validate",
+          "WarehouseAccess.validate,CartAccess.check",
+          "WarehouseAccess.validate,CartAccess.check,OrdersAccess.place_order",
+        ]),
+      "nested bindings preserve early returns and input/continuation ordering",
+    );
+    assert(
+      !report.findings.some((f: { rule: string; message: string }) =>
+        f.rule === "GAP-AMBIGUOUS-PATH" &&
+        f.message.includes(".binding_nested ")
+      ),
+      "finite re-entry with different continuations is not recursive execution",
+    );
+    assert(
+      manager("binding_recursive").flow.status === "incomplete",
+      "a genuinely recursive operator still produces incomplete evidence",
+    );
+    const annotated = manager("binding_annotated").flow;
+    assert(annotated.status === "complete", JSON.stringify(annotated));
+    assert(
+      JSON.stringify(alternatives(annotated.steps)) ===
+        '[["WarehouseAccess.validate","OrdersAccess.place_order"]]',
+      "a typed alias pattern retains its function definition and invocation",
+    );
     const ordered = manager("place_order");
     assert(ordered.flow.status === "complete", JSON.stringify(ordered.flow));
     assert(

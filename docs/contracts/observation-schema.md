@@ -104,6 +104,22 @@ omitted/None slots. Repeated omitted slots in a curried application replace the
 existing slot in place. Reconstructing the compiler's recorded environment and
 load path permits function-type aliases to retain the same evidence as arrows.
 
+For a single binding operator, architecture extraction normalizes the typed
+`let* pattern = input in body` into an application of the compiler-resolved
+operator to the input and a pattern-matching continuation. The operator's
+implementation determines whether and how often the continuation runs; merely
+constructing it does not execute its body. Operator names do not establish
+monadic or callback semantics. Source sites and typed parameter identities are
+retained. Callable aliases in structure-level opens retain their target across the
+compiler's fresh identifier bindings, matched by declaration UID rather than
+name, including shadowed bindings. Unknown or ambiguous callable aliases remain
+unresolved. A variable binding and the compiler's alias-of-wildcard form for an
+annotated function name retain the same named-definition semantics.
+Complexity measures the original tree,
+without synthetic callbacks.
+Combined `and*` bindings remain unsupported ordered execution and retain gaps
+when relevant to required path analysis.
+
 Execution facts include syntactically proven returned function targets and
 functor instances (instance module, functor, argument module and source site).
 Callable result projections also retain tuple positions, polymorphic-variant
