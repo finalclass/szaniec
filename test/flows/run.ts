@@ -110,6 +110,8 @@ let rec recursive n = if n > 0 then (validate (); recursive (n - 1))
       "lib/order_app/store_manager/store_manager_impl.ml",
       `open struct
   let (let@) value next = match value with Ok value -> next value | Error response -> response
+  let (let*) _ _ = Error ()
+  let () = ignore (let*)
   let (let*) = Result.bind
   let (let-) () _next = ()
   let (let+) () next = next (); next ()

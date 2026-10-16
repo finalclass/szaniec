@@ -404,19 +404,38 @@ let observe
                 let targets =
                   List.filter_map
                     (function
-                      | Types.Sig_value (id, _, _) ->
+                      | Types.Sig_value (id, description, _)
+                        when not
+                               (Types.Uid.equal
+                                  description.Types.val_uid
+                                  Types.Uid.internal_not_actually_unique ) ->
                           Option.map
-                            (fun target -> (Ident.name id, target))
+                            (fun target -> (description.Types.val_uid, target))
                             (Hashtbl.find_opt symbols id)
                       | _ -> None )
                     structure.str_type
                 in
                 List.iter
                   (function
-                    | Types.Sig_value (id, _, _) ->
-                        Option.iter
-                          (Hashtbl.replace symbols id)
-                          (List.assoc_opt (Ident.name id) targets)
+                    | Types.Sig_value (id, description, _)
+                      when callable_type
+                             opened.open_env
+                             description.Types.val_type ->
+                        let candidates =
+                          List.filter_map
+                            (fun (uid, target) ->
+                              if Types.Uid.equal uid description.Types.val_uid
+                              then Some target
+                              else None )
+                            targets
+                          |> List.sort_uniq String.compare
+                        in
+                        Hashtbl.replace
+                          symbols
+                          id
+                          ( match candidates with
+                          | [target] -> target
+                          | _ -> "" )
                     | _ -> () )
                   opened.open_bound_items
             | _ -> () )
