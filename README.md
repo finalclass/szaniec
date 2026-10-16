@@ -48,6 +48,10 @@ Supported architecture profile: `well-ocaml-core`, OCaml **5.4.x** artifacts
 produced by Dune. The locked coverage combination is OCaml 5.4.1
 (`5.4.1+relocatable`), Dune 3.24.2, and ppxlib 0.38.0.
 
+Single binding operators retain their resolved implementation and continuation
+in architecture checks, including operators that skip or repeat the body.
+Combined `and*` bindings remain an explicit ordered-execution limitation.
+
 Architecture checks, complexity, and coverage run locally. Live suggestions
 send selected source context to the provider. All suggestion categories are
 **experimental and not evaluated**: routine acceptance uses recorded fixtures;

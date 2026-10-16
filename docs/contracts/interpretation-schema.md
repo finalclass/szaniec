@@ -82,7 +82,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.7.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.7.1`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -298,6 +298,14 @@ nor an empty loop list changes a conformance finding or proves a runtime count.
 Policy rules and TOML exemptions for repetition are outside this delivery.
 
 ## Ordered flow projection
+
+Private helper expansion binds callable inputs at each invocation, retaining
+forwarded targets and omitted defaults. Recursion detection identifies the
+function together with its effective callable bindings. Re-entering a binding
+operator with a different finite continuation is not itself a recursive cycle.
+True cycles, unresolved targets, and the existing depth/step limits remain
+incomplete evidence. Conformance path expansion uses the same distinction;
+this does not relax any architectural rule.
 
 InterpretationEngine projects ordered execution evidence using the existing
 ownership, interaction, suppression, and callback rules. It expands private

@@ -783,14 +783,21 @@ let evaluate_with_domains
       (unit : string)
       (caller : string)
       (depth : int)
-      (visiting : (string * string) list)
+      visiting
       (budget : int ref)
       bindings : (Observation.path_step list list, string) result =
+    let context =
+      List.map fst bindings
+      |> List.sort_uniq String.compare
+      |> List.map (fun parameter ->
+          (parameter, resolve_binding bindings [] parameter) )
+    in
     if depth > 64
     then Error "helper expansion depth exceeds 64"
     else if
       List.exists
-        (fun (u, c) -> String.equal u unit && String.equal c caller)
+        (fun (u, c, arguments) ->
+          String.equal u unit && String.equal c caller && arguments = context )
         visiting
     then
       Error
@@ -803,7 +810,7 @@ let evaluate_with_domains
       | None -> Error ("helper body unavailable: " ^ unit ^ "." ^ caller)
       | Some p when p.Observation.ambiguous -> Error p.limiting_reason
       | Some p -> (
-          let visiting = (unit, caller) :: visiting in
+          let visiting = (unit, caller, context) :: visiting in
           let acc_alts = ref [] in
           let failed = ref None in
           List.iter

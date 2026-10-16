@@ -393,7 +393,34 @@ let observe
                   | _ -> () )
                 bindings
           | _ -> () ) ;
-          default.structure_item self item )
+          default.structure_item self item ;
+          match item.str_desc with
+          | Tstr_open opened -> (
+            match (module_body opened.open_expr).mod_desc with
+            | Tmod_structure structure ->
+                (* Opened values have fresh compiler identifiers. Preserve the
+                   target of a callable alias across that renaming, just as for
+                   its original structure binding. *)
+                let targets =
+                  List.filter_map
+                    (function
+                      | Types.Sig_value (id, _, _) ->
+                          Option.map
+                            (fun target -> (Ident.name id, target))
+                            (Hashtbl.find_opt symbols id)
+                      | _ -> None )
+                    structure.str_type
+                in
+                List.iter
+                  (function
+                    | Types.Sig_value (id, _, _) ->
+                        Option.iter
+                          (Hashtbl.replace symbols id)
+                          (List.assoc_opt (Ident.name id) targets)
+                    | _ -> () )
+                  opened.open_bound_items
+            | _ -> () )
+          | _ -> () )
     ; value_binding=
         (fun self vb ->
           register vb ;

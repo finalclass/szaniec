@@ -1419,6 +1419,7 @@ let walk_unit
           (List.map (compiler_path ~project_root cmt) cmt.cmt_loadpath.hidden) ;
       Env.reset_cache () ;
       Envaux.reset_cache () ;
+      let s = if execution then Binding_operators.lower s else s in
       let unit_canonical = Canonical.of_unit_name ~library:lib ~unit_name in
       let c =
         { project_root
