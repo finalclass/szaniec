@@ -603,6 +603,9 @@ let check (req : request) : Finding.report =
 let evidence_gap (g : Observation.gap) : bool =
   match g.Observation.gap_code with
   | "GAP-STALE-ARTIFACT"
+   |"GAP-MISSING-INPUT"
+   |"GAP-UNVERIFIABLE-TRANSFORMATION"
+   |"GAP-INCOMPLETE-ARTIFACT"
    |"GAP-BUILD"
    |"GAP-UNOBSERVED-SOURCE"
    |"GAP-ARTIFACT-READ"
@@ -662,7 +665,8 @@ let prepare ?evidence (req : request) =
   in
   (policy, resolution, cy, observation, interpretation)
 
-let complexity (req : request) ~(sort : string) : Complexity.t =
+let complexity (req : request) ~(sort : string) ~(metric : string) :
+    Complexity.t =
   let policy, resolution, cy, observation =
     prepare_observation
       ~evidence:Szaniec_program_access.Ocaml_adapter.Measurement
@@ -732,7 +736,7 @@ let complexity (req : request) ~(sort : string) : Complexity.t =
         ; col= f.Observation.fn_col
         ; end_line= f.Observation.fn_end_line
         ; end_col= f.Observation.fn_end_col
-        ; complexity= Complexity.complexity_of f.Observation.fn_measure
+        ; complexity= Complexity.complexity_of ~metric f.Observation.fn_measure
         ; status= Complexity.status_name f.Observation.fn_measure } )
       observation.Observation.functions
   in
@@ -756,7 +760,11 @@ let complexity (req : request) ~(sort : string) : Complexity.t =
     then "unknown"
     else observation.Observation.compiler_series
   in
-  { Complexity.status= (if incomplete then "incomplete" else "ok")
+  { Complexity.metric=
+      ( if metric = "cyclomatic"
+        then Version.cyclomatic_metric
+        else Version.complexity_metric )
+  ; status= (if incomplete then "incomplete" else "ok")
   ; policy_name= policy.Policy.name
   ; policy_digest=
       resolution.Szaniec_architecture_access.Architecture_access.policy_digest

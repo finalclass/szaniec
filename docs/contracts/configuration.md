@@ -59,6 +59,7 @@ no_callgraph = false
 out = "szaniec.json"
 
 [complexity]
+metric = "cognitive" # cognitive (default) or cyclomatic
 rebuild = false
 json = false
 sort = "location"

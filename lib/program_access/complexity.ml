@@ -1,4 +1,4 @@
-(* Local cyclomatic complexity, szaniec-cc/1.
+(* Local Cognitive Complexity and cyclomatic complexity.
 
    Walks one typed structure and returns every syntactic function plus
    GAP-UNMEASURABLE records. See docs/contracts/complexity-metric.md.
@@ -24,6 +24,7 @@ type st =
   { project_root: string
   ; source_path: string
   ; unit_canonical: string
+  ; recursive_functions: (int * int, unit) Hashtbl.t
   ; mutable raws: raw list
   ; mutable gaps: Observation.gap list }
 
@@ -86,15 +87,23 @@ let simple_name (p : Typedtree.pattern) : string option =
   | Tpat_alias (_, id, _, _, _) -> Some (Ident.name id)
   | _ -> None
 
-let ( ++ ) (n, u) (m, v) = (n + m, u || v)
+type scores =
+  { cognitive: int
+  ; cyclomatic: int }
+
+let zero = {cognitive= 0; cyclomatic= 0}
+
+let cost cognitive cyclomatic = ({cognitive; cyclomatic}, false)
+
+let ( ++ ) (n, u) (m, v) =
+  ( { cognitive= n.cognitive + m.cognitive
+    ; cyclomatic= n.cyclomatic + m.cyclomatic }
+  , u || v )
+
+let structural loc depth = if ghost loc then 0 else 1 + depth
 
 let authored_case (c : _ Typedtree.case) : bool =
   not (ghost c.Typedtree.c_lhs.Typedtree.pat_loc)
-
-let guard_extra (c : _ Typedtree.case) : int =
-  match c.Typedtree.c_guard with
-  | Some e when not (ghost e.Typedtree.exp_loc) -> 1
-  | _ -> 0
 
 let rec applied_desc (e : Typedtree.expression) : Types.value_description option
     =
@@ -113,6 +122,101 @@ let is_short_circuit (fn : Typedtree.expression) : bool =
     | _ -> false )
   | None -> false
 
+let logical_node (e : Typedtree.expression) =
+  if ghost e.Typedtree.exp_loc
+  then None
+  else
+    match e.Typedtree.exp_desc with
+    | Texp_apply (fn, [(_, Typedtree.Arg left); (_, Typedtree.Arg right)])
+      when is_short_circuit fn ->
+        let op =
+          match applied_desc fn with
+          | Some {Types.val_kind= Types.Val_prim prim; _} ->
+              prim.Primitive.prim_name
+          | _ -> assert false
+        in
+        Some (op, left, right)
+    | _ -> None
+
+let span_key loc =
+  (loc.Location.loc_start.Lexing.pos_cnum, loc.Location.loc_end.Lexing.pos_cnum)
+
+(* Resolve call cycles inside recursive binding groups by compiler identity.
+   Merely writing [let rec], or calling a different member once, is not a cycle.
+   Nested functions have their own bodies and their own recursion scores. *)
+let recursive_functions structure =
+  let spans = Hashtbl.create 16 in
+  let group vbs =
+    let functions =
+      List.filter_map
+        (fun vb ->
+          match
+            ( vb.Typedtree.vb_pat.Typedtree.pat_desc
+            , vb.Typedtree.vb_expr.Typedtree.exp_desc )
+          with
+          | Tpat_var (id, _, _), Texp_function _ ->
+              Some (id, vb.Typedtree.vb_expr)
+          | _ -> None )
+        vbs
+    in
+    let graph = Hashtbl.create (List.length functions) in
+    List.iter
+      (fun (id, expr) ->
+        let calls = ref [] in
+        let collector =
+          { Tast_iterator.default_iterator with
+            module_expr= (fun _ _ -> ())
+          ; expr=
+              (fun self e ->
+                match e.Typedtree.exp_desc with
+                | Texp_function _ -> ()
+                | Texp_apply
+                    ({exp_desc= Texp_ident (Path.Pident target, _, _); _}, _)
+                  when not (ghost e.Typedtree.exp_loc) ->
+                    calls := target :: !calls ;
+                    Tast_iterator.default_iterator.expr self e
+                | _ -> Tast_iterator.default_iterator.expr self e ) }
+        in
+        Tast_iterator.default_iterator.expr collector expr ;
+        Hashtbl.add graph id !calls )
+      functions ;
+    List.iter
+      (fun (origin, expr) ->
+        let seen = Hashtbl.create 8 in
+        let rec reaches = function
+          | [] -> false
+          | id :: _ when Ident.same id origin -> true
+          | id :: rest ->
+              if Hashtbl.mem seen id
+              then reaches rest
+              else (
+                Hashtbl.add seen id () ;
+                reaches
+                  (Option.value ~default:[] (Hashtbl.find_opt graph id) @ rest)
+                )
+        in
+        if reaches (Hashtbl.find graph origin)
+        then Hashtbl.replace spans (span_key expr.Typedtree.exp_loc) () )
+      functions
+  in
+  let iterator =
+    { Tast_iterator.default_iterator with
+      structure_item=
+        (fun self item ->
+          ( match item.Typedtree.str_desc with
+          | Tstr_value (Asttypes.Recursive, vbs) -> group vbs
+          | _ -> () ) ;
+          Tast_iterator.default_iterator.structure_item self item )
+    ; expr=
+        (fun self expr ->
+          ( match expr.Typedtree.exp_desc with
+          | Texp_let (Asttypes.Recursive, vbs, _) -> group vbs
+          | _ -> () ) ;
+          Tast_iterator.default_iterator.expr self expr ) }
+  in
+  iterator.structure iterator structure ;
+  spans
+
 let rec define
     (st : st)
     ~(scope : string)
@@ -120,6 +224,7 @@ let rec define
     ~(name : string)
     ~(kind : Observation.fn_kind)
     ~(loc : Location.t)
+    ~(recursive : bool)
     (params : Typedtree.function_param list)
     (body : Typedtree.function_body) =
   let qualname =
@@ -134,7 +239,8 @@ let rec define
     add_gap
       st
       (Printf.sprintf
-         "function %s contains a construct szaniec-cc/1 does not measure"
+         "function %s contains a construct the complexity metrics do not \
+          measure"
          qualname )
       loc ;
   st.raws <-
@@ -152,73 +258,80 @@ let rec define
     ; measure=
         ( if unmeasurable
           then Observation.Fn_unmeasurable
-          else Observation.Fn_measured (1 + d) ) }
+          else
+            Observation.Fn_measured
+              { cognitive= (d.cognitive + if recursive then 1 else 0)
+              ; cyclomatic= 1 + d.cyclomatic } ) }
     :: st.raws
 
 and measure_body
     (st : st)
     (scope : string)
     (params : Typedtree.function_param list)
-    (body : Typedtree.function_body) : int * bool =
+    (body : Typedtree.function_body) : scores * bool =
   let acc =
     List.fold_left
       (fun acc (fp : Typedtree.function_param) ->
         match fp.Typedtree.fp_kind with
         | Typedtree.Tparam_optional_default (_, expr) ->
-            acc ++ decisions st scope true expr
+            acc ++ decisions st scope true 0 expr
         | Typedtree.Tparam_pat _ -> acc )
-      (0, false)
+      (zero, false)
       params
   in
   match body with
-  | Typedtree.Tfunction_body expr -> acc ++ decisions st scope true expr
+  | Typedtree.Tfunction_body expr -> acc ++ decisions st scope true 0 expr
   | Typedtree.Tfunction_cases {cases; _} ->
-      acc ++ case_split st scope true cases
+      acc ++ case_split st scope true 0 cases
 
 and case_parts :
-    'k. st -> string -> bool -> 'k Typedtree.case list -> int * int * bool =
- fun st scope inside cases ->
-  let authored = List.filter authored_case cases in
-  let guards = List.fold_left (fun n c -> n + guard_extra c) 0 authored in
-  let d, u =
-    List.fold_left
-      (fun acc (c : _ Typedtree.case) ->
-        let acc =
-          match c.Typedtree.c_guard with
-          | Some e when not (ghost e.Typedtree.exp_loc) ->
-              acc ++ decisions st scope inside e
-          | _ -> acc
-        in
-        acc ++ decisions st scope inside c.Typedtree.c_rhs )
-      (0, false)
-      authored
-  in
-  (List.length authored, guards + d, u)
+    'k. st -> string -> bool -> int -> 'k Typedtree.case list -> scores * bool =
+ fun st scope inside depth cases ->
+  List.fold_left
+    (fun acc (c : _ Typedtree.case) ->
+      let acc =
+        match c.Typedtree.c_guard with
+        | Some e when authored_case c && not (ghost e.Typedtree.exp_loc) ->
+            acc ++ cost (1 + depth) 1 ++ decisions st scope inside depth e
+        | Some e -> acc ++ decisions st scope inside depth e
+        | None -> acc
+      in
+      acc ++ decisions st scope inside depth c.Typedtree.c_rhs )
+    (zero, false)
+    cases
 
 and case_split
     (st : st)
     (scope : string)
     (inside : bool)
-    (cases : _ Typedtree.case list) : int * bool =
-  let n, rest, u = case_parts st scope inside cases in
-  let split = if n <= 1 then 0 else n - 1 in
-  (split + rest, u)
+    (depth : int)
+    (cases : _ Typedtree.case list) : scores * bool =
+  let n = List.length (List.filter authored_case cases) in
+  let active = n > 0 in
+  cost (if active then 1 + depth else 0) (max 0 (n - 1))
+  ++ case_parts st scope inside (if active then depth + 1 else depth) cases
 
 and case_handlers
     (st : st)
     (scope : string)
     (inside : bool)
-    (cases : _ Typedtree.case list) : int * bool =
-  let n, rest, u = case_parts st scope inside cases in
-  (* The tried body is already the incoming path, so every handler adds
-     one. This differs from match, whose first arm is that incoming path. *)
-  (n + rest, u)
+    (depth : int)
+    (cases : _ Typedtree.case list) : scores * bool =
+  List.fold_left
+    (fun acc c ->
+      let active = authored_case c in
+      acc
+      ++ cost (if active then 1 + depth else 0) (if active then 1 else 0)
+      ++ case_parts st scope inside (if active then depth + 1 else depth) [c] )
+    (zero, false)
+    cases
 
 and bind_expr
     (st : st)
     (scope : string)
     (inside : bool)
-    (vb : Typedtree.value_binding) : int * bool =
+    (depth : int)
+    (vb : Typedtree.value_binding) : scores * bool =
   match vb.Typedtree.vb_expr.Typedtree.exp_desc with
   | Texp_function (params, body) ->
       let name, kind =
@@ -226,15 +339,28 @@ and bind_expr
         | Some n -> (n, Observation.Fn_named)
         | None -> ("anon", Observation.Fn_anonymous)
       in
-      define st ~scope ~inside ~name ~kind ~loc:vb.Typedtree.vb_loc params body ;
-      (0, false)
-  | _ -> decisions st scope inside vb.Typedtree.vb_expr
+      define
+        st
+        ~scope
+        ~inside
+        ~name
+        ~kind
+        ~loc:vb.Typedtree.vb_loc
+        ~recursive:
+          (Hashtbl.mem
+             st.recursive_functions
+             (span_key vb.Typedtree.vb_expr.Typedtree.exp_loc) )
+        params
+        body ;
+      (zero, false)
+  | _ -> decisions st scope inside depth vb.Typedtree.vb_expr
 
 and decisions
     (st : st)
     (scope : string)
     (inside : bool)
-    (e : Typedtree.expression) : int * bool =
+    (depth : int)
+    (e : Typedtree.expression) : scores * bool =
   match e.Typedtree.exp_desc with
   | Texp_function (params, body) ->
       define
@@ -244,104 +370,123 @@ and decisions
         ~name:"anon"
         ~kind:Observation.Fn_anonymous
         ~loc:e.Typedtree.exp_loc
+        ~recursive:false
         params
         body ;
-      (0, false)
+      (zero, false)
   | Texp_let (_, vbs, body) ->
       List.fold_left
-        (fun acc vb -> acc ++ bind_expr st scope inside vb)
-        (0, false)
+        (fun acc vb -> acc ++ bind_expr st scope inside depth vb)
+        (zero, false)
         vbs
-      ++ decisions st scope inside body
-  | Texp_apply (fn, args) ->
-      let extra =
-        if ghost e.Typedtree.exp_loc || not (is_short_circuit fn) then 0 else 1
-      in
-      let acc = (extra, false) ++ decisions st scope inside fn in
-      List.fold_left
-        (fun acc (_lbl, arg) ->
-          match arg with
-          | Typedtree.Arg a -> acc ++ decisions st scope inside a
-          | Typedtree.Omitted _ -> acc )
-        acc
-        args
+      ++ decisions st scope inside depth body
+  | Texp_apply (fn, args) -> (
+    match logical_node e with
+    | Some _ ->
+        let previous = ref None in
+        let rec logical expr =
+          match logical_node expr with
+          | Some (op, left, right) ->
+              let left_score = logical left in
+              let cognitive = if !previous = Some op then 0 else 1 in
+              previous := Some op ;
+              let right_score = logical right in
+              left_score ++ cost cognitive 1 ++ right_score
+          | None -> decisions st scope inside depth expr
+        in
+        logical e
+    | None ->
+        let extra =
+          if ghost e.Typedtree.exp_loc || not (is_short_circuit fn)
+          then 0
+          else 1
+        in
+        (* A partial primitive application does not evaluate a boolean choice.
+           Retain its legacy cyclomatic count for existing inventory consumers. *)
+        let acc = cost 0 extra ++ decisions st scope inside depth fn in
+        List.fold_left
+          (fun acc (_lbl, arg) ->
+            match arg with
+            | Typedtree.Arg a -> acc ++ decisions st scope inside depth a
+            | Typedtree.Omitted _ -> acc )
+          acc
+          args )
   | Texp_match (scrut, comp_cases, effect_cases, _) ->
-      let n1, rest1, u1 = case_parts st scope inside comp_cases in
-      let n2, rest2, u2 = case_parts st scope inside effect_cases in
-      let n = n1 + n2 in
-      let split = if n <= 1 then 0 else n - 1 in
-      (split + rest1 + rest2, u1 || u2) ++ decisions st scope inside scrut
-  | Texp_try (body, exn_cases, eff_cases) ->
-      let h1, u1 = case_handlers st scope inside exn_cases in
-      let h2, u2 = case_handlers st scope inside eff_cases in
-      (h1 + h2, u1 || u2) ++ decisions st scope inside body
-  | Texp_ifthenelse (a, b, opt) -> (
-      let extra = if ghost e.Typedtree.exp_loc then 0 else 1 in
-      let acc =
-        (extra, false)
-        ++ decisions st scope inside a
-        ++ decisions st scope inside b
+      let n =
+        List.length (List.filter authored_case comp_cases)
+        + List.length (List.filter authored_case effect_cases)
       in
-      match opt with
-      | Some c -> acc ++ decisions st scope inside c
-      | None -> acc )
+      let active = (not (ghost e.Typedtree.exp_loc)) && n > 0 in
+      let branch_depth = if active then depth + 1 else depth in
+      cost (if active then 1 + depth else 0) (max 0 (n - 1))
+      ++ decisions st scope inside depth scrut
+      ++ case_parts st scope inside branch_depth comp_cases
+      ++ case_parts st scope inside branch_depth effect_cases
+  | Texp_try (body, exn_cases, eff_cases) ->
+      decisions st scope inside depth body
+      ++ case_handlers st scope inside depth exn_cases
+      ++ case_handlers st scope inside depth eff_cases
+  | Texp_ifthenelse _ -> conditional st scope inside depth false e
   | Texp_while (cond, body) ->
-      let extra = if ghost e.Typedtree.exp_loc then 0 else 1 in
-      (extra, false)
-      ++ decisions st scope inside cond
-      ++ decisions st scope inside body
+      let active = not (ghost e.Typedtree.exp_loc) in
+      let nested = if active then depth + 1 else depth in
+      cost (structural e.Typedtree.exp_loc depth) (if active then 1 else 0)
+      ++ decisions st scope inside nested cond
+      ++ decisions st scope inside nested body
   | Texp_for (_, _, start, stop, _, body) ->
-      let extra = if ghost e.Typedtree.exp_loc then 0 else 1 in
-      (extra, false)
-      ++ decisions st scope inside start
-      ++ decisions st scope inside stop
-      ++ decisions st scope inside body
+      let active = not (ghost e.Typedtree.exp_loc) in
+      let nested = if active then depth + 1 else depth in
+      cost (structural e.Typedtree.exp_loc depth) (if active then 1 else 0)
+      ++ decisions st scope inside nested start
+      ++ decisions st scope inside nested stop
+      ++ decisions st scope inside nested body
   | Texp_sequence (a, b) ->
-      decisions st scope inside a ++ decisions st scope inside b
+      decisions st scope inside depth a ++ decisions st scope inside depth b
   | Texp_construct (_, _, args) ->
       List.fold_left
-        (fun acc a -> acc ++ decisions st scope inside a)
-        (0, false)
+        (fun acc a -> acc ++ decisions st scope inside depth a)
+        (zero, false)
         args
   | Texp_tuple el ->
       List.fold_left
-        (fun acc (_l, a) -> acc ++ decisions st scope inside a)
-        (0, false)
+        (fun acc (_l, a) -> acc ++ decisions st scope inside depth a)
+        (zero, false)
         el
   | Texp_array (_, el) ->
       List.fold_left
-        (fun acc a -> acc ++ decisions st scope inside a)
-        (0, false)
+        (fun acc a -> acc ++ decisions st scope inside depth a)
+        (zero, false)
         el
   | Texp_variant (_, eo) -> (
     match eo with
-    | Some a -> decisions st scope inside a
-    | None -> (0, false) )
+    | Some a -> decisions st scope inside depth a
+    | None -> (zero, false) )
   | Texp_record {fields; extended_expression; _} -> (
       let acc =
         Array.fold_left
           (fun acc (_lbl, def) ->
             match def with
-            | Typedtree.Overridden (_, a) -> acc ++ decisions st scope inside a
+            | Typedtree.Overridden (_, a) ->
+                acc ++ decisions st scope inside depth a
             | Typedtree.Kept _ -> acc )
-          (0, false)
+          (zero, false)
           fields
       in
       match extended_expression with
-      | Some a -> acc ++ decisions st scope inside a
+      | Some a -> acc ++ decisions st scope inside depth a
       | None -> acc )
-  | Texp_field (a, _, _) -> decisions st scope inside a
+  | Texp_field (a, _, _) -> decisions st scope inside depth a
   | Texp_setfield (a, _, _, b) ->
-      decisions st scope inside a ++ decisions st scope inside b
-  | Texp_atomic_loc (a, _, _) -> decisions st scope inside a
-  | Texp_assert (a, _) -> decisions st scope inside a
-  | Texp_lazy a -> decisions st scope inside a
+      decisions st scope inside depth a ++ decisions st scope inside depth b
+  | Texp_atomic_loc (a, _, _) -> decisions st scope inside depth a
+  | Texp_assert (a, _) -> decisions st scope inside depth a
+  | Texp_lazy a -> decisions st scope inside depth a
   | Texp_pack m ->
       walk_module st scope inside m ;
-      (0, false)
+      (zero, false)
   | Texp_open (od, body) ->
       walk_module st scope inside od.Typedtree.open_expr ;
-      decisions st scope inside body
+      decisions st scope inside depth body
   | Texp_letmodule (_, name, _, m, body) ->
       let n =
         match name.Asttypes.txt with
@@ -350,35 +495,58 @@ and decisions
       in
       let scope' = if n = "" then scope else qualify scope n in
       walk_module st scope' inside m ;
-      decisions st scope inside body
-  | Texp_letexception (_, body) -> decisions st scope inside body
+      decisions st scope inside depth body
+  | Texp_letexception (_, body) -> decisions st scope inside depth body
   | Texp_letop {let_; ands; body; _} ->
-      let acc = decisions st scope inside let_.Typedtree.bop_exp in
+      let acc = decisions st scope inside depth let_.Typedtree.bop_exp in
       let acc =
         List.fold_left
-          (fun acc b -> acc ++ decisions st scope inside b.Typedtree.bop_exp)
+          (fun acc b ->
+            acc ++ decisions st scope inside depth b.Typedtree.bop_exp )
           acc
           ands
       in
       let acc =
         match body.Typedtree.c_guard with
         | Some g when not (ghost g.Typedtree.exp_loc) ->
-            acc ++ (1, false) ++ decisions st scope inside g
+            acc ++ cost (1 + depth) 1 ++ decisions st scope inside depth g
         | _ -> acc
       in
-      acc ++ decisions st scope inside body.Typedtree.c_rhs
+      acc ++ decisions st scope inside depth body.Typedtree.c_rhs
   | Texp_ident _
    |Texp_constant _
    |Texp_unreachable
    |Texp_extension_constructor _ ->
-      (0, false)
+      (zero, false)
   | Texp_object _
    |Texp_send _
    |Texp_new _
    |Texp_instvar _
    |Texp_setinstvar _
    |Texp_override _ ->
-      (0, true)
+      (zero, true)
+
+and conditional st scope inside depth chained e =
+  match e.Typedtree.exp_desc with
+  | Texp_ifthenelse (cond, yes, no) -> (
+      let active = not (ghost e.Typedtree.exp_loc) in
+      let nested = if active then depth + 1 else depth in
+      let own = if active then if chained then 1 else 1 + depth else 0 in
+      let acc =
+        cost own (if active then 1 else 0)
+        ++ decisions st scope inside depth cond
+        ++ decisions st scope inside nested yes
+      in
+      match no with
+      | Some ({Typedtree.exp_desc= Texp_ifthenelse _; exp_loc; _} as next)
+        when not (ghost exp_loc) ->
+          acc ++ conditional st scope inside depth true next
+      | Some other ->
+          acc
+          ++ cost (if active then 1 else 0) 0
+          ++ decisions st scope inside nested other
+      | None -> acc )
+  | _ -> decisions st scope inside depth e
 
 and walk_module
     (st : st)
@@ -394,12 +562,13 @@ and walk_module
       walk_module st scope inside b
   | Tmod_apply_unit m -> walk_module st scope inside m
   | Tmod_unpack (e, _) ->
-      let _, u = decisions st scope inside e in
+      let _, u = decisions st scope inside 0 e in
       if u
       then
         add_gap
           st
-          "packed module contains a construct szaniec-cc/1 does not measure"
+          "packed module contains a construct the complexity metrics do not \
+           measure"
           e.Typedtree.exp_loc
   | Tmod_ident _ -> ()
 
@@ -414,13 +583,13 @@ and walk_items
       | Tstr_value (_, vbs) ->
           List.iter
             (fun vb ->
-              let _, u = bind_expr st scope inside vb in
+              let _, u = bind_expr st scope inside 0 vb in
               if u
               then
                 add_gap
                   st
-                  "expression contains a construct szaniec-cc/1 does not \
-                   measure"
+                  "expression contains a construct the complexity metrics do \
+                   not measure"
                   vb.Typedtree.vb_loc )
             vbs
       | Tstr_module mb ->
@@ -444,19 +613,19 @@ and walk_items
             mbs
       | Tstr_include inc -> walk_module st scope inside inc.Typedtree.incl_mod
       | Tstr_eval (e, _) ->
-          let _, u = decisions st scope inside e in
+          let _, u = decisions st scope inside 0 e in
           if u
           then
             add_gap
               st
-              "toplevel expression contains a construct szaniec-cc/1 does not \
-               measure"
+              "toplevel expression contains a construct the complexity metrics \
+               do not measure"
               e.Typedtree.exp_loc
       | Tstr_class _
        |Tstr_class_type _ ->
           add_gap
             st
-            "class definitions are outside szaniec-cc/1"
+            "class definitions are outside the complexity metrics"
             i.Typedtree.str_loc
       | Tstr_primitive _
        |Tstr_type _
@@ -543,7 +712,14 @@ let measure
     ~(unit_canonical : string)
     (structure : Typedtree.structure) :
     Observation.function_def list * Observation.gap list =
-  let st = {project_root; source_path; unit_canonical; raws= []; gaps= []} in
+  let st =
+    { project_root
+    ; source_path
+    ; unit_canonical
+    ; recursive_functions= recursive_functions structure
+    ; raws= []
+    ; gaps= [] }
+  in
   walk_items st "" false structure.Typedtree.str_items ;
   let by_gap a b =
     compare

@@ -7,15 +7,17 @@ let callgraph_format = "szaniec-callgraph/3"
 
 let complexity_format = "szaniec-complexity/1"
 
-let complexity_metric = "szaniec-cc/1"
+let complexity_metric = "szaniec-cognitive/1"
+
+let cyclomatic_metric = "szaniec-cc/1"
 
 let config_format = "szaniec-config/1"
 
-let observation_format = "szaniec-observation/6"
+let observation_format = "szaniec-observation/7"
 
 let interpretation_format = "szaniec-interpretation/6"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.8.0"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.9.0"
 
 let adapter_well = "szaniec-well-adapter/3.7.0"
 

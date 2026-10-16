@@ -20,8 +20,10 @@ let usage =
   \   Check implementation against approved architecture; report violations \
    and evidence gaps.\n\n\
   \ szaniec complexity [--config <path>] [--project-root <dir>]\n\
-  \                    [--rebuild] [--json] [--sort location|complexity]\n\
-  \   List functions and their local cyclomatic complexity.\n\n\
+  \                    [--rebuild] [--json] [--sort location|complexity] \
+   [--metric cognitive|cyclomatic]\n\
+  \   List functions and their Cognitive Complexity (default), or cyclomatic \
+   complexity.\n\n\
   \ szaniec coverage [--project-root <dir>] [--config <path>] [--json]\n\
   \                  [--out <path>] [--keep-work] [--function-inventory <path>]\n\
   \   Run an existing scenario on an instrumented application; report point \
@@ -73,7 +75,8 @@ type args =
   ; suggestion_id: string
   ; decision: string
   ; rationale: string
-  ; sort: string }
+  ; sort: string
+  ; metric: string }
 
 let int_arg (flag : string) (raw : string) : int =
   match int_of_string raw with
@@ -120,6 +123,7 @@ let rec parse (argv : string list) (acc : args) : args =
   | "--decision" :: p :: rest -> parse rest {acc with decision= p}
   | "--rationale" :: p :: rest -> parse rest {acc with rationale= p}
   | "--sort" :: s :: rest -> parse rest {acc with sort= s}
+  | "--metric" :: metric :: rest -> parse rest {acc with metric}
   | cmd :: rest
     when acc.command = ""
          && ( cmd = "init"
@@ -160,7 +164,8 @@ let default_args =
   ; suggestion_id= ""
   ; decision= ""
   ; rationale= ""
-  ; sort= "" }
+  ; sort= ""
+  ; metric= "" }
 
 (* ── rendering ────────────────────────────────────────────────────── *)
 
@@ -519,7 +524,7 @@ let complexity_text (r : Complexity.t) : string =
     (Printf.sprintf
        "szaniec complexity %s (%s)\n"
        r.Complexity.status
-       Version.complexity_metric ) ;
+       r.Complexity.metric ) ;
   Buffer.add_string
     buf
     (Printf.sprintf
@@ -636,7 +641,7 @@ let complexity_json (r : Complexity.t) : string =
             ; ("col", `Int e.Complexity.end_col) ] )
       ; ("complexity", opt_int e.Complexity.complexity)
       ; ("status", `String e.Complexity.status)
-      ; ("metric", `String Version.complexity_metric) ]
+      ; ("metric", `String r.Complexity.metric) ]
   in
   let jcov (c : Observation.file_coverage) =
     `Assoc
@@ -656,7 +661,7 @@ let complexity_json (r : Complexity.t) : string =
   let json =
     `Assoc
       [ ("format", `String Version.complexity_format)
-      ; ("metric", `String Version.complexity_metric)
+      ; ("metric", `String r.Complexity.metric)
       ; ("status", `String r.Complexity.status)
       ; ("sort", `String r.Complexity.sort)
       ; ( "inputs"
@@ -999,7 +1004,11 @@ let configured_args (config : Config.t) command =
       ; no_callgraph= c.no_callgraph }
   | "complexity" ->
       let c = config.complexity in
-      {defaults with rebuild= c.rebuild; json= c.json; sort= c.sort}
+      { defaults with
+        rebuild= c.rebuild
+      ; json= c.json
+      ; sort= c.sort
+      ; metric= c.metric }
   | "suggestions" ->
       let c = config.suggestions in
       { defaults with
@@ -1038,9 +1047,10 @@ let main () =
       then (
         prerr_endline usage ;
         exit 2 ) ;
-      if args.command <> "complexity" && args.sort <> ""
+      if args.command <> "complexity" && (args.sort <> "" || args.metric <> "")
       then (
-        prerr_endline "szaniec: --sort is only valid with complexity" ;
+        prerr_endline
+          "szaniec: --sort and --metric are only valid with complexity" ;
         exit 2 ) ;
       if args.summary && (args.command <> "check" || args.json)
       then (
@@ -1187,6 +1197,11 @@ let main () =
                   else S.text_of_report report ) ;
               exit (S.exit_code report) )
       | "complexity" -> (
+          let metric = if args.metric = "" then "cognitive" else args.metric in
+          if metric <> "cognitive" && metric <> "cyclomatic"
+          then (
+            prerr_endline "szaniec: --metric must be cognitive or cyclomatic" ;
+            exit 2 ) ;
           let sort = if args.sort = "" then "location" else args.sort in
           if sort <> "location" && sort <> "complexity"
           then (
@@ -1197,6 +1212,7 @@ let main () =
             let report =
               Szaniec_inspection_manager.Inspection_manager.complexity
                 ~sort
+                ~metric
                 { Szaniec_inspection_manager.Inspection_manager.project_root=
                     root
                 ; config

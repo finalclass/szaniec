@@ -69,6 +69,24 @@ let () =
   in
   rm_rf root ;
   Unix.mkdir root 0o755 ;
+  let inventory_path = root // "inventory.json" in
+  let inventory metric =
+    Printf.sprintf
+      {|{"format":"szaniec-complexity/1","metric":"%s","functions":[]}|}
+      metric
+  in
+  write inventory_path (inventory "szaniec-cc/1") ;
+  ( match F.load_inventory inventory_path with
+  | Ok [] -> ok "cyclomatic inventory accepted"
+  | _ -> fail "cyclomatic inventory accepted" "valid metric rejected" ) ;
+  List.iter
+    (fun metric ->
+      write inventory_path (inventory metric) ;
+      match F.load_inventory inventory_path with
+      | Error {C.code= "COVERAGE-INVENTORY-INVALID"; _} -> ()
+      | _ -> fail "CRAP metric validation" ("accepted " ^ metric) )
+    ["szaniec-cognitive/1"; ""; "unknown"] ;
+  ok "CRAP rejects cognitive and missing metrics" ;
   let rel = "lib/core.ml" in
   Unix.mkdir (root // "lib") 0o755 ;
   write

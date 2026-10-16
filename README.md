@@ -40,7 +40,7 @@ The following commands have executable implementations:
 | `init` | Create minimal analysis configuration without overwriting an existing file | New `szaniec.toml` |
 | `approve` | Record the selected policy's name and SHA-256 digest | `[approval]` in `szaniec.toml` |
 | `check` | Check service interactions and project boundaries | Text or `szaniec-report/1` JSON; separate call graph |
-| `complexity` | Inventory syntactic functions and local cyclomatic complexity | Text or `szaniec-complexity/1` JSON |
+| `complexity` | Inventory syntactic functions and local Cognitive Complexity | Text or `szaniec-complexity/1` JSON |
 | `coverage` | Build with instrumentation and run an existing scenario | Text or `szaniec-coverage/1` JSON |
 | `suggestions` | Review selected source context with Jev or a local fixture | Text or `szaniec-suggestions/1` JSON |
 
@@ -489,15 +489,20 @@ szaniec complexity --json \
   > /tmp/my-app-functions.json
 ```
 
-The metric is local cyclomatic complexity `szaniec-cc/1`. Straight-line code
-starts at 1; decisions add to the count. Simple examples:
+The metric is local Cognitive Complexity `szaniec-cognitive/1`. Straight-line code
+starts at 0; flow breaks and their nesting add to the score. Simple examples:
 
 ```ocaml
-let increment x = x + 1                         (* complexity 1 *)
+let increment x = x + 1                         (* complexity 0 *)
 let absolute x = if x < 0 then -x else x         (* complexity 2 *)
 let sign x =                                   (* complexity 3 *)
   if x < 0 then -1 else if x = 0 then 0 else 1
 ```
+
+A flat match costs once regardless of arm count; nested matches cost more.
+Sequential Result binding operators do not increase nesting. Use
+`--metric cyclomatic` for the legacy path-count metric, or set
+`[complexity].metric` to `cognitive` (default) or `cyclomatic`.
 
 Matches, guards, short-circuit operators, loops, and exception/effect handlers
 have metric-specific counting rules. Nested functions are separate entries;
@@ -616,16 +621,17 @@ with no instrumented points is **uninstrumented**, not measured at 0%.
 Summary counts distinguish these states. Scenario failure and collection gaps
 are reported separately and can coexist.
 
-Supply the complexity inventory to calculate per-function CRAP:
+Supply a cyclomatic inventory to calculate per-function CRAP:
 
 ```sh
-szaniec complexity --rebuild --json \
+szaniec complexity --metric cyclomatic --rebuild --json \
   > /tmp/my-app-functions.json
 szaniec coverage --function-inventory /tmp/my-app-functions.json \
   --json --out /tmp/my-app-coverage.json
 ```
 
-For point coverage fraction `c` and local complexity `cc`:
+CRAP requires `szaniec-cc/1`; cognitive inventories are rejected.
+For point coverage fraction `c` and cyclomatic complexity `cc`:
 
 ```text
 CRAP = cc^2 * (1 - c)^3 + cc

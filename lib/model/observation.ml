@@ -129,7 +129,9 @@ type fn_provenance =
   | Prov_test
 
 type fn_measure =
-  | Fn_measured of int
+  | Fn_measured of
+      { cognitive: int
+      ; cyclomatic: int }
   | Fn_unmeasurable
 
 (* One syntactic function. [fn_qualname] is the name relative to the unit

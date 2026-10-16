@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/6`.
+Format identifier (conceptual): `szaniec-observation/7`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -214,9 +214,10 @@ their existing conformance and repetition semantics remain unchanged.
 ## Function inventory
 
 `functions` is the syntactic-function inventory measured by
-[szaniec-cc/1](complexity-metric.md). Each entry has a deterministic id,
+[szaniec-cognitive/1](complexity-metric.md). Each entry has a deterministic id,
 a source span, provenance (`authored`, `generated`, or `test`), and
-either a complexity or an unmeasurable status. Nested bodies are
+either both cognitive and cyclomatic scores or an unmeasurable status.
+The CLI selects which score to render; cached observations retain both. Nested bodies are
 separate entries. Aliases and partial applications are absent.
 
 `coverage` lists every scanned source file and every generated file the

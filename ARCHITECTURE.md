@@ -255,7 +255,7 @@ Implementation-level contracts resolved under this architecture:
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
 - [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.2.0`, don'ts-based.
-- [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cc/1`, local function inventory.
+- [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cognitive/1`, local function inventory.
 - [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
 - [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.

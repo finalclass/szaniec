@@ -352,3 +352,27 @@ Deno.test("outside Git the nearest Dune root supplies configuration", () =>
       "Dune root discovery",
     );
   }));
+
+Deno.test("complexity rejects invalid metric and metric on other commands", () =>
+  project(async (root, nested) => {
+    for (
+      const args of [["complexity", "--metric", "unknown"], [
+        "check",
+        "--metric",
+        "cognitive",
+      ]]
+    ) {
+      const result = await run(nested, ...args);
+      assert(result.code === 2 && result.err.includes("--metric"), result.err);
+    }
+    const config = await Deno.readTextFile(root + "/szaniec.toml");
+    await Deno.writeTextFile(
+      root + "/szaniec.toml",
+      config.replace("[complexity]", '[complexity]\nmetric = "unknown"'),
+    );
+    const result = await run(nested, "complexity");
+    assert(
+      result.code === 2 && result.err.includes("complexity.metric"),
+      result.err,
+    );
+  }));

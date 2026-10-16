@@ -1,4 +1,4 @@
-(* szaniec-cc/1 specimens. Expected complexities are asserted by
+(* szaniec-cognitive/1 specimens. Expected complexities are asserted by
    test/acceptance/complexity_runner.ml. [alias_of_straight] and
    [partial_apply] are not function definitions. *)
 
