@@ -72,6 +72,13 @@ let observe
     | _ -> false
   in
   let function_type e = callable_type e.exp_env e.exp_type in
+  let binding_id pattern =
+    match pattern.pat_desc with
+    | Tpat_var (id, _, _)
+     |Tpat_alias ({pat_desc= Tpat_any; _}, id, _, _, _) ->
+        Some id
+    | _ -> None
+  in
   let type_path e =
     match Types.get_desc e.exp_type with
     | Types.Tconstr (path, _, _) -> Path.name path
@@ -203,8 +210,8 @@ let observe
     | _ -> ""
   and register vb =
     bind_result (result_source vb.vb_expr) vb.vb_pat ;
-    match vb.vb_pat.pat_desc with
-    | Tpat_var (id, _, _) -> (
+    match binding_id vb.vb_pat with
+    | Some id -> (
       match vb.vb_expr.exp_desc with
       | Texp_function _ when not (Hashtbl.mem symbols id) ->
           let symbol =
@@ -380,13 +387,12 @@ let observe
           | Tstr_value (_, bindings) ->
               List.iter
                 (fun vb ->
-                  match (vb.vb_pat.pat_desc, vb.vb_expr.exp_desc) with
-                  | Tpat_var (id, _, _), Texp_function _ ->
+                  match (binding_id vb.vb_pat, vb.vb_expr.exp_desc) with
+                  | Some id, Texp_function _ ->
                       let symbol = !module_scope ^ "." ^ Ident.name id in
                       Hashtbl.replace symbols id symbol ;
                       Expressions.replace functions vb.vb_expr symbol
-                  | Tpat_var (id, _, _), Texp_apply _
-                    when function_type vb.vb_expr ->
+                  | Some id, Texp_apply _ when function_type vb.vb_expr ->
                       let symbol = !module_scope ^ "." ^ Ident.name id in
                       Hashtbl.replace symbols id symbol ;
                       Expressions.replace functions vb.vb_expr symbol

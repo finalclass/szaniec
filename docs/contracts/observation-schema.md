@@ -113,7 +113,9 @@ monadic or callback semantics. Source sites and typed parameter identities are
 retained. Callable aliases in structure-level opens retain their target across the
 compiler's fresh identifier bindings, matched by declaration UID rather than
 name, including shadowed bindings. Unknown or ambiguous callable aliases remain
-unresolved. Complexity measures the original tree,
+unresolved. A variable binding and the compiler's alias-of-wildcard form for an
+annotated function name retain the same named-definition semantics.
+Complexity measures the original tree,
 without synthetic callbacks.
 Combined `and*` bindings remain unsupported ordered execution and retain gaps
 when relevant to required path analysis.

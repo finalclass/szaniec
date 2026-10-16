@@ -75,6 +75,7 @@ Deno.test("ordered source-to-JSON method flows and explicit uncertainty", async 
         "binding_alias",
         "binding_nested",
         "binding_recursive",
+        "binding_annotated",
       ],
       WarehouseAccess: ["validate", "deduce_items"],
       PaymentEngine: ["ensure_paid"],
@@ -119,6 +120,7 @@ let rec recursive n = if n > 0 then (validate (); recursive (n - 1))
   let (and&) a b = a, b
   let rec again value next = next value; again value next
   let (let^) = again
+  let finish_annotated : unit -> unit = function () -> OrdersAccess.place_order ()
 end
 let binding accept =
   let@ () = WarehouseAccess.validate (); if accept then Ok () else Error () in
@@ -142,6 +144,7 @@ let binding_nested first second =
 let binding_recursive () =
   let^ () = () in
   OrdersAccess.place_order ()
+let binding_annotated () = WarehouseAccess.validate () |> finish_annotated
 let place_order () =
   Helper.validate ();
   PaymentEngine.ensure_paid ();
@@ -289,6 +292,13 @@ let queued () = ignore (Well.request ~cmd:Task_manager.cmd_topic ~reply:Task_man
     assert(
       manager("binding_recursive").flow.status === "incomplete",
       "a genuinely recursive operator still produces incomplete evidence",
+    );
+    const annotated = manager("binding_annotated").flow;
+    assert(annotated.status === "complete", JSON.stringify(annotated));
+    assert(
+      JSON.stringify(alternatives(annotated.steps)) ===
+        '[["WarehouseAccess.validate","OrdersAccess.place_order"]]',
+      "a typed alias pattern retains its function definition and invocation",
     );
     const ordered = manager("place_order");
     assert(ordered.flow.status === "complete", JSON.stringify(ordered.flow));
