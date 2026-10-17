@@ -1,0 +1,14 @@
+(rule
+ (target coaching.ml)
+ (deps ../../bin/coaching.ml)
+ (action (copy %{deps} %{target})))
+
+(rule
+ (target suggestion_render.ml)
+ (deps ../../bin/suggestion_render.ml)
+ (action (copy %{deps} %{target})))
+
+(test
+ (name rendering)
+ (modules rendering coaching suggestion_render)
+ (libraries szaniec_model szaniec_suggestion_manager yojson))

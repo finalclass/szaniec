@@ -98,6 +98,31 @@ roots = ["lib"]
   ) {
     throw new Error("Relocated bundle did not record a valid TOML approval.");
   }
+  const configPath = `${project}/szaniec.toml`;
+  await Deno.writeTextFile(
+    configPath,
+    (await Deno.readTextFile(configPath)).replace(
+      'name = "release-smoke"',
+      'name = "changed-policy"',
+    ),
+  );
+  const incomplete = await new Deno.Command(`${scratch}/szaniec`, {
+    args: ["check", "--json", "--no-callgraph"],
+    cwd: nested,
+  }).output();
+  const coached = JSON.parse(decoder.decode(incomplete.stdout));
+  const approval = coached.findings.find((finding: { rule: string }) =>
+    finding.rule === "GAP-POLICY-NOT-APPROVED"
+  );
+  if (
+    incomplete.code !== 2 ||
+    approval?.coaching?.catalog !== "szaniec-coaching/1" ||
+    approval?.coaching?.id !== "approved-policy"
+  ) {
+    throw new Error(
+      "Relocated bundle did not preserve the gap and its local guide.",
+    );
+  }
 } finally {
   await Deno.remove(scratch, { recursive: true });
 }

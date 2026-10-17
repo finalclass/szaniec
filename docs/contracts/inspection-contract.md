@@ -289,3 +289,8 @@ Human-readable rendering of the same data: input identities, findings
 grouped by rule with locations and evidence paths, exclusions, summary
 and exit status. Rendering belongs to the CheckClient; diagnostic meaning
 stays in this contract.
+
+Every JSON finding also carries the additive `coaching` field defined by
+[diagnostic coaching](coaching.md). Text displays the matching local guide
+after its first trigger. Coaching does not change findings, input identities,
+call graph, summary counts, or exit status; `--summary` omits guides.

@@ -76,6 +76,11 @@ diagnostics stay in the inspection contract; suggestion text stays in the
 suggestion contract. A suggestion run does not change check findings or the
 check exit status.
 
+CheckClient owns local, versioned [diagnostic coaching](docs/contracts/coaching.md)
+selected from existing findings and suggestions. Guides explain repair intent,
+steps, misleading fixes, examples and verification without changing evaluation
+or introducing provider calls. Suggestion presentation also belongs to CheckClient.
+
 Coverage measurement uses the same components. CheckClient adds `szaniec coverage`.
 InspectionManager sequences the instrumented build, the scenario process, and
 collection. ProgramAccess owns the Dune instrumentation facade, runtime flush,
@@ -258,6 +263,7 @@ Implementation-level contracts resolved under this architecture:
 - [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cognitive/1`, local function inventory.
 - [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
 - [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
+- [Diagnostic coaching](docs/contracts/coaching.md) — `szaniec-coaching/1`, local repair guidance in text and JSON reports.
 - [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
 - [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
 
