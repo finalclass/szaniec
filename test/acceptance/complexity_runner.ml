@@ -307,7 +307,7 @@ let check_inventory errors (j : Yojson.Safe.t) =
   let inputs = member "inputs" j in
   if jbool inputs "approved"
   then fail errors "approval must stay a recorded flag" ;
-  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.9.3"
+  if jstr inputs "programAccess" <> "szaniec-ocaml-adapter/1.9.4"
   then fail errors "adapter version" ;
   ( match member "programRoots" inputs with
   | `List [`String "metric"; `String "test"] -> ()
@@ -462,7 +462,14 @@ let check_objects errors (j : Yojson.Safe.t) =
           if jint_opt f "complexity" <> None
           then fail errors (q ^ " complexity is not null") ;
           if jstr f "status" <> "unmeasurable" then fail errors (q ^ " status") )
-    ["make"; "call"] ;
+    ["make"] ;
+  ( match expect_one errors "objects" fns "Metric.Objects" "call" with
+  | None -> ()
+  | Some f ->
+      if jint_opt f "complexity" <> Some 0
+      then fail errors "method send complexity" ;
+      if jstr f "status" <> "measured"
+      then fail errors "method send is not measured" ) ;
   let gaps = jlist j "gaps" in
   if
     not
@@ -670,7 +677,7 @@ let () =
       remove_file (Filename.concat work_dir "metric/broken.ml") ;
       (* Drop the partial artifact before the next successful build. *)
       ignore (invoke exe work_dir "--rebuild") ;
-      (* Objects, method sends, and classes are explicit gaps. *)
+      (* Object/class definitions remain gaps; method sends are ordinary calls. *)
       Printf.printf "scenario complexity-unmeasurable ... %!" ;
       write_file (Filename.concat work_dir "metric/objects.ml") objects_src ;
       let objects_raw = invoke exe work_dir "--rebuild" in

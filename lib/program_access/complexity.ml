@@ -476,6 +476,7 @@ and decisions
       | Some a -> acc ++ decisions st scope inside depth a
       | None -> acc )
   | Texp_field (a, _, _) -> decisions st scope inside depth a
+  | Texp_send (receiver, _) -> decisions st scope inside depth receiver
   | Texp_setfield (a, _, _, b) ->
       decisions st scope inside depth a ++ decisions st scope inside depth b
   | Texp_atomic_loc (a, _, _) -> decisions st scope inside depth a
@@ -519,7 +520,6 @@ and decisions
    |Texp_extension_constructor _ ->
       (zero, false)
   | Texp_object _
-   |Texp_send _
    |Texp_new _
    |Texp_instvar _
    |Texp_setinstvar _

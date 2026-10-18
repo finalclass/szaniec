@@ -101,6 +101,11 @@ records, tuples and sequential composition add nothing themselves. Expressions
 inside them are visited. A refutable parameter's implicit match failure adds
 nothing. No source-length penalty or project threshold is built into the metric.
 
+Method sends are ordinary calls: the receiver expression and supplied arguments
+are visited without an increment for the send itself. Anonymous functions passed
+as method arguments retain their own inventory entries and scores. Resolving the
+method implementation is not required by this local, syntactic measurement.
+
 Executable examples in `test/complexity/run.ts` prove the intended distinction:
 a flat 20-arm dispatcher scores **1** (cyclomatic 20), seven nested binary
 matches score **28** (cyclomatic 8), and three sequential Result bindings
@@ -154,7 +159,7 @@ default or a guard, belong to that nested function.
 
 ## Constructs that are not measured
 
-An object, a class, or a method send inside a function makes that
+An object or a class construction inside a function makes that
 function `unmeasurable`. Its complexity is null. The report carries
 `GAP-UNMEASURABLE` and status `incomplete`. A class definition at
 module scope produces the same gap. These gaps belong to the complexity

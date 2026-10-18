@@ -45,6 +45,13 @@ let loop n = for i = 1 to n do if i > 0 then () done
 let caught f = try f () with Failure _ -> 0 | _ -> 1
 let caught_in_loop n f = for _i = 1 to n do
   try f () with Failure _ -> if n > 0 then () else () done
+let method_call (receiver : < apply : int -> int >) n = receiver#apply n
+let method_receiver select (left : < value : int >) right =
+  (if select then left else right)#value
+let method_argument (receiver : < apply : int -> int >) select =
+  receiver#apply (if select then 1 else 0)
+let method_callback (receiver : < apply : (bool -> int) -> int >) =
+  receiver#apply (fun select -> if select then 1 else 0)
 let local x = let helper y = if y then 1 else 0 in helper x
 let callback xs = List.map (fun x -> if x then 1 else 0) xs
 let optional ?(n = if true then 1 else 0) () = n
@@ -85,6 +92,11 @@ const expectations: Record<string, [number, number]> = {
   loop: [3, 3],
   caught: [2, 3],
   caught_in_loop: [7, 4],
+  method_call: [0, 1],
+  method_receiver: [2, 2],
+  method_argument: [2, 2],
+  method_callback: [0, 1],
+  "method_callback.anon": [2, 2],
   local: [0, 1],
   "local.helper": [2, 2],
   callback: [0, 1],

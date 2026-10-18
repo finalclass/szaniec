@@ -52,6 +52,12 @@ configuration selection and CLI override. The existing complexity acceptance
 suite retains stale/unreadable/unsupported evidence and deterministic reporting.
 Coverage unit tests reject the wrong metric before calculating CRAP.
 
+Method sends retain receiver and argument decisions without requiring a resolved
+implementation, as ordinary function calls do. The compiled metric examples cover
+decisions in either position and separately inventoried callback arguments.
+Object/class definitions remain explicit gaps. Adapter `1.9.4` invalidates earlier
+extraction entries so previously unmeasurable sends are acquired again.
+
 Run `make verify` and `make build` for the source suites and the relocatable
 Linux bundle. Runtime measurements should use the same application revision,
 source scope, metric and cache state; compare exit statuses and the full
