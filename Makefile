@@ -31,6 +31,9 @@ verify:
 	deno test --allow-read --allow-write --allow-run test/config/run.ts
 	deno fmt --check test/loops/run.ts
 	deno test --allow-read --allow-write --allow-run test/loops/run.ts
+	deno fmt --check test/loops/token-admission.ts
+	deno check test/loops/token-admission.ts
+	deno test --allow-read --allow-write --allow-run test/loops/token-admission.ts
 	deno fmt --check test/flows/run.ts
 	deno test --allow-read --allow-write --allow-run test/flows/run.ts
 	deno fmt --check test/acceptance/public_contracts.ts
