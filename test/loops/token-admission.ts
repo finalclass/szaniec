@@ -33,8 +33,9 @@ Deno.test("token admission callbacks retain activation, violations and unknown l
     await Deno.writeTextFile(
       stub,
       await Deno.readTextFile(stub) + `
-let api_token_auth ?(applies_to = fun _ -> true) ?(authorize = fun _ -> true)
-    ?(unknown = fun _ -> true) ~verify () = ignore (applies_to, authorize, unknown, verify)
+let api_token_auth ?applies_to:(_ : (request -> bool) option)
+    ?authorize:(_ : (request -> bool) option) ?unknown:(_ : (request -> bool) option)
+    ~verify:(_ : string -> string option) () = ()
 `,
     );
     const page = `${project}/lib/web_client/tasks_page.ml`;
