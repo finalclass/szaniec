@@ -97,7 +97,7 @@ let callback_mode api (argument : Observation.execution_arg) =
   then Ignored
   else if
     api = "Well.api_token_auth"
-    && List.mem argument.label ["verify"; "applies_to"]
+    && List.mem argument.label ["verify"; "applies_to"; "authorize"]
   then Activation
   else if
     List.mem api ["Sqlite3.exec"; "Sqlite3.exec_no_headers"]

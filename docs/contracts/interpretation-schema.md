@@ -82,7 +82,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.7.1`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.7.2`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -95,6 +95,14 @@ higher-order bodies use their compiler-proven parameter targets without executin
 the arguments twice. Unknown external callback semantics relevant to observed
 application bodies produce `GAP-CALLBACK-SEMANTICS`. Conformance consumes these
 facts without knowing library spellings.
+
+The labeled `verify`, `applies_to` and `authorize` callbacks of
+`Well.api_token_auth` start independent HTTP request activations, rather than
+executing during configuration. Application calls inside these callbacks remain
+subject to the same policy checks. The `authorize` signature and execution
+boundary follow Well revision `b4ff3ef6921df50d06c0cac0b1ec7479eb26a244`.
+Unknown callback labels retain unknown evidence; this mapping does not authorize
+an application dependency or suppress a conformance rule.
 
 `deferredCalls` retains proven partial applications by site. Resumed path steps
 refer to invocation of the resulting function and do not inherit construction's
