@@ -62,13 +62,9 @@ let () = Well.api_token_auth ~${label}:(fun (_ : Well.request) ->
     const graph = JSON.parse(
       await Deno.readTextFile(`${project}/szaniec.json`),
     );
-    const contexts = graph.services.flatMap((
-      s: {
-        methods: {
-          calls: { contexts: { activations: { api: string }[] }[] }[];
-        }[];
-      },
-    ) => s.methods.flatMap((m) => m.calls.flatMap((c) => c.contexts)));
+    const contexts = graph.entryPoints.flatMap((
+      entry: { calls: { contexts: { activations: { api: string }[] }[] }[] },
+    ) => entry.calls.flatMap((call) => call.contexts));
     assert(
       contexts.some((c: { activations: { api: string }[] }) =>
         c.activations.some((a) => a.api === "Well.api_token_auth")
