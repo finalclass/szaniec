@@ -417,6 +417,11 @@ Calls, aliases, value references, and callbacks can expose implementation
 access. One consumer is enough for an implementation-access violation;
 type-only references do not count as executable sharing. The
 [rule catalog](docs/contracts/rule-catalog.md) defines the full criteria.
+Owned native facets also expose private callback implementations to their
+receiving service, including literal lambdas stored for later execution. An
+unresolved stored invocation remains a gap; it does not hide that boundary
+violation. Ordinary callbacks inside a family or into the external framework
+remain separate from inter-service implementation sharing.
 
 Nested message constructors, codecs, and storage conversions on resolved
 contract surfaces remain code dependencies without creating service requests.

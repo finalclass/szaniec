@@ -1802,6 +1802,32 @@ let interpret
               | _ -> () ) )
       | None -> () )
     obs.Observation.value_refs ;
+  let callback_exposures =
+    Callback_exposure.collect
+      ~receiver_of:(fun call ->
+        Option.map
+          (fun (p : Policy.public_contract) -> p.public_service)
+          (Public_contracts.allowed_surface
+             surfaces
+             ~consumer:(from_name call.Observation.execution_caller)
+             call.execution_callee ) )
+      ~provider_of:(fun target ->
+        match resolve_unit target with
+        | Some unit when not (unavailable_target target) -> (
+          match (owner_of_path unit).owner_class with
+          | Implementation_of service
+           |Helper_of service ->
+              Some (service, unit)
+          | _ -> None )
+        | _ -> None )
+      ~targets:(Parameter_callbacks.possible_targets parameter_callbacks [])
+      ~public_target:(fun ~consumer target ->
+        public_module_path target
+        || Option.is_some
+             (Public_contracts.allowed_surface surfaces ~consumer target) )
+      execution.invocations
+  in
+  interactions := callback_exposures @ !interactions ;
   (* Queue and event calls. Subscriptions are collected first so a
      request can name the services that handle its topic. *)
   let messaging_calls =

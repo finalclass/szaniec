@@ -19,7 +19,7 @@ let interpretation_format = "szaniec-interpretation/6"
 
 let adapter_ocaml = "szaniec-ocaml-adapter/1.9.4"
 
-let adapter_well = "szaniec-well-adapter/3.7.2"
+let adapter_well = "szaniec-well-adapter/3.7.3"
 
 let rules = "szaniec-rules/3.2.0"
 

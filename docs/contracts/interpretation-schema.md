@@ -82,7 +82,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.7.2`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.7.3`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -95,6 +95,15 @@ higher-order bodies use their compiler-proven parameter targets without executin
 the arguments twice. Unknown external callback semantics relevant to observed
 application bodies produce `GAP-CALLBACK-SEMANTICS`. Conformance consumes these
 facts without knowing library spellings.
+
+Passing a private function or literal closure through an owned service's public
+facet exposes the provider family's executable implementation to the receiving
+service. This produces `implementation-access` evidence in the reverse direction
+(receiver to callback provider), even when invocation is deferred or unresolved.
+Public callable members still require the receiver's approved access. Same-family
+helpers and callbacks passed to external framework APIs do not establish this
+cross-service exposure. Registration remains distinct from execution, and unknown
+stored invocation targets retain their gaps alongside any boundary violation.
 
 The labeled `verify`, `applies_to` and `authorize` callbacks of
 `Well.api_token_auth` start independent HTTP request activations, rather than
