@@ -1,5 +1,5 @@
 // Source-to-report checks for the OCaml Cognitive Complexity profile.
-const bin =
+const bin = Deno.env.get("SZANIEC_COMPLEXITY_BINARY") ??
   new URL("../../_build/default/bin/szaniec.exe", import.meta.url).pathname;
 const decoder = new TextDecoder();
 function assert(value: unknown, message: string): asserts value {
@@ -225,6 +225,240 @@ Deno.test("Cognitive Complexity distinguishes dispatch, nesting and Result seque
         Object.keys(expectations).length,
       "verified rebuild did not recover the full inventory",
     );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("open struct inventories private bodies and preserves incomplete evidence", async () => {
+  const root = await Deno.makeTempDir({ prefix: "szaniec-open-struct-" });
+  const opened = `open struct
+  let hidden flag = if flag then 1 else 0
+  open struct
+    let nested flag = if flag then 2 else 0
+  end
+  let run_ flag = hidden flag + nested flag
+end
+let run = run_
+`;
+  const details = `module Imported = struct
+  let original flag = if flag then 1 else 0
+end
+open Imported
+open Imported
+open struct
+  let local flag = let helper flag = if flag then 1 else 0 in helper flag
+  let callback flags = List.map (fun flag -> if flag then 1 else 0) flags
+  open struct
+    let shadow flag = if flag then 1 else 0
+  end
+  let shadow flag = if flag then 2 else 0
+end
+let exported = shadow
+`;
+  type Function = Entry & {
+    id: string;
+    location: { path: string; line: number; col: number };
+    end: { line: number; col: number };
+    nested: boolean;
+    kind: string;
+  };
+  type OpenReport = {
+    status: string;
+    functions: Function[];
+    coverage: { path: string; status: string; functions: number }[];
+    gaps: { code: string; path: string }[];
+  };
+  try {
+    await Deno.mkdir(`${root}/lib`);
+    await Deno.writeTextFile(
+      `${root}/dune-project`,
+      "(lang dune 3.17)\n(package (name metric) (allow_empty) (depends (ocaml (and (>= 5.4) (< 5.5))) yojson))\n",
+    );
+    const lock = await new Deno.Command("cp", {
+      args: [
+        "-R",
+        new URL("../fixtures/tasks-app/dune.lock", import.meta.url).pathname,
+        `${root}/dune.lock`,
+      ],
+    }).output();
+    assert(lock.success, decoder.decode(lock.stderr));
+    await Deno.writeTextFile(
+      `${root}/lib/dune`,
+      "(library (name metric) (flags (:standard -bin-annot -w -32-33)))\n",
+    );
+    await Deno.writeTextFile(`${root}/lib/opened.ml`, opened);
+    await Deno.writeTextFile(
+      `${root}/lib/opened.mli`,
+      "val run : bool -> int\n",
+    );
+    await Deno.writeTextFile(`${root}/lib/details.ml`, details);
+    await Deno.writeTextFile(
+      `${root}/lib/empty.ml`,
+      "open List\nlet value = 1\n",
+    );
+    await Deno.writeTextFile(
+      `${root}/szaniec.toml`,
+      'format = "szaniec-config/1"\n[policy]\nname = "metric"\nroots = ["lib"]\n',
+    );
+    async function run(metric: string, rebuild = false, cache = true) {
+      const result = await new Deno.Command(bin, {
+        args: [
+          "complexity",
+          "--project-root",
+          root,
+          "--json",
+          "--sort",
+          "complexity",
+          "--metric",
+          metric,
+          ...(rebuild ? ["--rebuild"] : []),
+        ],
+        env: { SZANIEC_OBSERVATION_CACHE: cache ? "on" : "off" },
+      }).output();
+      const text = decoder.decode(result.stdout);
+      assert(text.startsWith("{"), decoder.decode(result.stderr) + text);
+      return {
+        code: result.code,
+        text,
+        report: JSON.parse(text) as OpenReport,
+      };
+    }
+    const inventories: unknown[] = [];
+    for (const [index, metric] of ["cognitive", "cyclomatic"].entries()) {
+      const first = await run(metric, index === 0);
+      const cached = await run(metric);
+      const uncached = await run(metric, false, false);
+      assert(first.code === 0 && first.report.status === "ok", first.text);
+      assert(
+        first.text === cached.text && first.text === uncached.text &&
+          cached.code === 0 && uncached.code === 0,
+        "cache changed inventory",
+      );
+      const report = first.report;
+      assert(report.gaps.length === 0, "supported opens introduced a gap");
+      const entries = report.functions.filter((f) =>
+        f.location.path === "lib/opened.ml"
+      );
+      assert(
+        entries.length === 3,
+        `expected three private bodies, got ${entries.length}`,
+      );
+      for (
+        const [name, scores, line, col] of [
+          ["hidden", [2, 2], 2, 2],
+          ["nested", [2, 2], 4, 4],
+          ["run_", [0, 1], 6, 2],
+        ] as const
+      ) {
+        const f = entries.find((f) => f.qualname === name);
+        assert(
+          f?.complexity === scores[index],
+          `${metric}: missing or wrong ${name}`,
+        );
+        assert(
+          f.location.line === line && f.location.col === col &&
+            f.end.line === line &&
+            f.end.col > col,
+          `${name}: authored source span lost`,
+        );
+        assert(
+          f.id === `Metric.Opened.${name}` && !f.nested && f.kind === "named",
+          `${name}: wrong identity or nesting`,
+        );
+      }
+      const extra = report.functions.filter((f) =>
+        f.location.path === "lib/details.ml"
+      );
+      assert(
+        extra.length === 7,
+        "imports duplicated functions or open bodies omitted",
+      );
+      for (
+        const [name, count, scores] of [
+          ["Imported.original", 1, [2, 2]],
+          ["local", 1, [0, 1]],
+          ["local.helper", 1, [2, 2]],
+          ["callback", 1, [0, 1]],
+          ["callback.anon", 1, [2, 2]],
+          ["shadow", 2, [2, 2]],
+        ] as const
+      ) {
+        const matches = extra.filter((f) => f.qualname === name);
+        assert(
+          matches.length === count &&
+            matches.every((f) => f.complexity === scores[index]),
+          `${metric}: incorrect inventory for ${name}`,
+        );
+        assert(
+          matches.every((f) =>
+            f.nested ===
+              (name === "local.helper" || name === "callback.anon")
+          ),
+          `${name}: module opening changed lexical nesting`,
+        );
+      }
+      const shadows = extra.filter((f) => f.qualname === "shadow");
+      assert(
+        new Set(shadows.map((f) => f.id)).size === 2 &&
+          shadows.every((f) =>
+            f.id ===
+              `Metric.Details.shadow@${f.location.line}:${f.location.col}`
+          ),
+        "shadow identities collided",
+      );
+      assert(
+        report.coverage.some((c) =>
+          c.path === "lib/opened.ml" && c.status === "measured" &&
+          c.functions === 3
+        ),
+        "private implementation coverage was incomplete",
+      );
+      assert(
+        report.coverage.some((c) =>
+          c.path === "lib/empty.ml" && c.status === "measured" &&
+          c.functions === 0
+        ),
+        "genuinely function-free file must remain valid",
+      );
+      inventories.push(
+        report.functions.map(({ complexity: _score, metric: _metric, ...f }) =>
+          f
+        )
+          .sort((a, b) => a.id.localeCompare(b.id)),
+      );
+    }
+    assert(
+      JSON.stringify(inventories[0]) === JSON.stringify(inventories[1]),
+      "metric selection changed definition identities or spans",
+    );
+    await Deno.writeTextFile(
+      `${root}/lib/unsupported.ml`,
+      `open struct
+  open struct
+    class unsupported = object method value = 1 end
+    let make () = object method value = 1 end
+  end
+end
+`,
+    );
+    for (const [index, metric] of ["cognitive", "cyclomatic"].entries()) {
+      const { code, report, text } = await run(metric, index === 0);
+      assert(code === 2 && report.status === "incomplete", text);
+      assert(
+        report.gaps.filter((g) =>
+          g.code === "GAP-UNMEASURABLE" && g.path === "lib/unsupported.ml"
+        ).length === 2,
+        "unsupported class or function inside open was silently accepted",
+      );
+      const make = report.functions.find((f) =>
+        f.location.path === "lib/unsupported.ml" && f.qualname === "make"
+      );
+      assert(
+        make?.complexity === null,
+        "unsupported function became a measured zero",
+      );
+    }
   } finally {
     await Deno.remove(root, { recursive: true });
   }

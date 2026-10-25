@@ -49,7 +49,7 @@ verify:
 	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/capabilities.ts
 	deno fmt --check test/complexity/run.ts
 	deno check test/complexity/run.ts
-	deno test --allow-read --allow-write --allow-run test/complexity/run.ts
+	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_COMPLEXITY_BINARY test/complexity/run.ts
 	test/acceptance/run.sh
 	test/acceptance/suggestions.sh
 	test/coverage/run.sh
