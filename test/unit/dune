@@ -76,6 +76,11 @@
  (libraries szaniec_program_access unix))
 
 (test
+ (name complexity_opens)
+ (modules complexity_opens)
+ (libraries szaniec_program_access szaniec_model compiler-libs.common))
+
+(test
  (name bare_spec)
  (modules bare_spec)
  (libraries szaniec_interpretation_engine szaniec_model))

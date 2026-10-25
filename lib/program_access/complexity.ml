@@ -612,6 +612,7 @@ and walk_items
               walk_module st scope' inside mb.Typedtree.mb_expr )
             mbs
       | Tstr_include inc -> walk_module st scope inside inc.Typedtree.incl_mod
+      | Tstr_open od -> walk_module st scope inside od.Typedtree.open_expr
       | Tstr_eval (e, _) ->
           let _, u = decisions st scope inside 0 e in
           if u
@@ -632,7 +633,6 @@ and walk_items
        |Tstr_typext _
        |Tstr_exception _
        |Tstr_modtype _
-       |Tstr_open _
        |Tstr_attribute _ ->
           () )
     items
