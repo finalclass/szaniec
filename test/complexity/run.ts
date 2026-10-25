@@ -390,6 +390,13 @@ let exported = shadow
             matches.every((f) => f.complexity === scores[index]),
           `${metric}: incorrect inventory for ${name}`,
         );
+        assert(
+          matches.every((f) =>
+            f.nested ===
+              (name === "local.helper" || name === "callback.anon")
+          ),
+          `${name}: module opening changed lexical nesting`,
+        );
       }
       const shadows = extra.filter((f) => f.qualname === "shadow");
       assert(
@@ -439,10 +446,10 @@ end
       const { code, report, text } = await run(metric, index === 0);
       assert(code === 2 && report.status === "incomplete", text);
       assert(
-        report.gaps.some((g) =>
+        report.gaps.filter((g) =>
           g.code === "GAP-UNMEASURABLE" && g.path === "lib/unsupported.ml"
-        ),
-        "unsupported open body was silently accepted",
+        ).length === 2,
+        "unsupported class or function inside open was silently accepted",
       );
       const make = report.functions.find((f) =>
         f.location.path === "lib/unsupported.ml" && f.qualname === "make"
