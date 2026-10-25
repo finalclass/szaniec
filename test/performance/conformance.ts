@@ -681,6 +681,12 @@ try {
         { length: size },
         (_, i) => `let entry_${i} () = branching ${i}\n`,
       ).join("");
+  } else if (shape === "callbacks") {
+    functions = Array.from(
+      { length: size },
+      (_, i) =>
+        `let entry_${i} () = List.iter (fun () -> ignore (Task_manager.list ~ctx:ctx_w ~limit:10)) [()]\n`,
+    ).join("");
   } else if (shape !== "helpers") throw new Error("Unknown --shape");
   await Deno.writeTextFile(
     `${fixture}/lib/web_client/tasks_page.ml`,

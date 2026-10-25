@@ -34,7 +34,7 @@ let owner ?(service = "Web_client") canonical =
   ; owner_class= Interpretation.Helper_of service
   ; owner_service= service }
 
-let observation exec_paths units =
+let observation ?(execution = Observation.empty_execution) exec_paths units =
   { Observation.project_root= "."
   ; program_roots= ["lib"]
   ; compiler_series= "5.4.1"
@@ -52,7 +52,7 @@ let observation exec_paths units =
                  ; args= s.step_args } ) )
             p.alternatives )
         exec_paths
-  ; execution= Observation.empty_execution
+  ; execution
   ; exec_paths
   ; value_refs= []
   ; module_aliases= []
@@ -91,6 +91,9 @@ let evaluate
     ?units
     ?ownerships
     ?(gaps = [])
+    ?(callbacks = [])
+    ?(deferred_calls = [])
+    ?execution
     exec_paths
     interactions =
   let canonical_units =
@@ -109,13 +112,13 @@ let evaluate
     ; interactions
     ; execution_interactions= []
     ; execution_flows= []
-    ; callbacks= []
+    ; callbacks
     ; callback_paths= []
     ; bound_parameters= []
     ; parameter_targets= []
     ; returned_calls= []
     ; parameter_defaults= []
-    ; deferred_calls= []
+    ; deferred_calls
     ; gaps }
   in
   let run domains observation =
@@ -127,7 +130,7 @@ let evaluate
       ~observation
       ~interpretation
   in
-  let reference = run 1 (observation exec_paths units) in
+  let reference = run 1 (observation ?execution exec_paths units) in
   ( if parallel && exec_paths <> []
     then
       let repeated =
@@ -137,7 +140,7 @@ let evaluate
       List.iter
         (fun domains ->
           check
-            (run domains (observation repeated units) = reference)
+            (run domains (observation ?execution repeated units) = reference)
             "parallel paths must retain sequential findings" )
         [1; 2; 4; 8] ) ;
   reference
@@ -330,6 +333,107 @@ let () =
   check
     (evaluate [paths "entry" [[]]] requests = [])
     "indexes are scoped to one evaluation" ;
+  let callback phase target =
+    { Interpretation.callback_site= site 1000
+    ; callback_target= target
+    ; callback_resumed= false
+    ; callback_phase= phase }
+  in
+  let anonymous = paths "handler@1" [both] in
+  let independent = callback Interpretation.Independent "App.Page.handler@1" in
+  check
+    (evaluate [anonymous] requests = [])
+    "an unactivated anonymous body is not an independent root" ;
+  check
+    ( rules (evaluate ~callbacks:[independent; independent] [anonymous] requests)
+    = ["UC-CLIENT-MULTI-MANAGER"] )
+    "duplicate independent activations retain anonymous root evaluation" ;
+  List.iter
+    (fun phase ->
+      check
+        ( evaluate
+            ~callbacks:[callback phase "App.Page.handler@1"]
+            [anonymous]
+            requests
+        = [] )
+        "other callback phases do not activate an independent root" )
+    [ Interpretation.Same_path
+    ; Interpretation.Deferred
+    ; Interpretation.Unknown_callback ] ;
+  List.iter
+    (fun target ->
+      check
+        ( evaluate
+            ~callbacks:[callback Interpretation.Independent target]
+            [anonymous]
+            requests
+        = [] )
+        "independent target identity includes the exact unit and caller" )
+    ["Other.Page.handler@1"; "App.Page.handler@10"; "App.Page.Handler@1"] ;
+  check
+    (evaluate [anonymous] requests = [])
+    "independent activations cannot leak between evaluations" ;
+  let entry = paths "entry" [both] in
+  check
+    (evaluate ~deferred_calls:[site 10; site 10] [entry] requests = [])
+    "deferred call sites are excluded from immediate execution" ;
+  check
+    ( rules
+        (evaluate
+           ~deferred_calls:[{(site 10) with site_path= "other.ml"}; site 11]
+           [entry]
+           requests )
+    = ["UC-CLIENT-MULTI-MANAGER"] )
+    "deferred membership retains complete site identity" ;
+  check
+    ( rules
+        (evaluate
+           ~deferred_calls:[site 10]
+           [ paths
+               "entry"
+               [ [ {(step "First_manager.run" 10) with step_resumed= true}
+                 ; step "Second_manager.run" 20 ] ] ]
+           requests )
+    = ["UC-CLIENT-MULTI-MANAGER"] )
+    "resumed calls still execute at deferred sites" ;
+  check
+    (rules (evaluate [entry] requests) = ["UC-CLIENT-MULTI-MANAGER"])
+    "deferred sites cannot leak between evaluations" ;
+  let execution resumed =
+    let call (step : Observation.path_step) =
+      Observation.Invoke
+        { execution_caller= "App.Page.entry"
+        ; execution_callee= step.step_callee
+        ; execution_resolution= step.step_resolution
+        ; execution_site= step.step_site
+        ; execution_loops= []
+        ; execution_partial= false
+        ; execution_resumed= resumed
+        ; execution_supplied= 0
+        ; execution_defaults= []
+        ; execution_args= [] }
+    in
+    { Observation.empty_execution with
+      ordered= [("App.Page.entry", List.map call both)] }
+  in
+  let ambiguous_entry = paths ~ambiguous:true "entry" [] in
+  check
+    ( evaluate
+        ~execution:(execution false)
+        ~deferred_calls:[site 10]
+        [ambiguous_entry]
+        requests
+    = [] )
+    "reachability excludes deferred immediate calls from the safe target bound" ;
+  check
+    ( rules
+        (evaluate
+           ~execution:(execution true)
+           ~deferred_calls:[site 10]
+           [ambiguous_entry]
+           requests )
+    = ["GAP-AMBIGUOUS-PATH"] )
+    "reachability retains resumed calls and cannot prove a single target" ;
   let inventory = List.init 2000 (fun n -> "Root.Unit" ^ string_of_int n) in
   let resolve = Canonical.unit_resolver inventory in
   List.iter
@@ -350,7 +454,19 @@ let () =
     = Some "Missing.Unit0" )
     "new inventory cannot reuse a cached miss" ;
   let count = 40_000 in
-  let large_paths = List.init count (fun n -> paths (string_of_int n) [[]]) in
+  let large_paths =
+    List.init count (fun n ->
+        paths
+          ((if n mod 2 = 0 then "handler@" else "") ^ string_of_int n)
+          [[step "External.run" n]] )
+  in
+  let callbacks =
+    List.init count (fun n ->
+        callback
+          Interpretation.Independent
+          ("App.Page.handler@" ^ string_of_int n) )
+  in
+  let deferred_calls = List.init count site in
   let large_units =
     List.init count (fun n -> unit_info ~fresh:false ("Unit" ^ string_of_int n))
   in
@@ -367,6 +483,8 @@ let () =
       ~parallel:false
       ~units:(unit_info "App.Page" :: large_units)
       ~ownerships:(ownerships @ [owner "App.Page"])
+      ~callbacks
+      ~deferred_calls
       large_paths
       []
   in
@@ -375,13 +493,13 @@ let () =
   check (fs = []) "large inventory retains all paths and stale metadata" ;
   check
     (elapsed < 5.)
-    "large inventory must not repeatedly scan paths or metadata" ;
+    "large inventory must not repeatedly scan paths, metadata or callbacks" ;
   check
     (allocated < float_of_int count *. 8192.)
     "evaluation allocation remains bounded" ;
   Printf.printf
-    "conformance indexes: %d paths and units, %.3f CPU seconds, %.0f allocated \
-     bytes: ok\n"
+    "conformance indexes: %d paths, callbacks, deferred sites and units, %.3f \
+     CPU seconds, %.0f allocated bytes: ok\n"
     count
     elapsed
     allocated

@@ -6,6 +6,17 @@ by canonical unit. Each table retains the first input entry for a duplicate key,
 matching the former list searches. The input lists still determine traversal and
 finding order; hash-table enumeration does not replace them.
 
+Independent callback activation is indexed by the exact fully qualified target.
+Membership means that at least one evidence entry has the `Independent` phase;
+duplicates do not change the result. Only anonymous root candidates need this
+lookup. Deferred calls are indexed by the complete source site (path, line and
+column), preserving structural site equality and the exception for resumed calls
+in both path expansion and reachability summaries. Both indexes are rebuilt for
+each evaluation, populated before workers start and read-only during traversal.
+The original callback-site lists still determine callback expansion order.
+This avoids scanning the entire callback/deferred inventory at every root or
+step, and avoids allocating a qualified target for every callback comparison.
+
 The unit table also supplies membership for ConformanceEngine's longest unit-prefix
 lookup. It normalizes dotted paths through the existing Canonical functions and
 checks successively shorter prefixes. Canonical now owns the reusable resolver
@@ -26,7 +37,13 @@ mutually exclusive alternatives, request and queue fan-out, missing/ambiguous pa
 recursion, shallow/deep reuse, width limits, duplicate paths, duplicate ownership,
 duplicate metadata, missing metadata and longest-prefix equivalence.
 
-The same test evaluates 40,000 distinct paths and 40,000 stale unclassified units.
+Callback cases cover independent versus same-path/deferred/unknown activation,
+exact target and site identity, duplicate evidence, resumed calls, and isolation
+between successive evaluations. Small cases run at 1, 2, 4 and 8 domains.
+
+The same test evaluates 40,000 distinct paths, 40,000 callback activations,
+40,000 deferred sites and 40,000 stale unclassified units. Half the paths are
+anonymous activated roots and half are named roots.
 It requires unchanged empty findings, bounded allocation and less than five CPU
 seconds. The generous CPU budget detects the former repeated list scans; wall-clock
 scheduling delays do not count toward it. Small fixtures establish semantics
@@ -34,6 +51,19 @@ independently of this performance guard. Architecture acceptance continues to
 exercise actual compiler artifacts and source-to-diagnostic integration.
 
 ## Reproducible full-check comparison
+
+The compiled full-check benchmark accepts `--shape callbacks` to generate
+independent entry functions with synchronous iterator callbacks. For example:
+
+```sh
+deno run --allow-read --allow-write --allow-run \
+  test/performance/conformance.ts --baseline 0662988 --component conformance \
+  --shape callbacks --runs 3 --size 4000
+```
+
+This uses the same compiler artifacts and adapter versions on both sides, checks
+complete report/graph bytes and exit statuses, and includes index construction in
+the evaluation measurement.
 
 Run from the repository root on Linux:
 
@@ -97,6 +127,31 @@ time. It produces no callgraph. The ordinary full-check mode retains both graph
 projections and compares the complete CLI artifacts.
 
 ## Recorded comparison
+
+### Callback inventory follow-up
+
+On 2026-10-25, three alternating full-check pairs against `0662988` used
+`--shape callbacks --size 4000` with one evaluation domain and extraction caching
+disabled. Each check retained 22 units, 8,105 paths and 12,137 calls. Reports,
+all 20,729,648 callgraph bytes and exit 0 were identical across all six runs.
+Compilation was outside the timings; default GC settings were unchanged.
+
+| Median measurement | Baseline | Callback/deferred indexes |
+|---|---:|---:|
+| Evaluation elapsed | 1.084 s | 0.047 s |
+| Evaluation allocation | 2,922,721,072 bytes | 52,287,488 bytes |
+| Full check elapsed | 4.248 s | 3.383 s |
+| Process peak RSS | 130,144 KiB | 130,272 KiB |
+
+This is about 23 times faster evaluation, 98% less evaluation allocation and
+20% less full-check elapsed time on this fixture. It does not establish lower
+peak resident memory: the small-fixture process peaks are effectively unchanged.
+The expanded 40,000-entry regression completed in 0.143 CPU seconds and allocated
+171,986,480 bytes, retaining its original five-CPU-second and 8,192-bytes-per-entry
+budgets. Measurements are local observations on a shared Linux x86_64 host with
+the locked OCaml 5.4.1 toolchain, not latency guarantees.
+
+### Original path inventory comparison
 
 Local Linux x86_64 measurements on 2026-10-09 used the locked toolchain and GNU
 Time 1.9. The synthetic fixture had 22 units, 8,080 execution-path entries and
