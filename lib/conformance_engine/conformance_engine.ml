@@ -695,8 +695,11 @@ let evaluate_with_domains
     | None -> None
   in
   let callbacks = Hashtbl.create 32 in
+  let independent_callbacks = Hashtbl.create 32 in
   List.iter
     (fun (callback : Interpretation.callback_evidence) ->
+      if callback.callback_phase = Interpretation.Independent
+      then Hashtbl.replace independent_callbacks callback.callback_target () ;
       let previous =
         Option.value
           ~default:[]
@@ -704,6 +707,7 @@ let evaluate_with_domains
       in
       Hashtbl.replace callbacks callback.callback_site (callback :: previous) )
     interpretation.callbacks ;
+  let deferred_calls = index_first Fun.id interpretation.deferred_calls in
   let invocation_index =
     index_first
       (fun (call : Observation.execution_call) ->
@@ -845,9 +849,7 @@ let evaluate_with_domains
                       let pieces =
                         if
                           (not step.step_resumed)
-                          && List.mem
-                               step.step_site
-                               interpretation.deferred_calls
+                          && Hashtbl.mem deferred_calls step.step_site
                         then Ok [[]]
                         else if !budget < 0
                         then Error "helper summary traversal exceeds 4096 steps"
@@ -1215,7 +1217,7 @@ let evaluate_with_domains
                              step.step_site.col )
                       else if
                         (not step.step_resumed)
-                        && List.mem step.step_site interpretation.deferred_calls
+                        && Hashtbl.mem deferred_calls step.step_site
                       then Ok previous
                       else
                         let direct =
@@ -1329,14 +1331,13 @@ let evaluate_with_domains
 
     let key = p.Observation.paths_unit ^ "\n" ^ p.Observation.paths_caller in
     let anonymous = Execution_paths.local_symbol p.paths_caller in
-    let independent =
-      List.exists
-        (fun (callback : Interpretation.callback_evidence) ->
-          callback.callback_target = p.paths_unit ^ "." ^ p.paths_caller
-          && callback.callback_phase = Interpretation.Independent )
-        interpretation.callbacks
-    in
-    ( if Hashtbl.mem targeted key || (anonymous && not independent)
+    ( if
+        Hashtbl.mem targeted key
+        || anonymous
+           && not
+                (Hashtbl.mem
+                   independent_callbacks
+                   (p.paths_unit ^ "." ^ p.paths_caller) )
       then ()
       else
         let owner = owner_of p.Observation.paths_unit in
