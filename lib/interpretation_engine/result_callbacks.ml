@@ -10,7 +10,31 @@ end)
 
 (* ProgramAccess records compiler-proven callable result projections. Only the
    framework adapter gives an external producer's result an execution meaning. *)
+let bounded_appends (execution : Observation.execution) =
+  let producers = Hashtbl.create 16 in
+  List.iter
+    (fun (call : Observation.execution_call) ->
+      if call.execution_resumed && call.execution_callee = "Stdlib.Seq.append"
+      then Hashtbl.replace producers call.execution_caller call.execution_site )
+    execution.invocations ;
+  execution.invocations
+  |> List.concat_map (fun (call : Observation.execution_call) ->
+      if call.execution_resumed
+      then []
+      else if
+        call.execution_callee = "Stdlib.Seq.append"
+        && call.execution_supplied >= 3
+      then [call.execution_site]
+      else if call.execution_supplied >= 1
+      then
+        match Hashtbl.find_opt producers call.execution_callee with
+        | Some site -> [call.execution_site; site]
+        | None -> []
+      else [] )
+  |> List.sort_uniq compare
+
 let bind (obs : Observation.t) =
+  let bounded = bounded_appends obs.execution in
   let targets = Hashtbl.create 32 in
   let result_calls = Hashtbl.create 32 in
   List.iter
@@ -404,10 +428,7 @@ let bind (obs : Observation.t) =
         Bodies.add bodies values mapped ;
         mapped
   and step = function
-    | Observation.Invoke call
-      when call.execution_callee = "Stdlib.Seq.append"
-           && (not call.execution_resumed)
-           && call.execution_supplied >= 3 ->
+    | Observation.Invoke call when List.mem call.execution_site bounded ->
         Observation.Choose
           [ ( "single node"
             , [ Observation.Unknown_order

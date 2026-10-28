@@ -155,6 +155,16 @@ let real_source (sourcefile : string) : string option =
   then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
   else Some sourcefile
 
+let relocated_package_path ~file_exists ~project_root path =
+  let marker = "/_build/_private/default/.pkg/" in
+  match find_substring path marker with
+  | None -> path
+  | Some offset ->
+      let local =
+        project_root ^ String.sub path offset (String.length path - offset)
+      in
+      if file_exists local then local else path
+
 let compiler_path
     ?(file_exists = Sys.file_exists)
     ~project_root
@@ -174,7 +184,7 @@ let compiler_path
            path
            (String.length prefix)
            (String.length path - String.length prefix)
-    else path
+    else relocated_package_path ~file_exists ~project_root path
 
 let digest_matches path expected =
   try Some (Digest.file path) = expected with

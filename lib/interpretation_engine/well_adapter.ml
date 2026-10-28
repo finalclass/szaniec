@@ -2317,13 +2317,14 @@ let interpret
       execution.invocations
     |> List.sort_uniq compare
   in
+  let bounded_appends = Result_callbacks.bounded_appends obs.execution in
   let callback_paths =
     obs.execution.invocations
     |> List.filter_map (fun (call : Observation.execution_call) ->
         if
-          call.execution_callee = "Stdlib.Seq.append"
-          && (not call.execution_resumed)
-          && call.execution_supplied >= 3
+          List.mem call.execution_site bounded_appends
+          (* The empty target preserves a conditional demand as incomplete. The
+           reachable callback union can still prove a path rule cannot fail. *)
         then Some (call.execution_site, [[""]])
         else if
           call.execution_resumed

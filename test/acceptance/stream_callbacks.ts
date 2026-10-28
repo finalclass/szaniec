@@ -387,6 +387,16 @@ let show items = consume 3 items
       bounded.report.summary.violations === 0,
       "single-node append falsely proves a violation",
     );
+    const named = await scenario(
+      "one named append node does not prove both sources execute",
+      `let first () = ${manager}; Seq.Cons ((), Seq.empty)\nlet second () = Second_manager.run (); Seq.Nil\nlet show () = let items = Seq.append first second in ignore (items ())\n`,
+      ["GAP-AMBIGUOUS-PATH"],
+      2,
+    );
+    assert(
+      named.report.summary.violations === 0,
+      "named single-node append falsely proves a violation",
+    );
   } finally {
     if (!retained) await Deno.remove(root, { recursive: true });
   }

@@ -131,6 +131,10 @@ for an unknown branch. Multiple distinct targets remain unresolved.
 adapter can prove that a result rejects a continuation. Returned parameter
 identities also survive polymorphic helpers and bind to captured arguments at
 the corresponding call site; they are not assumed to be callable on their own.
+If a cached compiler records a missing absolute Dune private-package load path
+from another checkout, acquisition uses the existing package with the identical
+full package directory name below the current project's `_build`. Other missing
+absolute paths are not guessed.
 Standard `Set.Make` and `Map.Make` applications retain their concrete comparator;
 other unsupported functor applications still require a gap. Locally opened
 structures contribute their definitions and initialization calls. Typed nodes

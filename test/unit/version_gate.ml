@@ -12,6 +12,30 @@ let assert_eq (a : string) (b : string) (name : string) =
     exit 1 )
 
 let () =
+  let path =
+    "/removed-checkout/_build/_private/default/.pkg/compiler.5.4-hash/target/lib/ocaml"
+  in
+  let local =
+    "/current/_build/_private/default/.pkg/compiler.5.4-hash/target/lib/ocaml"
+  in
+  let relocate file_exists path =
+    Szaniec_program_access.Ocaml_adapter.relocated_package_path
+      ~file_exists
+      ~project_root:"/current"
+      path
+  in
+  assert_eq
+    (relocate (( = ) local) path)
+    local
+    "relocated Dune package load path" ;
+  assert_eq
+    (relocate (fun _ -> false) path)
+    path
+    "missing package is not invented" ;
+  assert_eq
+    (relocate (fun _ -> true) "/elsewhere/lib/ocaml")
+    "/elsewhere/lib/ocaml"
+    "unrelated absolute path is preserved" ;
   assert_eq
     (Szaniec_program_access.Ocaml_adapter.compiler_series_of_args
        [| "../_private/default/.pkg/relocatable-compiler.5.4.1.20251109.1-abc/target/bin/ocamlc.opt"
