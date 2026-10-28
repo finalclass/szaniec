@@ -403,6 +403,12 @@ let show items = consume 3 items
       ["UC-CLIENT-MULTI-MANAGER"],
       1,
     );
+    await scenario(
+      "single-node demand does not weaken later full consumption",
+      `let first () = ${manager}; Seq.Cons ((), Seq.empty)\nlet second () = Second_manager.run (); Seq.Nil\nlet show () = let items = Seq.append first second in ignore (items ()); ignore (List.of_seq items)\n`,
+      ["UC-CLIENT-MULTI-MANAGER", "GAP-AMBIGUOUS-PATH"],
+      2,
+    );
   } finally {
     if (!retained) await Deno.remove(root, { recursive: true });
   }

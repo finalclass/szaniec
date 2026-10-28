@@ -2322,11 +2322,6 @@ let interpret
     obs.execution.invocations
     |> List.filter_map (fun (call : Observation.execution_call) ->
         if
-          List.mem call.execution_site bounded_appends
-          (* The empty target preserves a conditional demand as incomplete. The
-           reachable callback union can still prove a path rule cannot fail. *)
-        then Some (call.execution_site, [[""]])
-        else if
           call.execution_resumed
           || List.mem call.execution_site deferred_calls
           || not (Hashtbl.mem parameter_callbacks.uses call.execution_callee)
@@ -2439,6 +2434,7 @@ let interpret
   ; execution_flows
   ; callbacks
   ; callback_paths
+  ; incomplete_calls= bounded_appends
   ; bound_parameters
   ; returned_calls
   ; parameter_defaults= obs.execution.parameter_defaults

@@ -28,7 +28,7 @@ let bounded_appends (execution : Observation.execution) =
       else if call.execution_supplied >= 1
       then
         match Hashtbl.find_opt producers call.execution_callee with
-        | Some site -> [call.execution_site; site]
+        | Some _ -> [call.execution_site]
         | None -> []
       else [] )
   |> List.sort_uniq compare
@@ -37,6 +37,19 @@ let bind (obs : Observation.t) =
   let bounded = bounded_appends obs.execution in
   let targets = Hashtbl.create 32 in
   let result_calls = Hashtbl.create 32 in
+  let forwarded_results = Hashtbl.create 32 in
+  List.iter
+    (fun (source, target) ->
+      if Canonical.parameter_symbol target <> None
+      then
+        Hashtbl.replace
+          forwarded_results
+          source
+          ( target
+          :: Option.value
+               ~default:[]
+               (Hashtbl.find_opt forwarded_results source) ) )
+    obs.execution.returned_functions ;
   List.iter
     (fun (source, target) ->
       Hashtbl.replace
@@ -268,7 +281,43 @@ let bind (obs : Observation.t) =
       | Some values -> (
         match List.sort_uniq compare values with
         | [target] when target <> "" ->
-            resolve ~arguments:(arguments_at symbol) (symbol :: visited) target
+            let value =
+              resolve
+                ~arguments:(arguments_at symbol)
+                (symbol :: visited)
+                target
+            in
+            (* A field observed in one result branch must also agree with any
+               whole-record forwarding observed in another branch. *)
+            let rec compatible prefix = function
+              | [] -> true
+              | part :: rest ->
+                  let prefix =
+                    if prefix = "" then part else prefix ^ "." ^ part
+                  in
+                  if prefix = symbol
+                  then true
+                  else
+                    let suffix =
+                      String.sub
+                        symbol
+                        (String.length prefix)
+                        (String.length symbol - String.length prefix)
+                    in
+                    List.for_all
+                      (fun alias ->
+                        value <> None
+                        && resolve
+                             ~arguments:(arguments_at prefix)
+                             (symbol :: visited)
+                             (alias ^ suffix)
+                           = value )
+                      (Option.value
+                         ~default:[]
+                         (Hashtbl.find_opt forwarded_results prefix) )
+                    && compatible prefix rest
+            in
+            if compatible "" (Canonical.split_dots symbol) then value else None
         | _ -> None )
       | None
         when String.ends_with ~suffix:sequence_tail_suffix symbol

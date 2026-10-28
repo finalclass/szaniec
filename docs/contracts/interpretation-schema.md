@@ -94,7 +94,11 @@ passing a closure to `ignore` or an unknown API does not execute it. Local
 higher-order bodies use their compiler-proven parameter targets without executing
 the arguments twice. Unknown external callback semantics relevant to observed
 application bodies produce `GAP-CALLBACK-SEMANTICS`. Conformance consumes these
-facts without knowing library spellings.
+facts without knowing library spellings. `incompleteCalls` marks individual
+invocations whose conditional effects have no complete path summary. It replaces
+only that invocation during path expansion, preserving independently proven
+steps before and after it. A reachability bound may discharge the path gap;
+otherwise definite violations and the gap can coexist.
 
 Passing a private function or literal closure through an owned service's public
 facet exposes the provider family's executable implementation to the receiving
@@ -385,7 +389,9 @@ not execute the callback effects.
 A direct single-node `Seq.append left right ()` has conditional source execution:
 without a proof of `left`'s first constructor, its path remains incomplete when
 the reachable effects could violate a path rule. Full sequence consumption keeps
-both sources. Partially applied `flat_map` callbacks retain their captured values
+both sources, including when the same named producer was previously forced for
+one node. Result fields from one branch cannot hide an opaque parameter returned
+by another branch. Partially applied `flat_map` callbacks retain their captured values
 when resolving the returned sequence.
 
 `Eio_main.run` executes its bootstrap callback. A callable `Some` result from
