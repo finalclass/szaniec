@@ -82,7 +82,7 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.7.3`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.8.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
@@ -372,3 +372,28 @@ CheckClient serializes them according to the
 
 Interpretation output is deterministic: interactions and gaps are sorted
 by participants and site locations before evaluation.
+
+### Lazy sequences and scoped stream callbacks (adapter 3.8.0)
+
+`Seq.append`, `Seq.map`, `Seq.filter`, `Seq.filter_map` and `Seq.flat_map`
+construct lazy producers. Consumption follows their input sequences and callable
+operations; `flat_map` also forces each returned sequence. Recursive consumption
+of a known standard producer's `Cons` tail retains that producer's reachable
+callback effects as a bounded iteration summary. It is not an exact element count
+or a guarantee for arbitrary dynamically produced tails. Construction alone does
+not execute the callback effects.
+
+`Eio_main.run` executes its bootstrap callback. A callable `Some` result from
+`Eio.Fiber.get` resolves only for a compiler-observed fresh key with closed uses
+in `get`/`with_binding` and a single known bound target. The key's reference sites
+must all be accounted for. The value exists only inside a binding's dynamic
+extent; `None` remains a separate alternative. Escaped/external keys, unknown
+values and multiple different targets remain incomplete.
+
+`Well.stream` supplies an external byte writer. `Well.stream_open` activates the
+`accept_iter` continuation returned in `Stream_accept`, supplying the same writer;
+rejection does not activate it. Known result wrappers, tuples and immutable
+records retain callback provenance and caller ownership. The framework semantics
+are based on Well revision `eee1d8fc8c5e8687ef8aac24b58d577327628f2f`
+(`lib/well/types.ml`, `lib/well/http_parse.ml`). Synthetic acceptance stand-ins
+model this public shape without depending on a private application.

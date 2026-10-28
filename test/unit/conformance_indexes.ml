@@ -411,6 +411,8 @@ let () =
         ; execution_resumed= resumed
         ; execution_supplied= 0
         ; execution_defaults= []
+        ; execution_values= []
+        ; execution_result= ""
         ; execution_args= [] }
     in
     { Observation.empty_execution with

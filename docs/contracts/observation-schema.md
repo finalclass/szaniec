@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/7`.
+Format identifier (conceptual): `szaniec-observation/8`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -303,3 +303,21 @@ and private-access checks remain independent of this limit.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
+
+### Callable result provenance (adapter 1.10.0)
+
+Calls retain a stable per-expression `execution_result` identity and
+`execution_values` (input position, compiler-resolved immutable value identity,
+source site). `value_origins` links named values to their producing result.
+These are language facts; they neither authorize an API nor assign execution
+semantics to a library. Tuple, ordinary-constructor, polymorphic-variant and
+immutable-field projections can compose across known result producers. A
+nonreturning `raise` branch does not contribute a returned value. Unknown
+returning branches still invalidate their affected projection.
+
+A conditional choice of unit thunks retains a deferred callable with alternative
+targets. Constructing the choice evaluates its condition, not the thunk bodies;
+invoking it follows one alternative. Other higher-order conditional values
+remain unsupported. Recoverable handlers containing only value construction or
+reraising preserve the body's success alternatives without concatenating it with
+another handler. Handlers with additional calls retain exception uncertainty.

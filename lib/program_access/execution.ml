@@ -25,6 +25,7 @@ let observe
     (structure : structure) =
   let definitions = ref [] in
   let returned_functions = ref [] in
+  let value_origins = ref [] in
   let parameter_defaults = ref [] in
   let functor_instances = ref [] in
   let invocations = ref [] in
@@ -37,6 +38,7 @@ let observe
   let functions = Expressions.create 32 in
   let bodies = Hashtbl.create 32 in
   let applications = Expressions.create 32 in
+  let call_results = Expressions.create 32 in
   let expression_owners = Expressions.create 32 in
   let resumed = ref [] in
   let caller = ref (unit_canonical ^ ".<toplevel>") in
@@ -72,6 +74,15 @@ let observe
     | _ -> false
   in
   let function_type e = callable_type e.exp_env e.exp_type in
+  let unit_thunk e =
+    match Types.get_desc (expanded e.exp_env e.exp_type) with
+    | Types.Tarrow (_, argument, result, _) ->
+        ( match Types.get_desc (expanded e.exp_env argument) with
+          | Types.Tconstr (path, [], _) -> Path.same path Predef.path_unit
+          | _ -> false )
+        && not (callable_type e.exp_env result)
+    | _ -> false
+  in
   let binding_id pattern =
     match pattern.pat_desc with
     | Tpat_var (id, _, _)
@@ -111,11 +122,21 @@ let observe
         if base <> "" then base ^ "." ^ field else resolve path
     | _ -> resolve path
   in
+  let call_result e =
+    match Expressions.find_opt call_results e with
+    | Some source -> source
+    | None ->
+        let source =
+          unit_canonical ^ ".<call@" ^ unique_position e.exp_loc ^ ">.<result>"
+        in
+        Expressions.add call_results e source ;
+        source
+  in
   let result_source e =
     match e.exp_desc with
     | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, _) ->
         let target = resolved path in
-        if target = "" then "" else target ^ ".<result>"
+        if target = "" then "" else call_result e
     | Texp_ident (Path.Pident id, _, _) ->
         Option.value ~default:"" (Hashtbl.find_opt result_sources id)
     | _ -> ""
@@ -126,10 +147,16 @@ let observe
     then
       match pattern.pat_desc with
       | Tpat_var (id, _, _) ->
+          let target = resolved (Path.Pident id) in
+          if target <> ""
+          then value_origins := (target, source) :: !value_origins ;
           Hashtbl.replace result_sources id source ;
           if callable_type pattern.pat_env pattern.pat_type
           then Hashtbl.replace symbols id source
       | Tpat_alias (pattern, id, _, _, _) ->
+          let target = resolved (Path.Pident id) in
+          if target <> ""
+          then value_origins := (target, source) :: !value_origins ;
           Hashtbl.replace result_sources id source ;
           bind_result source pattern
       | Tpat_tuple patterns ->
@@ -141,6 +168,18 @@ let observe
             patterns
       | Tpat_variant (name, Some pattern, _) ->
           bind_result (source ^ ".<variant@" ^ name ^ ">") pattern
+      | Tpat_construct (_, description, patterns, _) ->
+          List.iteri
+            (fun index pattern ->
+              bind_result
+                ( source
+                ^ ".<constructor@"
+                ^ description.Data_types.cstr_name
+                ^ ":"
+                ^ string_of_int index
+                ^ ">" )
+                pattern )
+            patterns
       | Tpat_value pattern ->
           bind_result source (pattern :> value general_pattern)
       | _ -> ()
@@ -168,6 +207,13 @@ let observe
     | Texp_function _
      |Texp_apply _
       when function_type e -> (
+      match Expressions.find_opt functions e with
+      | Some symbol -> symbol
+      | None ->
+          let symbol = anonymous e in
+          Expressions.add functions e symbol ;
+          symbol )
+    | Texp_ifthenelse _ when unit_thunk e -> (
       match Expressions.find_opt functions e with
       | Some symbol -> symbol
       | None ->
@@ -230,6 +276,7 @@ let observe
           Hashtbl.replace symbols id (resolved path)
       | Texp_apply _
        |Texp_field _
+       |Texp_ifthenelse _
         when function_type vb.vb_expr ->
           Hashtbl.replace symbols id (function_symbol vb.vb_expr)
       | Texp_record {fields; extended_expression; _} ->
@@ -281,6 +328,9 @@ let observe
   in
   let rec returned_members source e =
     match e.exp_desc with
+    | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, _)
+      when List.mem (resolved path) ["Stdlib.raise"; "Stdlib.raise_notrace"] ->
+        ()
     | Texp_let (_, _, body)
      |Texp_sequence (_, body)
      |Texp_open (_, body) ->
@@ -301,6 +351,25 @@ let observe
         ()
     | Texp_variant (name, Some value) ->
         returned_members (source ^ ".<variant@" ^ name ^ ">") value
+    | Texp_construct (_, description, values) ->
+        List.iteri
+          (fun index value ->
+            returned_members
+              ( source
+              ^ ".<constructor@"
+              ^ description.Data_types.cstr_name
+              ^ ":"
+              ^ string_of_int index
+              ^ ">" )
+              value )
+          values
+    | Texp_tuple values ->
+        List.iteri
+          (fun index (_, value) ->
+            returned_members
+              (source ^ ".<tuple@" ^ string_of_int index ^ ">")
+              value )
+          values
     | Texp_record {fields; _} ->
         Array.iter
           (fun (label, value) ->
@@ -319,6 +388,10 @@ let observe
                     (source ^ ".<field@" ^ label.lbl_name ^ ">", "")
                     :: !returned_functions )
           fields
+    | _ when function_type e ->
+        returned_functions := (source, function_symbol e) :: !returned_functions
+    | _ when result_source e <> "" ->
+        returned_functions := (source, result_source e) :: !returned_functions
     | _ ->
         returned_functions := (source ^ ".<unknown>", "") :: !returned_functions
   in
@@ -590,6 +663,37 @@ let observe
                   in
                   within !caller (!loops @ [region]) (fun () ->
                       self.expr self body )
+              | Texp_ifthenelse (_, yes, Some no) when unit_thunk e ->
+                  let symbol = function_symbol e in
+                  define ~arity:1 symbol e.exp_loc false ;
+                  default.expr self e ;
+                  let branch label value =
+                    let target = function_symbol value in
+                    let call =
+                      { Observation.execution_caller= symbol
+                      ; execution_callee= target
+                      ; execution_resolution=
+                          ( if target = ""
+                            then Observation.Unresolved_dynamic
+                            else Observation.Resolved )
+                      ; execution_site= site_of_loc value.exp_loc
+                      ; execution_loops= []
+                      ; execution_partial= false
+                      ; execution_resumed= false
+                      ; execution_supplied= 1
+                      ; execution_defaults= []
+                      ; execution_values= []
+                      ; execution_result= ""
+                      ; execution_args= [] }
+                    in
+                    invocations := call :: !invocations ;
+                    (label, [Observation.Invoke call])
+                  in
+                  resumed :=
+                    ( symbol
+                    , [Observation.Choose [branch "then" yes; branch "else" no]]
+                    )
+                    :: !resumed
               | Texp_apply (fn, args) ->
                   let original_fn = fn in
                   let rec collapse fn args =
@@ -778,6 +882,17 @@ let observe
                             | _ -> None )
                           args
                         |> List.filter_map Fun.id
+                    ; execution_result= call_result e
+                    ; execution_values=
+                        List.mapi
+                          (fun position (_, arg) ->
+                            match arg with
+                            | Arg {exp_desc= Texp_ident (path, loc, _); _} ->
+                                Some
+                                  (position, resolved path, site_of_loc loc.loc)
+                            | _ -> None )
+                          args
+                        |> List.filter_map Fun.id
                     ; execution_args= arguments }
                   in
                   invocations := invocation :: !invocations ;
@@ -874,6 +989,7 @@ let observe
   let execution =
     { Observation.definitions= List.sort_uniq compare !definitions
     ; returned_functions= List.sort_uniq compare !returned_functions
+    ; value_origins= List.sort_uniq compare !value_origins
     ; parameter_defaults= List.sort_uniq compare !parameter_defaults
     ; functor_instances= List.sort_uniq compare !functor_instances
     ; invocations= List.sort_uniq compare !invocations

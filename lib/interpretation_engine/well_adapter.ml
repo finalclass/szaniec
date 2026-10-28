@@ -1258,6 +1258,12 @@ let interpret
           && position = 0
           && field = ""
         then Some ["Well.Middleware.next"]
+        else if
+          ( (api = "Well.stream" && argument.label = "")
+          || (api = "Well.Stream_accept.iter" && argument.position = 0) )
+          && position = 0
+          && field = ""
+        then Some ["Well.Stream.write"]
         else None )
       execution
   in
