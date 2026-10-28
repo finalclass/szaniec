@@ -25,6 +25,7 @@ let observe
     (structure : structure) =
   let definitions = ref [] in
   let returned_functions = ref [] in
+  let returned_constructors = ref [] in
   let value_origins = ref [] in
   let parameter_defaults = ref [] in
   let functor_instances = ref [] in
@@ -352,6 +353,8 @@ let observe
     | Texp_variant (name, Some value) ->
         returned_members (source ^ ".<variant@" ^ name ^ ">") value
     | Texp_construct (_, description, values) ->
+        returned_constructors :=
+          (source, description.Data_types.cstr_name) :: !returned_constructors ;
         List.iteri
           (fun index value ->
             returned_members
@@ -388,6 +391,9 @@ let observe
                     (source ^ ".<field@" ^ label.lbl_name ^ ">", "")
                     :: !returned_functions )
           fields
+    | Texp_ident (path, _, _)
+      when Canonical.parameter_symbol (resolved path) <> None ->
+        returned_functions := (source, resolved path) :: !returned_functions
     | _ when function_type e ->
         returned_functions := (source, function_symbol e) :: !returned_functions
     | _ when result_source e <> "" ->
@@ -989,6 +995,7 @@ let observe
   let execution =
     { Observation.definitions= List.sort_uniq compare !definitions
     ; returned_functions= List.sort_uniq compare !returned_functions
+    ; returned_constructors= List.sort_uniq compare !returned_constructors
     ; value_origins= List.sort_uniq compare !value_origins
     ; parameter_defaults= List.sort_uniq compare !parameter_defaults
     ; functor_instances= List.sort_uniq compare !functor_instances

@@ -29,6 +29,7 @@ let project names invocations =
     { Observation.definitions= List.map definition names
     ; invocations
     ; returned_functions= []
+    ; returned_constructors= []
     ; value_origins= []
     ; parameter_defaults= []
     ; functor_instances= []

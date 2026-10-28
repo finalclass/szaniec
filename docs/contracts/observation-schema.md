@@ -127,6 +127,10 @@ payloads and immutable record selectors. `returned_functions` pairs a factory's
 result projection with its compiler-proven callable target. Unsupported return
 branches retain an unknown projection; one known branch cannot supply evidence
 for an unknown branch. Multiple distinct targets remain unresolved.
+`returned_constructors` records constructor names at result projections, so an
+adapter can prove that a result rejects a continuation. Returned parameter
+identities also survive polymorphic helpers and bind to captured arguments at
+the corresponding call site; they are not assumed to be callable on their own.
 Standard `Set.Make` and `Map.Make` applications retain their concrete comparator;
 other unsupported functor applications still require a gap. Locally opened
 structures contribute their definitions and initialization calls. Typed nodes

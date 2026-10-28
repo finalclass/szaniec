@@ -2321,6 +2321,11 @@ let interpret
     obs.execution.invocations
     |> List.filter_map (fun (call : Observation.execution_call) ->
         if
+          call.execution_callee = "Stdlib.Seq.append"
+          && (not call.execution_resumed)
+          && call.execution_supplied >= 3
+        then Some (call.execution_site, [[""]])
+        else if
           call.execution_resumed
           || List.mem call.execution_site deferred_calls
           || not (Hashtbl.mem parameter_callbacks.uses call.execution_callee)

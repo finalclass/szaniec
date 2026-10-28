@@ -54,6 +54,7 @@ type execution =
   { definitions: execution_definition list
   ; invocations: execution_call list
   ; returned_functions: (string * string) list
+  ; returned_constructors: (string * string) list
   ; value_origins: (string * string) list
   ; parameter_defaults: (string * string) list
   ; functor_instances: (string * string * string * site) list
@@ -63,6 +64,7 @@ let empty_execution =
   { definitions= []
   ; invocations= []
   ; returned_functions= []
+  ; returned_constructors= []
   ; value_origins= []
   ; parameter_defaults= []
   ; functor_instances= []

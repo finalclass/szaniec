@@ -365,6 +365,28 @@ let show items = consume 3 items
       "rejected stream has no writer continuation",
       "let show () = Well.stream_open (fun _ -> Well.Stream_reject ())\n",
     );
+    await scenario(
+      "unknown accepted iterator through a helper remains incomplete",
+      "let make accepted = Well.Stream_accept accepted\nlet show accepted = Well.stream_open (fun _ -> make accepted)\n",
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "partially applied flat_map callback forces its returned sequence",
+      `let inner seq () = seq\nlet effects () = ${manager}; Second_manager.run (); Seq.Nil\nlet show () = ignore (List.of_seq (Seq.flat_map (inner effects) (List.to_seq [()])))\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
+    const bounded = await scenario(
+      "one append node does not prove both sources execute",
+      `let first () = ${manager}; Seq.Cons ((), Seq.empty)\nlet second () = Second_manager.run (); Seq.Nil\nlet show () = ignore ((Seq.append first second) ())\n`,
+      ["GAP-AMBIGUOUS-PATH"],
+      2,
+    );
+    assert(
+      bounded.report.summary.violations === 0,
+      "single-node append falsely proves a violation",
+    );
   } finally {
     if (!retained) await Deno.remove(root, { recursive: true });
   }

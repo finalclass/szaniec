@@ -121,6 +121,26 @@ let bind (obs : Observation.t) =
              fiber_value ) )
     obs.execution.invocations ;
   let projection symbol = List.mem "<result>" (Canonical.split_dots symbol) in
+  let arities = Hashtbl.create 64 in
+  List.iter
+    (fun (d : Observation.execution_definition) ->
+      Hashtbl.replace arities d.symbol d.definition_arity )
+    obs.execution.definitions ;
+  List.iter
+    (fun (call : Observation.execution_call) ->
+      if call.execution_resumed
+      then
+        match Hashtbl.find_opt arities call.execution_callee with
+        | Some arity when arity > call.execution_supplied ->
+            let source = call.execution_caller ^ ".<result>" in
+            Hashtbl.replace
+              arities
+              call.execution_caller
+              (arity - call.execution_supplied) ;
+            Hashtbl.replace result_calls source call ;
+            Hashtbl.replace targets source [call.execution_callee ^ ".<result>"]
+        | _ -> () )
+    obs.execution.invocations ;
   let parameters = Parameter_callbacks.create obs.execution in
   let sequence_tail_suffix = ".<result>.<constructor@Cons:1>" in
   let sequence_producer symbol =
@@ -267,6 +287,23 @@ let bind (obs : Observation.t) =
           prefix "" (Canonical.split_dots symbol)
   in
   let bindings = Hashtbl.create 32 in
+  let rec rejected visited source =
+    if List.mem source visited || List.length visited >= 64 || unknown source
+    then false
+    else
+      let constructors =
+        List.filter_map
+          (fun (name, constructor) ->
+            if name = source then Some constructor else None )
+          obs.execution.returned_constructors
+      in
+      let aliases =
+        Option.value ~default:[] (Hashtbl.find_opt targets source)
+      in
+      (constructors <> [] || aliases <> [])
+      && List.for_all (( = ) "Stream_reject") constructors
+      && List.for_all (rejected (source :: visited)) aliases
+  in
   let target symbol =
     match resolve [] symbol with
     | Some resolved ->
@@ -295,16 +332,12 @@ let bind (obs : Observation.t) =
               if argument.position <> 0
               then None
               else
-                match
-                  List.find_opt
-                    (fun (d : Observation.execution_definition) ->
-                      d.symbol = argument.target )
-                    obs.execution.definitions
-                with
-                | Some d when d.definition_arity = 1 ->
+                match Hashtbl.find_opt arities argument.target with
+                | Some 1 ->
                     Some
                       { argument with
-                        target=
+                        position= 1
+                      ; target=
                           Option.value
                             ~default:""
                             (resolve [] (argument.target ^ ".<result>")) }
@@ -335,11 +368,11 @@ let bind (obs : Observation.t) =
               in
               let callback =
                 match resolve [] projection with
-                | Some _ as target -> target
-                | None when unknown projection || Hashtbl.mem targets projection
-                  ->
+                | Some target when Canonical.parameter_symbol target <> None ->
                     Some ""
-                | None -> None
+                | Some _ as target -> target
+                | None when rejected [] (argument.target ^ ".<result>") -> None
+                | None -> Some ""
               in
               match callback with
               | Some target ->
@@ -371,6 +404,16 @@ let bind (obs : Observation.t) =
         Bodies.add bodies values mapped ;
         mapped
   and step = function
+    | Observation.Invoke call
+      when call.execution_callee = "Stdlib.Seq.append"
+           && (not call.execution_resumed)
+           && call.execution_supplied >= 3 ->
+        Observation.Choose
+          [ ( "single node"
+            , [ Observation.Unknown_order
+                  ( "single-node Seq.append has conditional source execution"
+                  , call.execution_site )
+              ; Observation.Invoke (invocation call) ] ) ]
     | Observation.Invoke call -> Observation.Invoke (invocation call)
     | Choose branches ->
         Choose (List.map (fun (label, body) -> (label, steps body)) branches)

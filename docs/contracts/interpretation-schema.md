@@ -382,6 +382,11 @@ of a known standard producer's `Cons` tail retains that producer's reachable
 callback effects as a bounded iteration summary. It is not an exact element count
 or a guarantee for arbitrary dynamically produced tails. Construction alone does
 not execute the callback effects.
+A direct single-node `Seq.append left right ()` has conditional source execution:
+without a proof of `left`'s first constructor, its path remains incomplete when
+the reachable effects could violate a path rule. Full sequence consumption keeps
+both sources. Partially applied `flat_map` callbacks retain their captured values
+when resolving the returned sequence.
 
 `Eio_main.run` executes its bootstrap callback. A callable `Some` result from
 `Eio.Fiber.get` resolves only for a compiler-observed fresh key with closed uses
@@ -392,7 +397,8 @@ values and multiple different targets remain incomplete.
 
 `Well.stream` supplies an external byte writer. `Well.stream_open` activates the
 `accept_iter` continuation returned in `Stream_accept`, supplying the same writer;
-rejection does not activate it. Known result wrappers, tuples and immutable
+proven rejection does not activate it. An unresolved accepted iterator remains a
+gap even through result wrappers. Known result wrappers, tuples and immutable
 records retain callback provenance and caller ownership. The framework semantics
 are based on Well revision `eee1d8fc8c5e8687ef8aac24b58d577327628f2f`
 (`lib/well/types.ml`, `lib/well/http_parse.ml`). Synthetic acceptance stand-ins
