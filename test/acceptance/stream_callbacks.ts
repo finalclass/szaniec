@@ -224,6 +224,22 @@ Deno.test("lazy sequences, scoped runtime callbacks and streaming results", asyn
       1,
     );
     await scenario(
+      "known forwarded record agrees with the constructed branch",
+      `type source = {iter : unit -> unit}\nlet known () = ${manager}\nlet source yes other = if yes then Ok {iter=known} else Ok other\nlet show yes = match source yes {iter=known} with Ok src -> src.iter () | Error () -> ()\n`,
+    );
+    await scenario(
+      "unknown forwarded record keeps the constructed branch incomplete",
+      `type source = {iter : unit -> unit}\nlet known () = ${manager}\nlet source yes other = if yes then Ok {iter=known} else Ok other\nlet show yes other = match source yes other with Ok src -> src.iter () | Error () -> ()\n`,
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
+      "different forwarded record keeps the constructed branch incomplete",
+      `type source = {iter : unit -> unit}\nlet known () = ${manager}\nlet other () = Second_manager.run ()\nlet source yes other = if yes then Ok {iter=known} else Ok other\nlet show yes = match source yes {iter=other} with Ok src -> src.iter () | Error () -> ()\n`,
+      ["GAP-UNRESOLVED-CALL"],
+      2,
+    );
+    await scenario(
       "unknown record callback remains incomplete",
       `type source = {iter : (string -> unit) -> unit}\nlet source callback = Ok {iter=callback}\nlet show callback = match source callback with Ok src -> src.iter ignore | Error () -> ()\n`,
       ["GAP-UNRESOLVED-CALL"],

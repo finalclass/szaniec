@@ -255,14 +255,26 @@ let bind (obs : Observation.t) =
       match Hashtbl.find_opt result_calls source with
       | None -> arguments
       | Some call ->
-          List.map
+          List.concat_map
             (fun (a : Observation.execution_arg) ->
-              ( ( call.execution_callee
+              let parameter =
+                call.execution_callee
                 ^ ".<parameter@"
                 ^ string_of_int a.position
                 ^ ">"
-                ^ if a.field = "" then "" else "." ^ a.field )
-              , a.target ) )
+              in
+              if a.field = ""
+              then [(parameter, a.target)]
+              else
+                (* Callback arguments use plain field paths; returned values
+                   use typed field projections. Bind both representations. *)
+                let projection =
+                  Canonical.split_dots a.field
+                  |> List.map (fun field -> ".<field@" ^ field ^ ">")
+                  |> String.concat ""
+                in
+                [ (parameter ^ "." ^ a.field, a.target)
+                ; (parameter ^ projection, a.target) ] )
             call.execution_args
           @ arguments
     in
