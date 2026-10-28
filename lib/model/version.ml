@@ -13,13 +13,13 @@ let cyclomatic_metric = "szaniec-cc/1"
 
 let config_format = "szaniec-config/1"
 
-let observation_format = "szaniec-observation/7"
+let observation_format = "szaniec-observation/8"
 
 let interpretation_format = "szaniec-interpretation/6"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.9.5"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.10.0"
 
-let adapter_well = "szaniec-well-adapter/3.7.3"
+let adapter_well = "szaniec-well-adapter/3.8.0"
 
 let rules = "szaniec-rules/3.2.0"
 

@@ -943,3 +943,11 @@ This README is the usage guide. Detailed formats and accepted design live in:
   [agent instructions](AGENTS.md).
 - [Interaction grouping, path lookup and large-observation regressions](docs/decisions/interaction-grouping.md).
 - [Conformance indexes, regression coverage and full-check benchmarks](docs/decisions/conformance-indexes.md).
+
+Lazy `Seq.append`/`Seq.flat_map` consumption, bounded recursive sequence tails,
+known callable result projections, closed Eio fiber bindings and Well accepted
+stream continuations are covered by `test/acceptance/stream_callbacks.ts`.
+Construction remains separate from execution; escaped keys, unknown writers and
+unsupported result branches retain explicit gaps. See the
+[interpretation contract](docs/contracts/interpretation-schema.md#lazy-sequences-and-scoped-stream-callbacks-adapter-380)
+for the supported scope.

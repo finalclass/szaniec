@@ -717,6 +717,10 @@ let evaluate_with_domains
          observation.execution.invocations )
   in
   let callback_paths = index_first fst interpretation.callback_paths in
+  let incomplete_calls = index_first Fun.id interpretation.incomplete_calls in
+  let incomplete_call (step : Observation.path_step) =
+    (not step.step_resumed) && Hashtbl.mem incomplete_calls step.step_site
+  in
   let returned_calls = Hashtbl.create 16 in
   List.iter
     (fun (site, source, target) ->
@@ -847,7 +851,14 @@ let evaluate_with_domains
                     then ()
                     else
                       let pieces =
-                        if
+                        if incomplete_call step
+                        then
+                          Ok
+                            [ [ { step with
+                                  step_callee= ""
+                                ; step_resolution=
+                                    Observation.Unresolved_dynamic } ] ]
+                        else if
                           (not step.step_resumed)
                           && Hashtbl.mem deferred_calls step.step_site
                         then Ok [[]]
@@ -882,132 +893,137 @@ let evaluate_with_domains
                           | _ -> Ok [[step]]
                       in
                       let pieces =
-                        match
-                          Hashtbl.find_opt callback_paths step.step_site
-                        with
-                        | Some (_, alternatives)
-                          when match target_of step.step_callee with
-                               | Some (target, _) ->
-                                   not
-                                     (same_boundary
-                                        (owner_of unit)
-                                        (owner_of target) )
-                               | None -> true -> (
-                            let callback_result =
-                              List.fold_left
-                                (fun all targets ->
-                                  let path =
-                                    List.fold_left
-                                      (fun previous target ->
-                                        let target =
-                                          resolve_binding bindings [] target
-                                        in
-                                        let next =
-                                          match target_of target with
-                                          | Some (tu, symbol)
-                                            when same_boundary
-                                                   (owner_of unit)
-                                                   (owner_of tu) ->
-                                              expand
-                                                tu
-                                                symbol
-                                                (depth + 1)
-                                                visiting
-                                                budget
-                                                bindings
-                                          | _
-                                            when target = ""
-                                                 || Canonical.parameter_symbol
-                                                      target
-                                                    <> None ->
-                                              Error
-                                                "callback input binding \
-                                                 unavailable"
-                                          | _ ->
-                                              Ok
-                                                [ [ { step with
-                                                      step_callee= target
-                                                    ; step_resolution=
-                                                        Observation.Resolved }
-                                                  ] ]
-                                        in
-                                        match (previous, next) with
-                                        | Ok previous, Ok next ->
-                                            Execution_paths.sequence
-                                              previous
-                                              next
-                                        | Error reason, _
-                                         |_, Error reason ->
-                                            Error reason )
-                                      (Ok [[]])
-                                      targets
-                                  in
-                                  match (all, path) with
-                                  | Ok all, Ok path ->
-                                      Execution_paths.union all path
-                                  | Error reason, _
-                                   |_, Error reason ->
-                                      Error reason )
-                                (Ok [])
-                                alternatives
-                            in
-                            match (pieces, callback_result) with
-                            | Ok previous, Ok next ->
-                                Execution_paths.sequence previous next
-                            | Error reason, _
-                             |_, Error reason ->
-                                Error reason )
-                        | Some _ -> pieces
-                        | None ->
-                            List.fold_left
-                              (fun pieces
-                                   (callback : Interpretation.callback_evidence)
-                                 ->
-                                match pieces with
-                                | Error reason -> Error reason
-                                | Ok previous
-                                  when callback.callback_phase
-                                       = Interpretation.Same_path
-                                       && callback.callback_resumed
-                                          = step.step_resumed -> (
-                                    let next =
-                                      let callback_target =
-                                        resolve_binding
-                                          bindings
-                                          []
-                                          callback.callback_target
-                                      in
-                                      match target_of callback_target with
-                                      | Some (target, symbol)
-                                        when same_boundary
-                                               (owner_of unit)
-                                               (owner_of target) ->
-                                          expand
-                                            target
-                                            symbol
-                                            (depth + 1)
-                                            visiting
-                                            budget
-                                            bindings
-                                      | _ when callback_target = "" ->
-                                          Error
-                                            "callback target provenance \
-                                             unavailable"
-                                      | _ ->
-                                          Ok
-                                            [ [ { step with
-                                                  Observation.step_callee=
-                                                    callback_target } ] ]
+                        if incomplete_call step
+                        then pieces
+                        else
+                          match
+                            Hashtbl.find_opt callback_paths step.step_site
+                          with
+                          | Some (_, alternatives)
+                            when match target_of step.step_callee with
+                                 | Some (target, _) ->
+                                     not
+                                       (same_boundary
+                                          (owner_of unit)
+                                          (owner_of target) )
+                                 | None -> true -> (
+                              let callback_result =
+                                List.fold_left
+                                  (fun all targets ->
+                                    let path =
+                                      List.fold_left
+                                        (fun previous target ->
+                                          let target =
+                                            resolve_binding bindings [] target
+                                          in
+                                          let next =
+                                            match target_of target with
+                                            | Some (tu, symbol)
+                                              when same_boundary
+                                                     (owner_of unit)
+                                                     (owner_of tu) ->
+                                                expand
+                                                  tu
+                                                  symbol
+                                                  (depth + 1)
+                                                  visiting
+                                                  budget
+                                                  bindings
+                                            | _
+                                              when target = ""
+                                                   || Canonical.parameter_symbol
+                                                        target
+                                                      <> None ->
+                                                Error
+                                                  "callback input binding \
+                                                   unavailable"
+                                            | _ ->
+                                                Ok
+                                                  [ [ { step with
+                                                        step_callee= target
+                                                      ; step_resolution=
+                                                          Observation.Resolved
+                                                      } ] ]
+                                          in
+                                          match (previous, next) with
+                                          | Ok previous, Ok next ->
+                                              Execution_paths.sequence
+                                                previous
+                                                next
+                                          | Error reason, _
+                                           |_, Error reason ->
+                                              Error reason )
+                                        (Ok [[]])
+                                        targets
                                     in
-                                    match next with
-                                    | Error reason -> Error reason
-                                    | Ok next ->
-                                        Execution_paths.sequence previous next )
-                                | Ok _ -> pieces )
-                              pieces
-                              (Option.value
-                                 ~default:[]
-                                 (Hashtbl.find_opt callbacks step.step_site) )
+                                    match (all, path) with
+                                    | Ok all, Ok path ->
+                                        Execution_paths.union all path
+                                    | Error reason, _
+                                     |_, Error reason ->
+                                        Error reason )
+                                  (Ok [])
+                                  alternatives
+                              in
+                              match (pieces, callback_result) with
+                              | Ok previous, Ok next ->
+                                  Execution_paths.sequence previous next
+                              | Error reason, _
+                               |_, Error reason ->
+                                  Error reason )
+                          | Some _ -> pieces
+                          | None ->
+                              List.fold_left
+                                (fun pieces
+                                     (callback :
+                                       Interpretation.callback_evidence )
+                                   ->
+                                  match pieces with
+                                  | Error reason -> Error reason
+                                  | Ok previous
+                                    when callback.callback_phase
+                                         = Interpretation.Same_path
+                                         && callback.callback_resumed
+                                            = step.step_resumed -> (
+                                      let next =
+                                        let callback_target =
+                                          resolve_binding
+                                            bindings
+                                            []
+                                            callback.callback_target
+                                        in
+                                        match target_of callback_target with
+                                        | Some (target, symbol)
+                                          when same_boundary
+                                                 (owner_of unit)
+                                                 (owner_of target) ->
+                                            expand
+                                              target
+                                              symbol
+                                              (depth + 1)
+                                              visiting
+                                              budget
+                                              bindings
+                                        | _ when callback_target = "" ->
+                                            Error
+                                              "callback target provenance \
+                                               unavailable"
+                                        | _ ->
+                                            Ok
+                                              [ [ { step with
+                                                    Observation.step_callee=
+                                                      callback_target } ] ]
+                                      in
+                                      match next with
+                                      | Error reason -> Error reason
+                                      | Ok next ->
+                                          Execution_paths.sequence previous next
+                                      )
+                                  | Ok _ -> pieces )
+                                pieces
+                                (Option.value
+                                   ~default:[]
+                                   (Hashtbl.find_opt callbacks step.step_site) )
                       in
                       match pieces with
                       | Error reason -> failed := Some reason
@@ -1370,7 +1386,19 @@ let evaluate_with_domains
                     | Some original when not original.ambiguous ->
                         original.alternatives
                     | _ -> [] )
-                | Ok alts -> alts
+                | Ok alts ->
+                    if
+                      List.exists (List.exists incomplete_call) alts
+                      && not (reachability_bound p.paths_unit p.paths_caller)
+                    then
+                      gap_path
+                        p.paths_unit
+                        p.paths_caller
+                        "conditional invocation has no complete execution \
+                         summary" ;
+                    List.map
+                      (List.filter (fun step -> not (incomplete_call step)))
+                      alts
               in
               let boundary = boundary_name owner in
               let role = role_of_name boundary in

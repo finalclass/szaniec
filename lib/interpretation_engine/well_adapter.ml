@@ -1258,6 +1258,12 @@ let interpret
           && position = 0
           && field = ""
         then Some ["Well.Middleware.next"]
+        else if
+          ( (api = "Well.stream" && argument.label = "")
+          || (api = "Well.Stream_accept.iter" && argument.position = 0) )
+          && position = 0
+          && field = ""
+        then Some ["Well.Stream.write"]
         else None )
       execution
   in
@@ -2311,6 +2317,7 @@ let interpret
       execution.invocations
     |> List.sort_uniq compare
   in
+  let bounded_appends = Result_callbacks.bounded_appends obs.execution in
   let callback_paths =
     obs.execution.invocations
     |> List.filter_map (fun (call : Observation.execution_call) ->
@@ -2427,6 +2434,7 @@ let interpret
   ; execution_flows
   ; callbacks
   ; callback_paths
+  ; incomplete_calls= bounded_appends
   ; bound_parameters
   ; returned_calls
   ; parameter_defaults= obs.execution.parameter_defaults

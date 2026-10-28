@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/7`.
+Format identifier (conceptual): `szaniec-observation/8`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -127,6 +127,14 @@ payloads and immutable record selectors. `returned_functions` pairs a factory's
 result projection with its compiler-proven callable target. Unsupported return
 branches retain an unknown projection; one known branch cannot supply evidence
 for an unknown branch. Multiple distinct targets remain unresolved.
+`returned_constructors` records constructor names at result projections, so an
+adapter can prove that a result rejects a continuation. Returned parameter
+identities also survive polymorphic helpers and bind to captured arguments at
+the corresponding call site; they are not assumed to be callable on their own.
+If a cached compiler records a missing absolute Dune private-package load path
+from another checkout, acquisition uses the existing package with the identical
+full package directory name below the current project's `_build`. Other missing
+absolute paths are not guessed.
 Standard `Set.Make` and `Map.Make` applications retain their concrete comparator;
 other unsupported functor applications still require a gap. Locally opened
 structures contribute their definitions and initialization calls. Typed nodes
@@ -303,3 +311,21 @@ and private-access checks remain independent of this limit.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
+
+### Callable result provenance (adapter 1.10.0)
+
+Calls retain a stable per-expression `execution_result` identity and
+`execution_values` (input position, compiler-resolved immutable value identity,
+source site). `value_origins` links named values to their producing result.
+These are language facts; they neither authorize an API nor assign execution
+semantics to a library. Tuple, ordinary-constructor, polymorphic-variant and
+immutable-field projections can compose across known result producers. A
+nonreturning `raise` branch does not contribute a returned value. Unknown
+returning branches still invalidate their affected projection.
+
+A conditional choice of unit thunks retains a deferred callable with alternative
+targets. Constructing the choice evaluates its condition, not the thunk bodies;
+invoking it follows one alternative. Other higher-order conditional values
+remain unsupported. Recoverable handlers containing only value construction or
+reraising preserve the body's success alternatives without concatenating it with
+another handler. Handlers with additional calls retain exception uncertainty.

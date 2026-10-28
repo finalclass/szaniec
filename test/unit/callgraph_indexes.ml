@@ -77,6 +77,7 @@ let () =
     ; execution_flows= []
     ; callbacks= []
     ; callback_paths= []
+    ; incomplete_calls= []
     ; bound_parameters= []
     ; parameter_targets= []
     ; returned_calls= []

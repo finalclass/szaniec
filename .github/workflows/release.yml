@@ -28,7 +28,8 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Run the same complete verification as CI, including cold compiler fixtures.
+    timeout-minutes: 120
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:

@@ -120,5 +120,6 @@ type t =
   ; parameter_targets: (string * string list) list
   ; returned_calls: (Observation.site * string * string) list
   ; parameter_defaults: (string * string) list
+  ; incomplete_calls: Observation.site list
   ; deferred_calls: Observation.site list
   ; gaps: Observation.gap list }

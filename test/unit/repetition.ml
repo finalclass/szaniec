@@ -20,6 +20,8 @@ let call ?(loops = []) caller callee =
   ; execution_resumed= false
   ; execution_supplied= 1
   ; execution_defaults= []
+  ; execution_values= []
+  ; execution_result= ""
   ; execution_args= [] }
 
 let project names invocations =
@@ -27,6 +29,8 @@ let project names invocations =
     { Observation.definitions= List.map definition names
     ; invocations
     ; returned_functions= []
+    ; returned_constructors= []
+    ; value_origins= []
     ; parameter_defaults= []
     ; functor_instances= []
     ; ordered= [] }

@@ -44,6 +44,9 @@ verify:
 	deno fmt --check test/acceptance/service_callbacks.ts
 	deno check test/acceptance/service_callbacks.ts
 	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_CALLBACK_BINARY test/acceptance/service_callbacks.ts
+	deno fmt --check test/acceptance/stream_callbacks.ts
+	deno check test/acceptance/stream_callbacks.ts
+	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/stream_callbacks.ts
 	deno fmt --check test/acceptance/capabilities.ts
 	deno check test/acceptance/capabilities.ts
 	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/capabilities.ts

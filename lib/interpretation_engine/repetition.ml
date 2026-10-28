@@ -16,7 +16,10 @@ let collection_arity api =
   then Some 3
   else
     match Canonical.split_dots api with
-    | ["Stdlib"; "Seq"; ("map" | "filter" | "filter_map")] -> Some 3
+    | [ "Stdlib"
+      ; "Seq"
+      ; ("map" | "filter" | "filter_map" | "flat_map" | "append") ] ->
+        Some 3
     | ["Stdlib"; ("List" | "String"); "to_seq"] -> Some 2
     | ["Stdlib"; "Seq"; ("return" | "singleton")] -> Some 2
     | [ "Stdlib"
@@ -154,8 +157,12 @@ let callback_mode api (argument : Observation.execution_arg) =
     | _
       when List.mem
              api
-             ["Stdlib.Seq.map"; "Stdlib.Seq.filter"; "Stdlib.Seq.filter_map"]
-           && argument.position = 0 ->
+             [ "Stdlib.Seq.map"
+             ; "Stdlib.Seq.filter"
+             ; "Stdlib.Seq.filter_map"
+             ; "Stdlib.Seq.flat_map"
+             ; "Stdlib.Seq.append" ]
+           && argument.position < 2 ->
         Iteration
     | _ when api = "Stdlib.Option.fold" && argument.label = "some" -> Once
     | _ when api = "Stdlib.Option.bind" && argument.position = 1 -> Once
@@ -212,6 +219,7 @@ let callback_mode api (argument : Observation.execution_arg) =
            && argument.position = 1 ->
         Once
     | _ when List.mem api ["Well.stream_open"; "Well.stream"] -> Activation
+    | _ when api = "Well.Stream_accept.iter" -> Activation
     | _ when api = "Well.Http_stream.iter" && argument.position = 0 -> Iteration
     | _ when api = "Js_of_ocaml.Js.Opt.case" && argument.position > 0 -> Once
     | _ when api = "Otoml.get_array" && argument.position = 1 -> Iteration
@@ -219,6 +227,7 @@ let callback_mode api (argument : Observation.execution_arg) =
     | _ when api = "Stdlib.:=" -> Ignored
     | _ when api = "Stdlib.Fun.flip" && argument.position = 0 -> Once
     | _ when List.mem api ["Eio.Cancel.protect"; "Well.Db.with_well_db"] -> Once
+    | _ when api = "Eio_main.run" && argument.position = 0 -> Once
     | _ when api = "Eio.Fiber.with_binding" && argument.position = 2 -> Once
     | _ when api = "Eio.Fiber.with_binding" -> Ignored
     | _ when api = "Eio.Mutex.use_rw" && argument.position = 2 -> Once
@@ -255,7 +264,9 @@ let callback_arity api =
   | _ -> 1
 
 let argument_arity api (argument : Observation.execution_arg) =
-  if argument.position = -1 && argument.label = "compare"
+  if api = "Stdlib.Seq.flat_map" && argument.position = 0
+  then 2
+  else if argument.position = -1 && argument.label = "compare"
   then 2
   else callback_arity api
 

@@ -114,6 +114,7 @@ let evaluate
     ; execution_flows= []
     ; callbacks
     ; callback_paths= []
+    ; incomplete_calls= []
     ; bound_parameters= []
     ; parameter_targets= []
     ; returned_calls= []
@@ -411,6 +412,8 @@ let () =
         ; execution_resumed= resumed
         ; execution_supplied= 0
         ; execution_defaults= []
+        ; execution_values= []
+        ; execution_result= ""
         ; execution_args= [] }
     in
     { Observation.empty_execution with

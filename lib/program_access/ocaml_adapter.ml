@@ -155,6 +155,16 @@ let real_source (sourcefile : string) : string option =
   then Some (String.sub sourcefile 0 (String.length sourcefile - 6) ^ ".ml")
   else Some sourcefile
 
+let relocated_package_path ~file_exists ~project_root path =
+  let marker = "/_build/_private/default/.pkg/" in
+  match find_substring path marker with
+  | None -> path
+  | Some offset ->
+      let local =
+        project_root ^ String.sub path offset (String.length path - offset)
+      in
+      if file_exists local then local else path
+
 let compiler_path
     ?(file_exists = Sys.file_exists)
     ~project_root
@@ -174,7 +184,7 @@ let compiler_path
            path
            (String.length prefix)
            (String.length path - String.length prefix)
-    else path
+    else relocated_package_path ~file_exists ~project_root path
 
 let digest_matches path expected =
   try Some (Digest.file path) = expected with
@@ -1087,6 +1097,15 @@ and walk_expr
             true
         | _ -> false
       then body_flow
+      else if
+        (not handlers.ambiguous)
+        && List.for_all
+             (List.for_all (fun (step : Observation.path_step) ->
+                  List.mem
+                    step.step_callee
+                    ["Stdlib.raise"; "Stdlib.raise_notrace"] ) )
+             handlers.alts
+      then flow_union body_flow handlers
       else if flow_has_call body_flow && flow_has_call handlers
       then
         { flow_ambiguous with
@@ -1684,6 +1703,8 @@ let observe
   let execution_invocations = ref [] in
   let execution_ordered = ref [] in
   let returned_functions = ref [] in
+  let returned_constructors = ref [] in
+  let value_origins = ref [] in
   let parameter_defaults = ref [] in
   let functor_instances = ref [] in
   let vrefs = ref [] in
@@ -2081,6 +2102,12 @@ let observe
                     List.rev_append
                       facts.execution.returned_functions
                       !returned_functions ;
+                  returned_constructors :=
+                    List.rev_append
+                      facts.execution.returned_constructors
+                      !returned_constructors ;
+                  value_origins :=
+                    List.rev_append facts.execution.value_origins !value_origins ;
                   parameter_defaults :=
                     List.rev_append
                       facts.execution.parameter_defaults
@@ -2379,6 +2406,16 @@ let observe
   ; calls= List.sort by_unit !calls
   ; execution=
       { Observation.definitions= List.sort_uniq compare !execution_definitions
+      ; returned_constructors=
+          List.map
+            (fun (source, name) -> (resolve source, name))
+            !returned_constructors
+          |> List.sort_uniq compare
+      ; value_origins=
+          List.map
+            (fun (target, source) -> (resolve target, resolve source))
+            !value_origins
+          |> List.sort_uniq compare
       ; returned_functions=
           List.map
             (fun (source, target) -> (resolve source, resolve target))
@@ -2400,6 +2437,10 @@ let observe
             (fun (c : Observation.execution_call) ->
               { c with
                 execution_callee= resolve c.execution_callee
+              ; execution_values=
+                  List.map
+                    (fun (i, value, site) -> (i, resolve value, site))
+                    c.execution_values
               ; execution_args=
                   List.map
                     (fun (a : Observation.execution_arg) ->

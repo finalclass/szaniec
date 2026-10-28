@@ -39,6 +39,8 @@ type execution_call =
   ; execution_resumed: bool
   ; execution_supplied: int
   ; execution_defaults: int list
+  ; execution_values: (int * string * site) list
+  ; execution_result: string
   ; execution_args: execution_arg list }
 
 type ordered_step =
@@ -52,6 +54,8 @@ type execution =
   { definitions: execution_definition list
   ; invocations: execution_call list
   ; returned_functions: (string * string) list
+  ; returned_constructors: (string * string) list
+  ; value_origins: (string * string) list
   ; parameter_defaults: (string * string) list
   ; functor_instances: (string * string * string * site) list
   ; ordered: (string * ordered_step list) list }
@@ -60,6 +64,8 @@ let empty_execution =
   { definitions= []
   ; invocations= []
   ; returned_functions= []
+  ; returned_constructors= []
+  ; value_origins= []
   ; parameter_defaults= []
   ; functor_instances= []
   ; ordered= [] }
