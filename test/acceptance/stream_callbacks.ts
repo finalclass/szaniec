@@ -397,6 +397,12 @@ let show items = consume 3 items
       named.report.summary.violations === 0,
       "named single-node append falsely proves a violation",
     );
+    await scenario(
+      "full named append consumption retains both sources",
+      `let first () = ${manager}; Seq.Cons ((), Seq.empty)\nlet second () = Second_manager.run (); Seq.Nil\nlet show () = let items = Seq.append first second in ignore (List.of_seq items)\n`,
+      ["UC-CLIENT-MULTI-MANAGER"],
+      1,
+    );
   } finally {
     if (!retained) await Deno.remove(root, { recursive: true });
   }
