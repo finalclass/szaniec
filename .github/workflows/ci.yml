@@ -10,7 +10,8 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Cold compiler fixtures plus packaging exceed one hour on hosted runners.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-build
