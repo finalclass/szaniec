@@ -52,4 +52,31 @@ let () =
     [ ("App_contract.Common", "App_contract.App_service_common")
     ; ("App_contract.Task_access", "App_contract.App_service_task_access")
     ; ("App_browser.Nested.Common", "App_browser.App_service_common") ] ;
+  if Array.length Sys.argv > 2 && Sys.argv.(2) = "codec-paths"
+  then
+    List.iter
+      (fun name ->
+        let unit = "App_contract.App_service_task_manager" in
+        let caller = "Payload." ^ name in
+        let paths =
+          List.find_opt
+            (fun (p : Observation.exec_paths) ->
+              p.paths_unit = unit && p.paths_caller = caller )
+            obs.exec_paths
+        in
+        check
+          (Option.fold
+             ~none:false
+             ~some:(fun (p : Observation.exec_paths) ->
+               (not p.ambiguous)
+               && List.exists
+                    (List.exists (fun (s : Observation.path_step) ->
+                         s.step_callee = "Stdlib.String.trim" ) )
+                    p.alternatives )
+             paths )
+          ("annotated codec lost its executable body: " ^ caller) ;
+        check
+          (List.mem_assoc (unit ^ "." ^ caller) obs.execution.ordered)
+          ("annotated codec lost its ordered body: " ^ caller) )
+      ["from_data"; "to_data"] ;
   print_endline "public contract compiler evidence: ok"

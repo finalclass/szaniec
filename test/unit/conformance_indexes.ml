@@ -336,6 +336,7 @@ let () =
     "indexes are scoped to one evaluation" ;
   let callback phase target =
     { Interpretation.callback_site= site 1000
+    ; callback_callee= "External.register"
     ; callback_target= target
     ; callback_resumed= false
     ; callback_phase= phase }
@@ -420,6 +421,25 @@ let () =
       ordered= [("App.Page.entry", List.map call both)] }
   in
   let ambiguous_entry = paths ~ambiguous:true "entry" [] in
+  let shared_site_callback callee =
+    { (callback Interpretation.Unknown_callback "App.Page.handler@1") with
+      callback_site= site 10
+    ; callback_callee= callee }
+  in
+  List.iter
+    (fun (callee, expected) ->
+      check
+        ( rules
+            (evaluate
+               ~execution:(execution false)
+               ~callbacks:[shared_site_callback callee]
+               ~deferred_calls:[site 20]
+               [ambiguous_entry]
+               requests )
+        = expected )
+        "reachability must associate callbacks with their actual callee, not \
+         only a shared source site" )
+    [("External.print", []); ("First_manager.run", ["GAP-AMBIGUOUS-PATH"])] ;
   check
     ( evaluate
         ~execution:(execution false)

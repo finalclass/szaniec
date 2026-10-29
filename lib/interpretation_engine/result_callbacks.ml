@@ -33,7 +33,7 @@ let bounded_appends (execution : Observation.execution) =
       else [] )
   |> List.sort_uniq compare
 
-let bind (obs : Observation.t) =
+let bind ?(on_call = fun _ _ -> ()) (obs : Observation.t) =
   let bounded = bounded_appends obs.execution in
   let targets = Hashtbl.create 32 in
   let result_calls = Hashtbl.create 32 in
@@ -527,7 +527,13 @@ let bind (obs : Observation.t) =
           obs.exec_paths
     ; execution=
         { obs.execution with
-          invocations= List.map invocation (streams @ obs.execution.invocations)
+          invocations=
+            List.map
+              (fun call ->
+                let mapped = invocation call in
+                on_call call mapped ;
+                mapped )
+              (streams @ obs.execution.invocations)
         ; ordered=
             List.map
               (fun (symbol, body) -> (symbol, steps body))

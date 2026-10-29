@@ -85,6 +85,7 @@ type callback_phase =
 
 type callback_evidence =
   { callback_site: Observation.site
+  ; callback_callee: string
   ; callback_target: string
   ; callback_resumed: bool
   ; callback_phase: callback_phase }

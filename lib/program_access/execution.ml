@@ -17,6 +17,21 @@ module Modules = Hashtbl.Make (struct
   let hash = Hashtbl.hash
 end)
 
+let binding_id pattern =
+  match pattern.pat_desc with
+  | Tpat_var (id, _, _)
+   |Tpat_alias ({pat_desc= Tpat_any; _}, id, _, _, _) ->
+      Some id
+  | _ -> None
+
+(* An identifier open changes name lookup, not function construction. Do not
+   unwrap structure/application opens: their initialization may execute code. *)
+let rec binding_expression expression =
+  match expression.exp_desc with
+  | Texp_open ({open_expr= {mod_desc= Tmod_ident _; _}; _}, body) ->
+      binding_expression body
+  | _ -> expression
+
 let observe
     ?(with_ordered = true)
     ~unit_canonical
@@ -83,13 +98,6 @@ let observe
           | _ -> false )
         && not (callable_type e.exp_env result)
     | _ -> false
-  in
-  let binding_id pattern =
-    match pattern.pat_desc with
-    | Tpat_var (id, _, _)
-     |Tpat_alias ({pat_desc= Tpat_any; _}, id, _, _, _) ->
-        Some id
-    | _ -> None
   in
   let type_path e =
     match Types.get_desc e.exp_type with
@@ -259,7 +267,7 @@ let observe
     bind_result (result_source vb.vb_expr) vb.vb_pat ;
     match binding_id vb.vb_pat with
     | Some id -> (
-      match vb.vb_expr.exp_desc with
+      match (binding_expression vb.vb_expr).exp_desc with
       | Texp_function _ when not (Hashtbl.mem symbols id) ->
           let symbol =
             match resolve (Path.Pident id) with
@@ -272,7 +280,7 @@ let observe
             | symbol -> symbol
           in
           Hashtbl.replace symbols id symbol ;
-          Expressions.replace functions vb.vb_expr symbol
+          Expressions.replace functions (binding_expression vb.vb_expr) symbol
       | Texp_ident (path, _, _) when function_type vb.vb_expr ->
           Hashtbl.replace symbols id (resolved path)
       | Texp_apply _
@@ -466,11 +474,12 @@ let observe
           | Tstr_value (_, bindings) ->
               List.iter
                 (fun vb ->
-                  match (binding_id vb.vb_pat, vb.vb_expr.exp_desc) with
+                  let expression = binding_expression vb.vb_expr in
+                  match (binding_id vb.vb_pat, expression.exp_desc) with
                   | Some id, Texp_function _ ->
                       let symbol = !module_scope ^ "." ^ Ident.name id in
                       Hashtbl.replace symbols id symbol ;
-                      Expressions.replace functions vb.vb_expr symbol
+                      Expressions.replace functions expression symbol
                   | Some id, Texp_apply _ when function_type vb.vb_expr ->
                       let symbol = !module_scope ^ "." ^ Ident.name id in
                       Hashtbl.replace symbols id symbol ;
@@ -528,7 +537,7 @@ let observe
     ; value_binding=
         (fun self vb ->
           register vb ;
-          match vb.vb_expr.exp_desc with
+          match (binding_expression vb.vb_expr).exp_desc with
           | Texp_function _ -> default.value_binding self vb
           | _ ->
               let symbol =
