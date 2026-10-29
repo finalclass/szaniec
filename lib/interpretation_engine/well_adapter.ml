@@ -1049,10 +1049,31 @@ let interpret
         returned_calls
     else None
   in
+  let module Calls = Hashtbl.Make (struct
+    type t = Observation.execution_call
+
+    let equal a b = a == b
+
+    let hash = Hashtbl.hash
+  end) in
+  let callback_sources = Calls.create 32 in
+  let map_calls transform calls =
+    List.map
+      (fun (call : Observation.execution_call) ->
+        let source =
+          Option.value
+            ~default:call.execution_callee
+            (Calls.find_opt callback_sources call)
+        in
+        let mapped = transform call in
+        Calls.replace callback_sources mapped source ;
+        mapped )
+      calls
+  in
   let execution =
     { obs.execution with
       invocations=
-        List.map
+        map_calls
           (fun call ->
             let call = Option.value ~default:call (instance_call call) in
             match returned_target call with
@@ -1271,7 +1292,7 @@ let interpret
   let execution =
     { execution with
       Observation.invocations=
-        List.map
+        map_calls
           (fun (call : Observation.execution_call) ->
             if Canonical.parameter_symbol call.execution_callee = None
             then call
@@ -2188,31 +2209,10 @@ let interpret
       ~entry_point
       ~classify:classify_flow
   in
-  let callback_source_key (call : Observation.execution_call) =
-    ( call.execution_caller
-    , call.execution_result
-    , call.execution_site
-    , call.execution_resumed )
-  in
-  let callback_sources = Hashtbl.create 32 in
-  List.iter
-    (fun (call : Observation.execution_call) ->
-      let key = callback_source_key call in
-      let previous =
-        Option.value ~default:[] (Hashtbl.find_opt callback_sources key)
-      in
-      Hashtbl.replace callback_sources key (call.execution_callee :: previous) )
-    obs.execution.invocations ;
   let callbacks =
     List.concat_map
       (fun (call : Observation.execution_call) ->
-        let source_callees =
-          Option.value
-            ~default:[call.execution_callee]
-            (Hashtbl.find_opt callback_sources (callback_source_key call))
-          |> List.sort_uniq String.compare
-        in
-        List.concat_map
+        List.map
           (fun (argument : Observation.execution_arg) ->
             let phase =
               let factory_method =
@@ -2330,14 +2330,11 @@ let interpret
                     ^ "; closure construction/passing does not prove invocation"
                 }
                 :: !gaps ;
-            List.map
-              (fun callee ->
-                { Interpretation.callback_site= call.execution_site
-                ; callback_callee= callee
-                ; callback_target= argument.target
-                ; callback_resumed= call.execution_resumed
-                ; callback_phase= phase } )
-              source_callees )
+            { Interpretation.callback_site= call.execution_site
+            ; callback_callee= Calls.find callback_sources call
+            ; callback_target= argument.target
+            ; callback_resumed= call.execution_resumed
+            ; callback_phase= phase } )
           call.execution_args )
       execution.invocations
     |> List.sort_uniq compare
