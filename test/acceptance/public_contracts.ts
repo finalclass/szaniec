@@ -90,6 +90,7 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
     rules: string[],
     code = 1,
     reapprove = false,
+    inspect?: () => Promise<void>,
   ) {
     const originals = new Map<string, string | null>();
     try {
@@ -133,6 +134,7 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
         );
       }
       console.log(`${name}: ok ${JSON.stringify(result.report.summary)}`);
+      if (inspect) await inspect();
       return result;
     } finally {
       for (const [file, original] of originals) {
@@ -201,6 +203,59 @@ Deno.test("compiled public contracts preserve private boundaries and approval", 
     const managerSource = await Deno.readTextFile(`${root}/${manager}`);
     const clientSource = await Deno.readTextFile(`${root}/${client}`);
     const config = await Deno.readTextFile(`${root}/${policy}`);
+    const nativeManager = "lib/generated/native/app_service_task_manager.ml";
+    const nativeManagerSource = await Deno.readTextFile(
+      `${root}/${nativeManager}`,
+    );
+    const managerContract = "lib/contract/Task_manager.cyrograf";
+    const managerContractSource = await Deno.readTextFile(
+      `${root}/${managerContract}`,
+    );
+    // The annotated binding and local open match ppx_deriving's emitted shape.
+    const codec = `
+module Payload = struct
+  type t = { value : string }
+  include struct
+    let (to_data : t -> string) =
+      let open! Stdlib in fun message -> String.trim message.value
+    let (from_data : string -> t) =
+      let open! Stdlib in fun value -> { value = String.trim value }
+  end
+end
+`;
+    const codecChanges = {
+      [nativeManager]: nativeManagerSource + codec,
+      [managerContract]: managerContractSource +
+        "\nstruct Payload { value: String }\n",
+      [manager]: managerSource + `
+let codec_roundtrip value =
+  let message = App_contract.Task_manager.Payload.from_data value in
+  App_contract.Task_manager.Payload.to_data message
+`,
+    };
+    await scenario(
+      "annotated generated codecs retain executable bodies",
+      codecChanges,
+      [],
+      0,
+      false,
+      async () => {
+        const evidence = await command(
+          `${repository}/_build/default/test/acceptance/contract_observation.exe`,
+          [root, "codec-paths"],
+        );
+        assert(evidence.code === 0, evidence.err + evidence.out);
+      },
+    );
+    await scenario("annotated codec retains protected resource access", {
+      ...codecChanges,
+      "lib/well/well.ml": await Deno.readTextFile(`${root}/lib/well/well.ml`) +
+        "\nmodule Db = struct let execute () = () end\n",
+      [nativeManager]: nativeManagerSource + codec.replace(
+        "fun value -> { value = String.trim value }",
+        "fun value -> Well.Db.execute (); { value = String.trim value }",
+      ),
+    }, ["RESOURCE-BOUNDARY"]);
     const browserCommon = "lib/generated/browser/app_service_common.ml";
     const browserSource = await Deno.readTextFile(`${root}/${browserCommon}`);
     const browserDune = "lib/generated/browser/dune";

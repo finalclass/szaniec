@@ -312,6 +312,16 @@ and private-access checks remain independent of this limit.
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
 
+### Annotated callable bindings (adapter 1.10.1)
+
+Typed wildcard-alias bindings retain their compiler identifier in executable
+paths, including the annotated functions emitted by codec generators. Local
+identifier opens around a function preserve its binding identity and body;
+they affect name resolution without executing module initialization. Structure
+and application opens are not treated as transparent. The same extraction
+applies to authored helpers: codec names do not grant an exemption, and calls
+inside these functions remain available to structural and path checks.
+
 ### Callable result provenance (adapter 1.10.0)
 
 Calls retain a stable per-expression `execution_result` identity and

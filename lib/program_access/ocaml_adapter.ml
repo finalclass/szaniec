@@ -975,9 +975,9 @@ and walk_expr
       then
         List.iter
           (fun vb ->
-            match vb.Typedtree.vb_pat.pat_desc with
-            | Tpat_var (id, _, _) -> (
-              match vb.vb_expr.exp_desc with
+            match Execution.binding_id vb.Typedtree.vb_pat with
+            | Some id -> (
+              match (Execution.binding_expression vb.vb_expr).exp_desc with
               | Texp_function _ ->
                   Hashtbl.replace
                     c.defined
@@ -1000,8 +1000,11 @@ and walk_expr
         List.map
           (fun vb ->
             walk_pat c facts caller vb.Typedtree.vb_pat ;
-            match (vb.vb_pat.pat_desc, vb.vb_expr.exp_desc) with
-            | Tpat_var (id, _, _), Texp_function _ when c.local_targets ->
+            match
+              ( Execution.binding_id vb.vb_pat
+              , (Execution.binding_expression vb.vb_expr).exp_desc )
+            with
+            | Some id, Texp_function _ when c.local_targets ->
                 let full = Hashtbl.find c.defined id in
                 let symbol =
                   String.sub
@@ -1224,6 +1227,9 @@ and walk_as_binding
     (caller : string)
     (e : Typedtree.expression) : flow =
   match e.Typedtree.exp_desc with
+  | Texp_open (({open_expr= {mod_desc= Tmod_ident _; _}; _} as opened), body) ->
+      walk_module_expr c facts caller opened.open_expr ;
+      walk_as_binding c facts caller body
   | Texp_function (params, Tfunction_body body) ->
       List.iter
         (fun fp ->
@@ -1303,8 +1309,8 @@ and walk_structure
           List.iter
             (fun vb ->
               let name =
-                match vb.Typedtree.vb_pat.Typedtree.pat_desc with
-                | Tpat_var (id, _, _) -> Ident.name id
+                match Execution.binding_id vb.Typedtree.vb_pat with
+                | Some id -> Ident.name id
                 | _ -> "<toplevel>"
               in
               let caller = if outer = "" then name else outer ^ "." ^ name in
