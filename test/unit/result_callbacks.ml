@@ -100,4 +100,21 @@ let () =
         , Interpretation.Unknown_callback ) ] ) ;
   print_endline
     "same-caller calls sharing all location identities retain their own \
-     callbacks: ok"
+     callbacks: ok" ;
+  let source = "Well.open_http_stream.<result>.<tuple@2>" in
+  let invocation = call source "App.Codec.decode.<parameter@0>" in
+  let interpreted =
+    Szaniec_interpretation_engine.Well_adapter.interpret
+      ~policy
+      ~cy:{services= []; contracts= []}
+      { observation with
+        execution= {Observation.empty_execution with invocations= [invocation]}
+      }
+  in
+  assert (
+    List.map
+      (fun (c : Interpretation.callback_evidence) ->
+        (c.callback_callee, c.callback_target, c.callback_phase) )
+      interpreted.callbacks
+    = [(source, "App.Codec.decode.<parameter@0>", Interpretation.Same_path)] ) ;
+  print_endline "callable result rewriting retains the compiler callee: ok"

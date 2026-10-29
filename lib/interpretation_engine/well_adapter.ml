@@ -692,10 +692,11 @@ let merge_interactions (interactions : Interpretation.interaction list) :
 
 let resolve_ownership
     ?(approved = false)
+    ?on_call
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) =
-  let obs, result_targets = Result_callbacks.bind obs in
+  let obs, result_targets = Result_callbacks.bind ?on_call obs in
   let contracts, contract_gaps, unavailable_contracts =
     Public_contracts.bind ~approved ~policy ~cy obs
   in
@@ -732,11 +733,35 @@ let interpret
     ~(policy : Policy.t)
     ~(cy : Szaniec_architecture_access.Cyrograf.t)
     (obs : Observation.t) : Interpretation.t =
+  let module Calls = Hashtbl.Make (struct
+    type t = Observation.execution_call
+
+    let equal a b = a == b
+
+    let hash = Hashtbl.hash
+  end) in
+  let callback_sources = Calls.create 32 in
+  let on_call (call : Observation.execution_call) mapped =
+    let source =
+      Option.value
+        ~default:call.execution_callee
+        (Calls.find_opt callback_sources call)
+    in
+    Calls.replace callback_sources mapped source
+  in
+  let map_calls transform calls =
+    List.map
+      (fun call ->
+        let mapped = transform call in
+        on_call call mapped ;
+        mapped )
+      calls
+  in
   let ( obs
       , result_targets
       , (contracts, contract_gaps, unavailable_contracts, serialization_runtimes)
       , (ownership_map, ownership_gaps, impl_of) ) =
-    resolve_ownership ~approved ~policy ~cy obs
+    resolve_ownership ~approved ~on_call ~policy ~cy obs
   in
   let surfaces, surface_gaps =
     Public_contracts.validate_surfaces ~approved ~policy ~cy obs ownership_map
@@ -1048,27 +1073,6 @@ let interpret
           else None )
         returned_calls
     else None
-  in
-  let module Calls = Hashtbl.Make (struct
-    type t = Observation.execution_call
-
-    let equal a b = a == b
-
-    let hash = Hashtbl.hash
-  end) in
-  let callback_sources = Calls.create 32 in
-  let map_calls transform calls =
-    List.map
-      (fun (call : Observation.execution_call) ->
-        let source =
-          Option.value
-            ~default:call.execution_callee
-            (Calls.find_opt callback_sources call)
-        in
-        let mapped = transform call in
-        Calls.replace callback_sources mapped source ;
-        mapped )
-      calls
   in
   let execution =
     { obs.execution with

@@ -106,6 +106,9 @@ cannot contaminate a decoder call at the same site. Calls to the same callee
 at shared coordinates retain the conservative union of their callback evidence.
 The association uses the original compiler callee even when interpretation
 specializes a returned function, a parameter or a collection functor method.
+Identity tracking starts before callable result projections are rewritten, so
+an HTTP stream iterator still matches its original execution path and an unknown
+application writer remains incomplete.
 
 The `ppx_deriving_yojson` 3.10.0 runtime's `>>=` and `>|=` invoke their
 second argument on success; `map_bind` and `safe_map` iterate their first
