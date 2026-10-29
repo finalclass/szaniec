@@ -166,7 +166,21 @@ let callback_mode api (argument : Observation.execution_arg) =
         Iteration
     | _ when api = "Stdlib.Option.fold" && argument.label = "some" -> Once
     | _ when api = "Stdlib.Option.bind" && argument.position = 1 -> Once
-    | _ when api = "Stdlib.Result.bind" && argument.position = 1 -> Once
+    | _
+      when List.mem
+             api
+             [ "Stdlib.Result.bind"
+             ; "Ppx_deriving_yojson_runtime.>>="
+             ; "Ppx_deriving_yojson_runtime.>|=" ]
+           && argument.position = 1 ->
+        Once
+    | _
+      when List.mem
+             api
+             [ "Ppx_deriving_yojson_runtime.map_bind"
+             ; "Ppx_deriving_yojson_runtime.safe_map" ]
+           && argument.position = 0 ->
+        Iteration
     | _
       when List.mem
              api

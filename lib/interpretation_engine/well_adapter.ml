@@ -2188,10 +2188,31 @@ let interpret
       ~entry_point
       ~classify:classify_flow
   in
+  let callback_source_key (call : Observation.execution_call) =
+    ( call.execution_caller
+    , call.execution_result
+    , call.execution_site
+    , call.execution_resumed )
+  in
+  let callback_sources = Hashtbl.create 32 in
+  List.iter
+    (fun (call : Observation.execution_call) ->
+      let key = callback_source_key call in
+      let previous =
+        Option.value ~default:[] (Hashtbl.find_opt callback_sources key)
+      in
+      Hashtbl.replace callback_sources key (call.execution_callee :: previous) )
+    obs.execution.invocations ;
   let callbacks =
     List.concat_map
       (fun (call : Observation.execution_call) ->
-        List.map
+        let source_callees =
+          Option.value
+            ~default:[call.execution_callee]
+            (Hashtbl.find_opt callback_sources (callback_source_key call))
+          |> List.sort_uniq String.compare
+        in
+        List.concat_map
           (fun (argument : Observation.execution_arg) ->
             let phase =
               let factory_method =
@@ -2309,10 +2330,14 @@ let interpret
                     ^ "; closure construction/passing does not prove invocation"
                 }
                 :: !gaps ;
-            { Interpretation.callback_site= call.execution_site
-            ; callback_target= argument.target
-            ; callback_resumed= call.execution_resumed
-            ; callback_phase= phase } )
+            List.map
+              (fun callee ->
+                { Interpretation.callback_site= call.execution_site
+                ; callback_callee= callee
+                ; callback_target= argument.target
+                ; callback_resumed= call.execution_resumed
+                ; callback_phase= phase } )
+              source_callees )
           call.execution_args )
       execution.invocations
     |> List.sort_uniq compare

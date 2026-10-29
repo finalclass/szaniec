@@ -256,6 +256,76 @@ let codec_roundtrip value =
         "fun value -> Well.Db.execute (); { value = String.trim value }",
       ),
     }, ["RESOURCE-BOUNDARY"]);
+    const sharedSiteCodec = codec.replace(
+      "let open! Stdlib in fun value -> { value = String.trim value }",
+      `let open! Stdlib in fun value ->
+# 100 "${nativeManager}"
+      let result = String.trim value in { value = result }
+    let pp formatter message = Format.pp_print_string formatter message.value
+    let show message =
+# 100 "${nativeManager}"
+      let result = Format.asprintf "%a" pp message in result`,
+    );
+    await scenario(
+      "generated sibling callbacks sharing a source site stay separate",
+      {
+        ...codecChanges,
+        [nativeManager]: nativeManagerSource + sharedSiteCodec,
+        [manager]: codecChanges[manager].replace(
+          "let codec_roundtrip value =",
+          'let rec codec_roundtrip value =\n  if value <> "" then codec_roundtrip "" else',
+        ) + "\nlet codec_entry value = codec_roundtrip value\n",
+      },
+      [],
+      0,
+    );
+    // An out-of-scope library models the external 3.10.0 runtime API. Its
+    // callbacks must still expose application-owned executable bodies.
+    const runtimeChanges = {
+      ...codecChanges,
+      "vendor/ppx_deriving_yojson_runtime/dune":
+        "(library (name ppx_deriving_yojson_runtime))\n",
+      "vendor/ppx_deriving_yojson_runtime/ppx_deriving_yojson_runtime.ml": `
+let ( >>= ) value next = match value with Ok value -> next value | Error e -> Error e
+let ( >|= ) value next = value >>= fun value -> Ok (next value)
+let rec map_bind next reversed = function
+  | [] -> Ok (List.rev reversed)
+  | value :: rest -> next value >>= fun value -> map_bind next (value :: reversed) rest
+let safe_map next values = List.rev (List.rev_map next values)
+`,
+      "lib/generated/native/dune":
+        "(library (name app_contract) (libraries well ppx_deriving_yojson_runtime))\n",
+      [nativeManager]: nativeManagerSource + codec.replace(
+        "let open! Stdlib in fun value -> { value = String.trim value }",
+        `let open! Ppx_deriving_yojson_runtime in fun value ->
+        let converted = Ok value >>= fun item -> Ok (String.trim item) in
+        let converted = converted >|= fun item -> String.trim item in
+        let items = safe_map (fun item -> String.trim item) [value] in
+        let checked = map_bind (fun item -> Ok (String.trim item)) [] items in
+        match converted, checked with
+        | Ok value, Ok _ -> { value }
+        | _ -> { value = "" }`,
+      ),
+      [manager]: codecChanges[manager].replace(
+        "let codec_roundtrip value =",
+        'let rec codec_roundtrip value =\n  if value <> "" then codec_roundtrip "" else',
+      ) + "\nlet codec_entry value = codec_roundtrip value\n",
+    };
+    await scenario(
+      "generated runtime callbacks remain executable",
+      runtimeChanges,
+      [],
+      0,
+    );
+    await scenario("generated runtime callbacks retain resource violations", {
+      ...runtimeChanges,
+      "lib/well/well.ml": await Deno.readTextFile(`${root}/lib/well/well.ml`) +
+        "\nmodule Db = struct let execute () = () end\n",
+      [nativeManager]: runtimeChanges[nativeManager].replace(
+        "Ok (String.trim item)",
+        "(Well.Db.execute (); Ok (String.trim item))",
+      ),
+    }, ["RESOURCE-BOUNDARY"]);
     const browserCommon = "lib/generated/browser/app_service_common.ml";
     const browserSource = await Deno.readTextFile(`${root}/${browserCommon}`);
     const browserDune = "lib/generated/browser/dune";

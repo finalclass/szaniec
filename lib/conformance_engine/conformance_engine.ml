@@ -700,12 +700,11 @@ let evaluate_with_domains
     (fun (callback : Interpretation.callback_evidence) ->
       if callback.callback_phase = Interpretation.Independent
       then Hashtbl.replace independent_callbacks callback.callback_target () ;
+      let key = (callback.callback_site, callback.callback_callee) in
       let previous =
-        Option.value
-          ~default:[]
-          (Hashtbl.find_opt callbacks callback.callback_site)
+        Option.value ~default:[] (Hashtbl.find_opt callbacks key)
       in
-      Hashtbl.replace callbacks callback.callback_site (callback :: previous) )
+      Hashtbl.replace callbacks key (callback :: previous) )
     interpretation.callbacks ;
   let deferred_calls = index_first Fun.id interpretation.deferred_calls in
   let invocation_index =
@@ -1023,7 +1022,9 @@ let evaluate_with_domains
                                 pieces
                                 (Option.value
                                    ~default:[]
-                                   (Hashtbl.find_opt callbacks step.step_site) )
+                                   (Hashtbl.find_opt
+                                      callbacks
+                                      (original.step_site, original.step_callee) ) )
                       in
                       match pieces with
                       | Error reason -> failed := Some reason
@@ -1292,7 +1293,9 @@ let evaluate_with_domains
                           direct
                           (Option.value
                              ~default:[]
-                             (Hashtbl.find_opt callbacks step.step_site) ) )
+                             (Hashtbl.find_opt
+                                callbacks
+                                (original.step_site, original.step_callee) ) ) )
                 (Ok [])
                 steps )
     in

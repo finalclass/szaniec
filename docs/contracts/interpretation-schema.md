@@ -75,19 +75,19 @@ edited policy, stale artifacts, missing members and
 ambiguous ownership retain violations or gaps. Browser RPC calls retain layer
 checks. Data-only contracts are absent from the service graph.
 
-Format identifier (conceptual): `szaniec-interpretation/6`.
+Format identifier (conceptual): `szaniec-interpretation/7`.
 
 The InterpretationEngine binds observed code to architectural boundaries
 and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.8.0`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.8.1`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
 
-`callbacks` records execution phase per source site and typed target: same-path,
+`callbacks` records execution phase per source site, resolved callee and typed target: same-path,
 independent activation, deferred or unknown. Known iterators and immediate APIs
 contribute callback paths; registration callbacks start independent paths;
 passing a closure to `ignore` or an unknown API does not execute it. Local
@@ -99,6 +99,19 @@ invocations whose conditional effects have no complete path summary. It replaces
 only that invocation during path expansion, preserving independently proven
 steps before and after it. A reachability bound may discharge the path gap;
 otherwise definite violations and the gap can coexist.
+
+Generated calls may share source coordinates. Callback evidence is associated
+with both its site and its original callee, so a printer's unknown callback
+cannot contaminate a decoder call at the same site. Calls to the same callee
+at shared coordinates retain the conservative union of their callback evidence.
+The association uses the original compiler callee even when interpretation
+specializes a returned function, a parameter or a collection functor method.
+
+The `ppx_deriving_yojson` 3.10.0 runtime's `>>=` and `>|=` invoke their
+second argument on success; `map_bind` and `safe_map` iterate their first
+argument. These exact runtime APIs retain callback bodies in the analysis,
+including their private calls and resource access. Similar application-owned
+names and unknown runtime APIs receive no such semantics.
 
 Passing a private function or literal closure through an owned service's public
 facet exposes the provider family's executable implementation to the receiving
