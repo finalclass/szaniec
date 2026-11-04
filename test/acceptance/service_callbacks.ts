@@ -426,6 +426,49 @@ let run () = ${transfer}
       );
     }
     await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
+    await write(
+      "lib/transaction_utility/queue_payload.ml",
+      `type 'a node = { mutable callbacks: 'a list; next: (unit -> unit) node option }
+let leaf = { callbacks=Transaction_api.scope.after_commit; next=None }
+let root = { callbacks=[0]; next=Some leaf }
+let drain () = List.iter (fun callback -> callback ()) leaf.callbacks
+`,
+    );
+    const substitutedQueue = await run(
+      "check",
+      "--rebuild",
+      "--json",
+      "--no-callgraph",
+    );
+    assert(
+      substitutedQueue.code === 0,
+      "Known substituted queue must resolve: " + substitutedQueue.err +
+        substitutedQueue.out,
+    );
+    await write(
+      "lib/transaction_utility/opaque_transfer.ml",
+      "let run () = Well.opaque_store_transfer Queue_payload.root\n",
+    );
+    const substitutedEscape = await run(
+      "check",
+      "--rebuild",
+      "--json",
+      "--no-callgraph",
+    );
+    const substitutedReport = JSON.parse(substitutedEscape.out);
+    assert(
+      !substitutedReport.findings.some((f: { rule: string }) =>
+        f.rule === "GAP-BUILD"
+      ) &&
+        substitutedEscape.code === 2 &&
+        substitutedReport.findings.some((f: { rule: string }) =>
+          f.rule === "GAP-UNRESOLVED-CALL"
+        ),
+      "Repeated nominal heads must reclassify callable fields in another module: " +
+        substitutedEscape.err + substitutedEscape.out,
+    );
+    await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
+    await Deno.remove(`${project}/lib/transaction_utility/queue_payload.ml`);
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
       (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
