@@ -172,7 +172,9 @@ let scope = {after_commit=[]}
 let on_rollback f = scope.after_commit <- f :: scope.after_commit
 let run f = f ()
 let locked f = Fun.protect ~finally:(fun () -> ()) f
-let owned () = locked (fun () -> if Sys.opaque_identity true then scope else failwith "No scope")
+let owned () = locked (fun () ->
+  let selected = if Sys.opaque_identity true then Some scope else None in
+  match selected with Some active -> active | None -> failwith "No scope")
 let collect () =
   locked (fun () ->
   let scope = owned () in
@@ -379,6 +381,7 @@ let forbidden_continuation () =
         "Option.iter Well.opaque_store_transfer (Some Transaction_api.scope)",
         "forward Transaction_api.scope",
         "alias_forward Transaction_api.scope",
+        "matching_forward (Some Transaction_api.scope)",
         "forward (Some Transaction_api.scope)",
         "local_list_forward [Transaction_api.scope]",
         "List.iter (fun payload -> forward payload) [Transaction_api.scope]",
@@ -393,6 +396,7 @@ type poly_envelope = [\`Payload of Transaction_api.scope]
 type 'a nested_envelope = Leaf of 'a | More of ('a * Transaction_api.scope) nested_envelope
 let forward payload = Well.opaque_store_transfer payload
 let alias_forward payload = let alias = payload in Well.opaque_store_transfer alias
+let matching_forward payload = match payload with Some alias -> Well.opaque_store_transfer alias | None -> ()
 let local_list_forward payloads = List.iter Well.opaque_store_transfer payloads
 let run () = ${transfer}
 `,

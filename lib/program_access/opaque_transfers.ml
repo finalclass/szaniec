@@ -51,9 +51,19 @@ let observe
   in
   let calls = ref [] and reads = ref [] and owner = ref "" in
   let top_values = Hashtbl.create 16 in
+  (* Pattern-bound locals are not opaque module values. Match aliases retain
+     their scrutinee's parameter roots for conservative escape propagation. *)
   let iterator =
     { Tast_iterator.default_iterator with
-      value_binding=
+      pat=
+        (fun (type k) self (p : k general_pattern) ->
+          ( match p.pat_desc with
+          | Tpat_var (id, _, _)
+           |Tpat_alias (_, id, _, _, _) ->
+              if not (Hashtbl.mem aliases id) then Hashtbl.add aliases id []
+          | _ -> () ) ;
+          Tast_iterator.default_iterator.pat self p )
+    ; value_binding=
         (fun self binding ->
           let previous_owner = !owner in
           if previous_owner = ""
@@ -89,6 +99,10 @@ let observe
         (fun self e ->
           let previous_owner = !owner in
           ( match e.exp_desc with
+          | Texp_match (value, cases, value_cases, _) ->
+              let values = roots value in
+              List.iter (fun case -> bind case.c_lhs values) cases ;
+              List.iter (fun case -> bind case.c_lhs values) value_cases
           | Texp_function (parameters, body) -> (
               owner := symbol e ;
               List.iteri
