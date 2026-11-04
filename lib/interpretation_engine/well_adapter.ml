@@ -1258,17 +1258,29 @@ let interpret
     | _ -> Repetition.callback_mode api argument
   in
   let closed_results = Hashtbl.create 64 in
+  let note_closed_result symbol =
+    if not (unavailable_target symbol)
+    then
+      match (owner_of_path symbol).owner_class with
+      | Implementation_of _
+       |Helper_of _
+       |CompositionRoot ->
+          Hashtbl.replace closed_results symbol ()
+      | _ -> ()
+  in
   List.iter
-    (fun (d : Observation.execution_definition) ->
-      if not (unavailable_target d.symbol)
-      then
-        match (owner_of_path d.symbol).owner_class with
-        | Implementation_of _
-         |Helper_of _
-         |CompositionRoot ->
-            Hashtbl.replace closed_results d.symbol ()
-        | _ -> () )
+    (fun (d : Observation.execution_definition) -> note_closed_result d.symbol)
     execution.definitions ;
+  (* Generic module values have typed initializer evidence rather than a
+     callable definition. Their producer dependencies must also be closed. *)
+  List.iter
+    (fun (source, _) ->
+      let suffix = ".<generic-result>" in
+      if String.ends_with ~suffix source
+      then
+        note_closed_result
+          (String.sub source 0 (String.length source - String.length suffix)) )
+    execution.callback_collections ;
   let parameter_callbacks =
     Parameter_callbacks.create
       ~result_is_closed:(fun api ->

@@ -223,81 +223,83 @@ let observe
   labels.structure labels structure ;
   let rec record_fields visiting env typ =
     let typ = expanded env typ in
-    match Types.get_desc typ with
-    | Types.Tconstr (path, arguments, _) ->
-        let key = type_name path in
-        let identity =
-          key
-          ^ ":"
-          ^ String.concat
-              ","
-              (List.map (fun typ -> string_of_int (Types.get_id typ)) arguments)
-        in
-        if List.length visiting >= 32
-        then failwith "Callback-store record traversal exceeds supported depth" ;
-        let nested =
-          if List.mem identity visiting
-          then []
-          else
-            try
-              let full_env = Envaux.env_of_only_summary env in
-              let declaration = Env.find_type path full_env in
-              let payload typ =
-                Ctype.apply full_env declaration.type_params typ arguments
-                |> record_fields (identity :: visiting) env
-              in
-              let fields fields =
+    let full_env = Envaux.env_of_only_summary env in
+    if
+      List.exists
+        (fun previous -> Ctype.is_equal full_env false [typ] [previous])
+        visiting
+    then []
+    else begin
+      if List.length visiting >= 32
+      then failwith "Callback-store type traversal exceeds supported depth" ;
+      let visiting = typ :: visiting in
+      match Types.get_desc typ with
+      | Types.Tconstr (path, arguments, _) ->
+          let key = type_name path in
+          let nested =
+            let declaration = Env.find_type path full_env in
+            let payload typ =
+              Ctype.apply full_env declaration.type_params typ arguments
+              |> record_fields visiting env
+            in
+            let fields fields =
+              List.concat_map (fun field -> payload field.Types.ld_type) fields
+            in
+            match declaration.Types.type_kind with
+            | Types.Type_record (fields, _) ->
                 List.concat_map
-                  (fun field -> payload field.Types.ld_type)
+                  (fun field ->
+                    let typ =
+                      Ctype.apply
+                        full_env
+                        declaration.type_params
+                        field.Types.ld_type
+                        arguments
+                    in
+                    ( if callback_list env typ
+                      then
+                        [ "<callback-store@"
+                          ^ key
+                          ^ "/"
+                          ^ Ident.name field.ld_id
+                          ^ ">" ]
+                      else [] )
+                    @ record_fields visiting env typ )
                   fields
-              in
-              match declaration.Types.type_kind with
-              | Types.Type_record (fields, _) ->
-                  List.concat_map
-                    (fun field ->
-                      let typ =
-                        Ctype.apply
-                          full_env
-                          declaration.type_params
-                          field.Types.ld_type
-                          arguments
-                      in
-                      ( if callback_list env typ
-                        then
-                          [ "<callback-store@"
-                            ^ key
-                            ^ "/"
-                            ^ Ident.name field.ld_id
-                            ^ ">" ]
-                        else [] )
-                      @ record_fields (identity :: visiting) env typ )
-                    fields
-              | Types.Type_variant (constructors, _) ->
-                  List.concat_map
-                    (fun constructor ->
-                      match constructor.Types.cd_args with
-                      | Types.Cstr_tuple values ->
-                          List.concat_map payload values
-                      | Types.Cstr_record values -> fields values )
-                    constructors
-              | _ -> []
-            with
-            | exn ->
-                failwith
-                  ( "Callback-store type evidence unavailable: "
-                  ^ Printexc.to_string exn )
-        in
-        Option.value ~default:[] (Hashtbl.find_opt shapes key)
-        @ nested
-        @ List.concat_map (record_fields (identity :: visiting) env) arguments
-    | Types.Ttuple values ->
-        List.concat_map (fun (_, typ) -> record_fields visiting env typ) values
-    | _ -> []
+            | Types.Type_variant (constructors, _) ->
+                List.concat_map
+                  (fun constructor ->
+                    match constructor.Types.cd_args with
+                    | Types.Cstr_tuple values -> List.concat_map payload values
+                    | Types.Cstr_record values -> fields values )
+                  constructors
+            | _ -> []
+          in
+          Option.value ~default:[] (Hashtbl.find_opt shapes key)
+          @ nested
+          @ List.concat_map (record_fields visiting env) arguments
+      | Types.Ttuple values ->
+          List.concat_map
+            (fun (_, typ) -> record_fields visiting env typ)
+            values
+      | Types.Tvariant row ->
+          Types.row_fields row
+          |> List.concat_map (fun (_, field) ->
+              match Types.row_field_repr field with
+              | Types.Rpresent (Some payload) ->
+                  record_fields visiting env payload
+              | Types.Reither (_, payloads, _) ->
+                  List.concat_map (record_fields visiting env) payloads
+              | _ -> [] )
+      | _ -> []
+    end
   in
   Opaque_transfers.observe
     ~known
     ~resolve
     ~symbol
+    ~result_seed:(fun owner ->
+      add (owner ^ ".<generic-result>") ["<closed-result>"] )
     ~result_dependency:(fun owner target ->
       add (owner ^ ".<generic-result>") [target ^ ".<opaque-result>"] )
     ~emit:(fun ~target ~result e ->

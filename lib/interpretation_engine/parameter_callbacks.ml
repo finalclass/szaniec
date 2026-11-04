@@ -420,7 +420,9 @@ let rec input_arity t visited owner position =
     value
 
 let rec possible_targets ?(arguments = []) t visiting symbol =
-  if List.length visiting >= 64
+  if symbol = "<closed-result>"
+  then Some []
+  else if List.length visiting >= 64
   then None
   else if List.mem symbol visiting
   then Some []

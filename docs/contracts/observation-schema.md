@@ -333,7 +333,13 @@ their opaque argument transfers still contribute unknown writers. Every returnin
 branch contributes projected origins; raising branches contribute no result.
 Generic result computations retain dependencies on possible opaque producers and
 their callback bodies even before a caller instantiates the result to a record
-type. An observed definition alone does not close those dependencies. The result
+type. Generic module initializers retain the same dependencies under their value
+bindings, and static value reads carry them across modules and container
+projections. Typed initializer evidence supplies a closed seed; opaque producers
+still keep the union incomplete. Nominal and polymorphic variant payloads retain
+queue-bearing record fields. Recursive type traversal compares compiler type
+structure rather than allocation identifiers, which change during instantiation.
+An observed definition alone does not close those dependencies. The result
 check is conservative: unused opaque generic results can keep the record store
 incomplete rather than inventing a complete set of queue targets.
 

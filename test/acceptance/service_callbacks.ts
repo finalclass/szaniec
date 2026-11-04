@@ -372,6 +372,8 @@ let forbidden_continuation () =
         "Well.opaque_store_transfer {payload=Transaction_api.scope}",
         "Well.opaque_store_transfer (Payload Transaction_api.scope)",
         "Well.opaque_store_transfer (Inline {payload=Transaction_api.scope})",
+        "Well.opaque_store_transfer (`Payload Transaction_api.scope)",
+        "Well.opaque_store_transfer ((`Payload Transaction_api.scope) : poly_envelope)",
         "List.iter Well.opaque_store_transfer [Transaction_api.scope]",
         "Option.iter Well.opaque_store_transfer (Some Transaction_api.scope)",
         "forward Transaction_api.scope",
@@ -386,6 +388,7 @@ let forbidden_continuation () =
         `type envelope = {payload:Transaction_api.scope}
 type variant_envelope = Payload of Transaction_api.scope
 type inline_envelope = Inline of {payload:Transaction_api.scope}
+type poly_envelope = [\`Payload of Transaction_api.scope]
 let forward payload = Well.opaque_store_transfer payload
 let alias_forward payload = let alias = payload in Well.opaque_store_transfer alias
 let local_list_forward payloads = List.iter Well.opaque_store_transfer payloads
@@ -424,11 +427,11 @@ let run () = ${transfer}
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
       (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
-        "\nlet unknown_value () = Obj.magic 0\n",
+        "\nlet unknown_value () = Obj.magic 0\nlet unknown_values () = [Obj.magic 0]\n",
     );
     await write(
       "lib/transaction_utility/opaque_return.ml",
-      "let obtain () = Well.unknown_value ()\n",
+      "let obtain () = Well.unknown_value ()\nlet values = Well.unknown_values ()\n",
     );
     for (
       const producer of [
@@ -437,6 +440,12 @@ let run () = ${transfer}
         "Opaque_return.obtain ()",
         "_protected_obtain ()",
         "_forwarded_obtain ()",
+        "_from_values ()",
+        "List.hd _values",
+        "List.hd _tuple_values",
+        "List.hd _alias_values",
+        "_from_foreign_values ()",
+        "List.hd Opaque_return.values",
       ]
     ) {
       await Deno.writeTextFile(
@@ -446,6 +455,11 @@ let obtain () = Well.unknown_value ()
 let _protected_obtain () = Fun.protect ~finally:(fun () -> ()) obtain
 let identity value = value
 let _forwarded_obtain () = identity (Well.unknown_value ())
+let _values = Well.unknown_values ()
+let (_tuple_values, _) = (Well.unknown_values (), 0)
+let _alias_values = _values
+let _from_values () = List.hd _values
+let _from_foreign_values () = List.hd Opaque_return.values
 let _foreign_compensation () =
   let foreign : scope = ${producer} in
   List.iter (fun callback -> callback ()) foreign.after_commit

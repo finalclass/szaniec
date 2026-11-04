@@ -3,7 +3,14 @@ open Szaniec_model
 
 (* Follow data parameters through local aliases and helpers before declaring a
    queue-bearing record closed. An unresolved callback's data effects are opaque. *)
-let observe ~known ~resolve ~symbol ~result_dependency ~emit structure =
+let observe
+    ~known
+    ~resolve
+    ~symbol
+    ~result_seed
+    ~result_dependency
+    ~emit
+    structure =
   let aliases = Hashtbl.create 32 in
   let roots expression =
     let found = ref [] in
@@ -42,13 +49,42 @@ let observe ~known ~resolve ~symbol ~result_dependency ~emit structure =
     in
     iterator.pat iterator pattern
   in
-  let calls = ref [] and owner = ref "" in
+  let calls = ref [] and reads = ref [] and owner = ref "" in
+  let top_values = Hashtbl.create 16 in
   let iterator =
     { Tast_iterator.default_iterator with
       value_binding=
         (fun self binding ->
+          let previous_owner = !owner in
+          if previous_owner = ""
+          then begin
+            let ids = ref [] in
+            let patterns =
+              { Tast_iterator.default_iterator with
+                pat=
+                  (fun (type k) self (p : k general_pattern) ->
+                    ( match p.pat_desc with
+                    | Tpat_var (id, _, _)
+                     |Tpat_alias (_, id, _, _, _) ->
+                        ids := id :: !ids
+                    | _ -> () ) ;
+                    Tast_iterator.default_iterator.pat self p ) }
+            in
+            patterns.pat patterns binding.vb_pat ;
+            List.iter
+              (fun id ->
+                Hashtbl.replace top_values id () ;
+                let value = resolve (Path.Pident id) in
+                result_seed value ;
+                if !owner = ""
+                then owner := value
+                else if value <> !owner
+                then result_dependency value !owner )
+              !ids
+          end ;
           Tast_iterator.default_iterator.value_binding self binding ;
-          bind binding.vb_pat (roots binding.vb_expr) )
+          bind binding.vb_pat (roots binding.vb_expr) ;
+          owner := previous_owner )
     ; expr=
         (fun self e ->
           let previous_owner = !owner in
@@ -83,6 +119,14 @@ let observe ~known ~resolve ~symbol ~result_dependency ~emit structure =
           ( match e.exp_desc with
           | Texp_apply (fn, args) ->
               calls := (!owner, e, symbol fn, args) :: !calls
+          | Texp_ident (path, _, _) ->
+              let static_value =
+                match path with
+                | Path.Pident id -> Hashtbl.mem top_values id
+                | Path.Pdot _ -> true
+                | _ -> false
+              in
+              if static_value then reads := (!owner, e, resolve path) :: !reads
           | _ -> () ) ;
           owner := previous_owner ) }
   in
@@ -172,6 +216,11 @@ let observe ~known ~resolve ~symbol ~result_dependency ~emit structure =
       else close (remaining - 1)
   in
   close 64 ;
+  List.iter
+    (fun (owner, e, target) ->
+      if owner <> "" && generic e then result_dependency owner target ;
+      emit ~target ~result:true e )
+    !reads ;
   List.iter
     (fun (owner, e, target, args) ->
       (* A generic result can acquire a queue-bearing type at another callsite.
