@@ -1285,6 +1285,7 @@ let interpret
     Parameter_callbacks.create
       ~result_is_closed:(fun api ->
         Hashtbl.mem closed_results api
+        || List.mem api Result_callbacks.protected_scopes
         || List.mem
              api
              [ "Stdlib.raise"

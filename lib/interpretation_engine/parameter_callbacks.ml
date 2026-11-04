@@ -20,10 +20,12 @@ type t =
   ; origins: (string, string list) Hashtbl.t
   ; result_calls: (string, Observation.execution_call option) Hashtbl.t
   ; result_is_closed: string -> bool
+  ; symbolic_results: bool
   ; callback_mode:
       string -> Observation.execution_arg -> Repetition.callback_mode }
 
 let create
+    ?(symbolic_results = false)
     ?(result_is_closed = fun _ -> false)
     ?(result_origins = [])
     ?(supplied_parameter = fun _ _ _ _ -> None)
@@ -192,6 +194,7 @@ let create
         Hashtbl.replace result_calls call.execution_result evidence )
     execution.invocations ;
   { bodies
+  ; symbolic_results
   ; origins
   ; result_calls
   ; result_is_closed
@@ -426,6 +429,9 @@ let rec possible_targets ?(arguments = []) t visiting symbol =
   then None
   else if List.mem symbol visiting
   then Some []
+  else if
+    t.symbolic_results && List.mem "<result>" (Canonical.split_dots symbol)
+  then Some [symbol]
   else if String.ends_with ~suffix:".<opaque-result>" symbol
   then
     let target = String.sub symbol 0 (String.length symbol - 16) in

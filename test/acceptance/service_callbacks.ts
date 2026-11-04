@@ -172,7 +172,7 @@ let scope = {after_commit=[]}
 let on_rollback f = scope.after_commit <- f :: scope.after_commit
 let run f = f ()
 let locked f = Fun.protect ~finally:(fun () -> ()) f
-let owned () = if Sys.opaque_identity true then scope else failwith "No scope"
+let owned () = locked (fun () -> if Sys.opaque_identity true then scope else failwith "No scope")
 let collect () =
   locked (fun () ->
   let scope = owned () in

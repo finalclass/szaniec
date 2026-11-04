@@ -10,13 +10,12 @@ end)
 
 (* These protected scopes return the body callback's result; the finalizer's
    result is discarded. Keep this library knowledge in InterpretationEngine. *)
+let protected_scopes = ["Stdlib.Fun.protect"; "Eio.Cancel.protect"]
+
 let continuation_result_origins (execution : Observation.execution) =
   List.filter_map
     (fun (call : Observation.execution_call) ->
-      if
-        List.mem
-          call.execution_callee
-          ["Stdlib.Fun.protect"; "Eio.Cancel.protect"]
+      if List.mem call.execution_callee protected_scopes
       then
         Option.map
           (fun (arg : Observation.execution_arg) ->
@@ -198,7 +197,11 @@ let bind ?(on_call = fun _ _ -> ()) (obs : Observation.t) =
             Hashtbl.replace targets source [call.execution_callee ^ ".<result>"]
         | _ -> () )
     obs.execution.invocations ;
-  let parameters = Parameter_callbacks.create obs.execution in
+  (* This interpreter resolves sequence result projections itself. Parameter
+     binding must preserve those typed sources until that interpretation. *)
+  let parameters =
+    Parameter_callbacks.create ~symbolic_results:true obs.execution
+  in
   let sequence_tail_suffix = ".<result>.<constructor@Cons:1>" in
   let sequence_producer symbol =
     List.exists
