@@ -30,6 +30,28 @@ let observe
     | _ -> false
   in
   let list e = callback_list e.exp_env e.exp_type in
+  (* A declaration parameter may later become a callback list. Keep that
+     possibility without expanding an unbounded sequence of substitutions. *)
+  let potential_store env typ =
+    let unknown typ =
+      match Types.get_desc (expanded env typ) with
+      | Types.Tvar _
+       |Types.Tunivar _ ->
+          true
+      | _ -> false
+    in
+    unknown typ
+    ||
+    match Types.get_desc (expanded env typ) with
+    | Types.Tconstr (path, [element], _) when Path.same path Predef.path_list
+      -> (
+        unknown element
+        ||
+        match Types.get_desc (expanded env element) with
+        | Types.Tarrow _ -> true
+        | _ -> false )
+    | _ -> false
+  in
   let type_name path =
     match resolve path with
     | "" -> unit_canonical ^ "." ^ Path.name path
@@ -156,15 +178,19 @@ let observe
           | Texp_record {fields; _} ->
               Array.iter
                 (fun (label, value) ->
-                  if callback_list e.exp_env label.Data_types.lbl_arg
-                  then
-                    match value with
-                    | Overridden (_, value) ->
-                        add (field_key e.exp_env label) (sources value)
-                    | Kept _ -> () )
+                  match value with
+                  | Overridden (_, value)
+                    when potential_store value.exp_env value.exp_type ->
+                      add
+                        (field_key e.exp_env label)
+                        (if list value then sources value else [""])
+                  | _ -> () )
                 fields
-          | Texp_setfield (_, _, label, value) when list value ->
-              add (field_key e.exp_env label) (sources value)
+          | Texp_setfield (_, _, label, value)
+            when potential_store value.exp_env value.exp_type ->
+              add
+                (field_key e.exp_env label)
+                (if list value then sources value else [""])
           | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, arguments) ->
               let target = resolve path in
               let arguments =
@@ -196,7 +222,7 @@ let observe
     | _ -> ""
   in
   let note_label env label =
-    if callback_list env label.Data_types.lbl_arg
+    if potential_store env label.Data_types.lbl_arg
     then
       let key = type_key env label.lbl_res in
       if key <> ""
@@ -238,9 +264,9 @@ let observe
       | Types.Tconstr (path, arguments, _) ->
           let key = type_name path in
           let nested =
-            (* Expand fixed payloads once, but reclassify direct fields under
-               each substitution: a previously non-callable slot can become a
-               callback list. Newly substituted arguments are traversed below. *)
+            (* Summarize each declaration with its original parameters. Generic
+               slots are possible stores; substituted argument types are traversed
+               separately. This includes nested payloads without unrolling GADTs. *)
             let repeated =
               List.exists
                 (fun previous ->
@@ -251,11 +277,7 @@ let observe
             in
             let declaration = Env.find_type path full_env in
             let payload typ =
-              if repeated
-              then []
-              else
-                Ctype.apply full_env declaration.type_params typ arguments
-                |> record_fields visiting env
+              if repeated then [] else record_fields visiting env typ
             in
             let fields fields =
               List.concat_map (fun field -> payload field.Types.ld_type) fields
@@ -264,14 +286,8 @@ let observe
             | Types.Type_record (fields, _) ->
                 List.concat_map
                   (fun field ->
-                    let typ =
-                      Ctype.apply
-                        full_env
-                        declaration.type_params
-                        field.Types.ld_type
-                        arguments
-                    in
-                    ( if callback_list env typ
+                    let typ = field.Types.ld_type in
+                    ( if potential_store env typ
                       then
                         [ "<callback-store@"
                           ^ key

@@ -122,7 +122,8 @@ let observe
           | Texp_ident (path, _, _) ->
               let static_value =
                 match path with
-                | Path.Pident id -> Hashtbl.mem top_values id
+                | Path.Pident id ->
+                    Hashtbl.mem top_values id || not (Hashtbl.mem aliases id)
                 | Path.Pdot _ -> true
                 | _ -> false
               in

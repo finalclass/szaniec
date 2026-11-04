@@ -426,49 +426,60 @@ let run () = ${transfer}
       );
     }
     await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
-    await write(
-      "lib/transaction_utility/queue_payload.ml",
-      `type 'a node = { mutable callbacks: 'a list; next: (unit -> unit) node option }
+    for (const nested of [false, true]) {
+      await write(
+        "lib/transaction_utility/queue_payload.ml",
+        nested
+          ? `type 'a slot = { mutable callbacks: 'a list }
+type 'a node = { payload: 'a slot; next: (unit -> unit) node option }
+let leaf = { payload={callbacks=Transaction_api.scope.after_commit}; next=None }
+let root = { payload={callbacks=[0]}; next=Some leaf }
+let drain () = List.iter (fun callback -> callback ()) leaf.payload.callbacks
+`
+          : `type 'a node = { mutable callbacks: 'a list; next: (unit -> unit) node option }
 let leaf = { callbacks=Transaction_api.scope.after_commit; next=None }
 let root = { callbacks=[0]; next=Some leaf }
 let drain () = List.iter (fun callback -> callback ()) leaf.callbacks
 `,
-    );
-    const substitutedQueue = await run(
-      "check",
-      "--rebuild",
-      "--json",
-      "--no-callgraph",
-    );
-    assert(
-      substitutedQueue.code === 0,
-      "Known substituted queue must resolve: " + substitutedQueue.err +
-        substitutedQueue.out,
-    );
-    await write(
-      "lib/transaction_utility/opaque_transfer.ml",
-      "let run () = Well.opaque_store_transfer Queue_payload.root\n",
-    );
-    const substitutedEscape = await run(
-      "check",
-      "--rebuild",
-      "--json",
-      "--no-callgraph",
-    );
-    const substitutedReport = JSON.parse(substitutedEscape.out);
-    assert(
-      !substitutedReport.findings.some((f: { rule: string }) =>
-        f.rule === "GAP-BUILD"
-      ) &&
-        substitutedEscape.code === 2 &&
-        substitutedReport.findings.some((f: { rule: string }) =>
-          f.rule === "GAP-UNRESOLVED-CALL"
-        ),
-      "Repeated nominal heads must reclassify callable fields in another module: " +
-        substitutedEscape.err + substitutedEscape.out,
-    );
-    await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
-    await Deno.remove(`${project}/lib/transaction_utility/queue_payload.ml`);
+      );
+      const substitutedQueue = await run(
+        "check",
+        "--rebuild",
+        "--json",
+        "--no-callgraph",
+      );
+      assert(
+        substitutedQueue.code === 0,
+        "Known substituted queue must resolve: " + substitutedQueue.err +
+          substitutedQueue.out,
+      );
+      await write(
+        "lib/transaction_utility/opaque_transfer.ml",
+        "let run () = Well.opaque_store_transfer Queue_payload.root\n",
+      );
+      const substitutedEscape = await run(
+        "check",
+        "--rebuild",
+        "--json",
+        "--no-callgraph",
+      );
+      const substitutedReport = JSON.parse(substitutedEscape.out);
+      assert(
+        !substitutedReport.findings.some((f: { rule: string }) =>
+          f.rule === "GAP-BUILD"
+        ) &&
+          substitutedEscape.code === 2 &&
+          substitutedReport.findings.some((f: { rule: string }) =>
+            f.rule === "GAP-UNRESOLVED-CALL"
+          ),
+        "Repeated nominal heads must reclassify callable fields in another module: " +
+          substitutedEscape.err + substitutedEscape.out,
+      );
+      await Deno.remove(
+        `${project}/lib/transaction_utility/opaque_transfer.ml`,
+      );
+      await Deno.remove(`${project}/lib/transaction_utility/queue_payload.ml`);
+    }
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
       (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
@@ -477,6 +488,10 @@ let drain () = List.iter (fun callback -> callback ()) leaf.callbacks
     await write(
       "lib/transaction_utility/opaque_return.ml",
       "let obtain () = Well.unknown_value ()\nlet values = Well.unknown_values ()\n",
+    );
+    await write(
+      "lib/transaction_utility/included_return.ml",
+      "include Opaque_return\nlet value () = List.hd values\n",
     );
     for (
       const producer of [
@@ -491,6 +506,7 @@ let drain () = List.iter (fun callback -> callback ()) leaf.callbacks
         "List.hd _alias_values",
         "_from_foreign_values ()",
         "List.hd Opaque_return.values",
+        "Included_return.value ()",
       ]
     ) {
       await Deno.writeTextFile(
@@ -537,6 +553,7 @@ let _foreign_compensation () =
       );
     }
     await Deno.remove(`${project}/lib/transaction_utility/opaque_return.ml`);
+    await Deno.remove(`${project}/lib/transaction_utility/included_return.ml`);
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
       (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +

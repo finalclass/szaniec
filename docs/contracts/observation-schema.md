@@ -339,11 +339,12 @@ projections. Typed initializer evidence supplies a closed seed; opaque producers
 still keep the union incomplete. Nominal and polymorphic variant payloads retain
 queue-bearing record fields. Recursive type traversal compares compiler type
 structure rather than allocation identifiers, which change during instantiation.
-Each nominal declaration expands once along a traversal path; repeated heads
-still traverse their substituted arguments. This retains transformed payloads
-without unrolling nonregular GADTs indefinitely.
-Direct record fields are reclassified under each substitution, so a generic list
-slot that becomes callable is still recognized as a callback store.
+Each nominal declaration expands once along a traversal path using its authored
+parameter types; concrete argument types are traversed separately. A generic field
+or list element is conservatively a possible callback store. This includes nested
+generic payloads without unrolling nonregular GADTs indefinitely. Known record
+writes use the type of the assigned value, not the declaration parameter. An
+unresolved generic write retains an unknown target.
 An observed definition alone does not close those dependencies. The result
 check is conservative: unused opaque generic results can keep the record store
 incomplete rather than inventing a complete set of queue targets.
