@@ -1257,8 +1257,45 @@ let interpret
       | _ -> Repetition.callback_mode api argument )
     | _ -> Repetition.callback_mode api argument
   in
+  let closed_results = Hashtbl.create 64 in
+  let note_closed_result symbol =
+    if not (unavailable_target symbol)
+    then
+      match (owner_of_path symbol).owner_class with
+      | Implementation_of _
+       |Helper_of _
+       |CompositionRoot ->
+          Hashtbl.replace closed_results symbol ()
+      | _ -> ()
+  in
+  List.iter
+    (fun (d : Observation.execution_definition) -> note_closed_result d.symbol)
+    execution.definitions ;
+  (* Generic module values have typed initializer evidence rather than a
+     callable definition. Their producer dependencies must also be closed. *)
+  List.iter
+    (fun (source, _) ->
+      let suffix = ".<generic-result>" in
+      if String.ends_with ~suffix source
+      then
+        note_closed_result
+          (String.sub source 0 (String.length source - String.length suffix)) )
+    execution.callback_collections ;
   let parameter_callbacks =
     Parameter_callbacks.create
+      ~result_is_closed:(fun api ->
+        Hashtbl.mem closed_results api
+        || List.mem api Result_callbacks.protected_scopes
+        || List.mem
+             api
+             [ "Stdlib.raise"
+             ; "Stdlib.raise_notrace"
+             ; "Stdlib.failwith"
+             ; "Stdlib.invalid_arg" ]
+        || List.exists
+             (fun prefix -> String.starts_with ~prefix api)
+             ["Stdlib.List."; "Stdlib.Option."; "Stdlib.Hashtbl."] )
+      ~result_origins:(Result_callbacks.continuation_result_origins execution)
       ~callback_mode:known_callback_mode
       ~supplied_parameter:(fun api argument position field ->
         if
@@ -1836,12 +1873,19 @@ let interpret
   let callback_exposures =
     Callback_exposure.collect
       ~receiver_of:(fun call ->
-        Option.map
-          (fun (p : Policy.public_contract) -> p.public_service)
+        Option.bind
           (Public_contracts.allowed_surface
              surfaces
              ~consumer:(from_name call.Observation.execution_caller)
-             call.execution_callee ) )
+             call.execution_callee )
+          (fun (p : Policy.public_contract) ->
+            (* An approved Utility may execute caller-owned continuations.
+               Their bodies retain their original ownership and checks. *)
+            if
+              role_of_name p.public_service
+              = Szaniec_architecture_access.Cyrograf.Utility
+            then None
+            else Some p.public_service ) )
       ~provider_of:(fun target ->
         match resolve_unit target with
         | Some unit when not (unavailable_target target) -> (

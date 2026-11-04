@@ -1711,6 +1711,7 @@ let observe
   let returned_functions = ref [] in
   let returned_constructors = ref [] in
   let value_origins = ref [] in
+  let callback_collections = ref [] in
   let parameter_defaults = ref [] in
   let functor_instances = ref [] in
   let vrefs = ref [] in
@@ -2114,6 +2115,10 @@ let observe
                       !returned_constructors ;
                   value_origins :=
                     List.rev_append facts.execution.value_origins !value_origins ;
+                  callback_collections :=
+                    List.rev_append
+                      facts.execution.callback_collections
+                      !callback_collections ;
                   parameter_defaults :=
                     List.rev_append
                       facts.execution.parameter_defaults
@@ -2421,6 +2426,11 @@ let observe
           List.map
             (fun (target, source) -> (resolve target, resolve source))
             !value_origins
+          |> List.sort_uniq compare
+      ; callback_collections=
+          List.map
+            (fun (source, target) -> (resolve source, resolve target))
+            !callback_collections
           |> List.sort_uniq compare
       ; returned_functions=
           List.map

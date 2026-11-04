@@ -1,6 +1,6 @@
 # Contract: rule catalog
 
-Catalog version: `szaniec-rules/3.2.0`.
+Catalog version: `szaniec-rules/3.3.0`.
 
 Rules evaluate the interpretation model against the service roles and
 the policy. There is no permitted-calls list: conformance follows the
@@ -182,6 +182,11 @@ publisher to a subscriber.
 - Evidence: both owners (the caller's family and the target service or
   module), source sites, and the helper or alias path.
 - Outcome: violation.
+
+Caller-owned continuations passed through an approved Utility facet retain their
+original owner. Passing them does not itself create reverse implementation access
+by the Utility; executable operations in their bodies remain checked. Private
+callbacks passed to non-Utility service facets retain the exposure rule.
 
 ### `SHARED-UNAPPROVED`
 - Precondition: an unclassified in-scope unit is reached by executable

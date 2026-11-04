@@ -718,25 +718,25 @@ let errmsg (_ : db) = "error"
     const utilityBranches = await scenario(
       "callbacks across a public Utility retain branch correlation",
       `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${manager}) ~second:(fun () -> Second_manager.run ())\n`,
-      ["IMPL-ACCESS-CROSS-SERVICE"],
-      1,
+      [],
+      0,
     );
     assert(
       !utilityBranches.report.findings.some((f) =>
         f.rule === "UC-CLIENT-MULTI-MANAGER"
       ),
-      "private callback exposure does not combine mutually exclusive Manager paths",
+      "Utility continuations preserve mutually exclusive Manager paths",
     );
     await scenario(
       "public Utility callback retains a two-Manager violation",
       `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${manager}; Second_manager.run ()) ~second:(fun () -> ())\n`,
-      ["IMPL-ACCESS-CROSS-SERVICE", "UC-CLIENT-MULTI-MANAGER"],
+      ["UC-CLIENT-MULTI-MANAGER"],
       1,
     );
     await scenario(
       "public Utility callback retains protected Access calls",
       `let show yes = Callback_utility.Api.choose yes ~first:(fun () -> ${access}) ~second:(fun () -> ())\n`,
-      ["IMPL-ACCESS-CROSS-SERVICE", "ID-CLIENT-ACCESS"],
+      ["ID-CLIENT-ACCESS"],
       1,
     );
     await Deno.writeTextFile(`${root}/szaniec.toml`, callbackPolicy);

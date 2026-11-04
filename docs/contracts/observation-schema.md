@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/8`.
+Format identifier (conceptual): `szaniec-observation/9`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -311,6 +311,43 @@ and private-access checks remain independent of this limit.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
+
+### Callback-list provenance (adapter 1.11.0)
+
+`execution.callback_collections` retains possible callback elements written to observed
+record list fields, aliases, `List.rev` results and tuple result projections.
+Element delivery to supported List iterators binds the iterator body's callable
+parameter. Field identity combines the compiler-resolved nominal record type and
+field name, so interface and implementation declarations share the same store.
+All observed writes contribute targets; clearing a queue does not erase evidence
+of callbacks that can have been scheduled earlier. Unknown producers and opaque
+record escapes preserve unknown targets. The analysis supplies possible targets,
+not concrete queue contents, invocation counts, commit outcomes or scheduling order.
+Type declarations identify queue-bearing records even in modules without field
+projections and through named record and variant wrappers. Local generic data forwarding and
+opaque iterator callbacks retain possible foreign writers. Unsupported type
+traversal or exhausted analysis bounds produce incomplete extraction evidence.
+Opaque record-result origins remain conditional: interpretation may close them
+only for observed implementation bodies or supported standard-library operations;
+their opaque argument transfers still contribute unknown writers. Every returning
+branch contributes projected origins; raising branches contribute no result.
+Generic result computations retain dependencies on possible opaque producers and
+their callback bodies even before a caller instantiates the result to a record
+type. Generic module initializers retain the same dependencies under their value
+bindings, and static value reads carry them across modules and container
+projections. Typed initializer evidence supplies a closed seed; opaque producers
+still keep the union incomplete. Nominal and polymorphic variant payloads retain
+queue-bearing record fields. Recursive type traversal compares compiler type
+structure rather than allocation identifiers, which change during instantiation.
+Each nominal declaration expands once along a traversal path using its authored
+parameter types; concrete argument types are traversed separately. A generic field
+or list element is conservatively a possible callback store. This includes nested
+generic payloads without unrolling nonregular GADTs indefinitely. Known record
+writes use the type of the assigned value, not the declaration parameter. An
+unresolved generic write retains an unknown target.
+An observed definition alone does not close those dependencies. The result
+check is conservative: unused opaque generic results can keep the record store
+incomplete rather than inventing a complete set of queue targets.
 
 ### Annotated callable bindings (adapter 1.10.1)
 
