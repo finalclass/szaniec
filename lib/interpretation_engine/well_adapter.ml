@@ -1836,12 +1836,19 @@ let interpret
   let callback_exposures =
     Callback_exposure.collect
       ~receiver_of:(fun call ->
-        Option.map
-          (fun (p : Policy.public_contract) -> p.public_service)
+        Option.bind
           (Public_contracts.allowed_surface
              surfaces
              ~consumer:(from_name call.Observation.execution_caller)
-             call.execution_callee ) )
+             call.execution_callee )
+          (fun (p : Policy.public_contract) ->
+            (* An approved Utility may execute caller-owned continuations.
+               Their bodies retain their original ownership and checks. *)
+            if
+              role_of_name p.public_service
+              = Szaniec_architecture_access.Cyrograf.Utility
+            then None
+            else Some p.public_service ) )
       ~provider_of:(fun target ->
         match resolve_unit target with
         | Some unit when not (unavailable_target target) -> (

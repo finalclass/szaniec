@@ -17,6 +17,7 @@ type t =
       string -> Observation.execution_arg -> int -> string -> string list option
   ; uses: (string, unit) Hashtbl.t
   ; defaults: (string * string) list
+  ; origins: (string, string list) Hashtbl.t
   ; callback_mode:
       string -> Observation.execution_arg -> Repetition.callback_mode }
 
@@ -49,6 +50,7 @@ let create
       (fun (owner, _) -> Hashtbl.replace uses owner ())
       (parameter symbol)
   in
+  List.iter (fun (_, target) -> note target) execution.value_origins ;
   List.iter
     (fun (c : Observation.execution_call) ->
       note c.execution_callee ;
@@ -156,7 +158,21 @@ let create
             call.execution_callee
             (direct @ activated @ previous) )
     execution.invocations ;
+  let origins = Hashtbl.create 64 in
+  List.iter
+    (fun (source, target) ->
+      if source <> ""
+      then
+        Hashtbl.replace
+          origins
+          source
+          (target :: Option.value ~default:[] (Hashtbl.find_opt origins source)) )
+    ( execution.value_origins
+    @ List.filter
+        (fun (source, _) -> List.mem "<result>" (Canonical.split_dots source))
+        execution.returned_functions ) ;
   { bodies
+  ; origins
   ; callback_mode
   ; defaults= execution.parameter_defaults
   ; calls
@@ -251,7 +267,13 @@ let rec summary t visiting owner =
                                   if
                                     field <> ""
                                     && arg.field = ""
-                                    && parameter arg.target <> None
+                                    && ( parameter arg.target <> None
+                                       || String.starts_with
+                                            ~prefix:"<result>"
+                                            field
+                                       || String.starts_with
+                                            ~prefix:"<elements>"
+                                            field )
                                   then
                                     {arg with target= arg.target ^ "." ^ field}
                                   else arg
@@ -376,72 +398,120 @@ let rec input_arity t visited owner position =
     value
 
 let rec possible_targets t visiting symbol =
-  match parameter symbol with
-  | None -> if symbol = "" then None else Some [symbol]
-  | Some (owner, position) ->
-      if List.mem symbol visiting
-      then Some []
-      else
-        let calls = Option.value ~default:[] (Hashtbl.find_opt t.calls owner) in
-        let sources =
-          Option.value ~default:[] (Hashtbl.find_opt t.callback_sources owner)
-          |> List.filter (fun (api, _) -> not (Hashtbl.mem t.bodies api))
-        in
-        let initial =
-          List.fold_left
-            (fun result (api, arg) ->
-              match
-                ( result
-                , t.supplied_parameter
-                    api
-                    arg
-                    position
-                    (Canonical.parameter_field symbol) )
-              with
-              | Some old, Some next ->
-                  Some (List.sort_uniq compare (old @ next))
-              | _ -> None )
-            (Some [])
-            sources
-        in
-        if calls = [] && sources = []
+  let rec lookup prefix =
+    match Hashtbl.find_opt t.origins prefix with
+    | Some targets ->
+        List.map
+          (fun target ->
+            if target = ""
+            then ""
+            else
+              target
+              ^ String.sub
+                  symbol
+                  (String.length prefix)
+                  (String.length symbol - String.length prefix) )
+          targets
+    | None -> (
+      match String.rindex_opt prefix '.' with
+      | None -> []
+      | Some index -> lookup (String.sub prefix 0 index) )
+  in
+  let aliases = lookup symbol in
+  if List.length visiting >= 64
+  then None
+  else if List.mem symbol visiting
+  then Some []
+  else if aliases <> []
+  then
+    List.fold_left
+      (fun previous target ->
+        match (previous, possible_targets t (symbol :: visiting) target) with
+        | Some a, Some b -> Some (List.sort_uniq compare (a @ b))
+        | _ -> None )
+      (Some [])
+      aliases
+  else
+    match parameter symbol with
+    | None ->
+        if
+          symbol = ""
+          || List.exists
+               (fun part ->
+                 List.mem part ["<elements>"; "<result>"]
+                 || String.starts_with ~prefix:"<callback-store@" part )
+               (Canonical.split_dots symbol)
         then None
+        else Some [symbol]
+    | Some (owner, position) ->
+        if List.mem symbol visiting
+        then Some []
         else
-          List.fold_left
-            (fun result (call : Observation.execution_call) ->
-              let arg =
-                List.find_opt
-                  (fun (arg : Observation.execution_arg) ->
-                    arg.position = position
-                    && ( arg.field = Canonical.parameter_field symbol
-                       || arg.field = "" ) )
-                  call.execution_args
-              in
-              match
-                ( result
-                , match arg with
-                  | None when List.mem position call.execution_defaults ->
-                      Option.bind
-                        (List.assoc_opt symbol t.defaults)
-                        (possible_targets t (symbol :: visiting))
-                  | None -> None
-                  | Some arg ->
-                      let field = Canonical.parameter_field symbol in
-                      let target =
-                        if
-                          field <> ""
-                          && arg.field = ""
-                          && parameter arg.target <> None
-                        then arg.target ^ "." ^ field
-                        else arg.target
-                      in
-                      possible_targets t (symbol :: visiting) target )
-              with
-              | Some old, Some next ->
-                  Some (List.sort_uniq compare (old @ next))
-              | _ -> None )
-            initial
-            calls
+          let calls =
+            Option.value ~default:[] (Hashtbl.find_opt t.calls owner)
+          in
+          let sources =
+            Option.value ~default:[] (Hashtbl.find_opt t.callback_sources owner)
+            |> List.filter (fun (api, _) -> not (Hashtbl.mem t.bodies api))
+          in
+          let initial =
+            List.fold_left
+              (fun result (api, arg) ->
+                match
+                  ( result
+                  , t.supplied_parameter
+                      api
+                      arg
+                      position
+                      (Canonical.parameter_field symbol) )
+                with
+                | Some old, Some next ->
+                    Some (List.sort_uniq compare (old @ next))
+                | _ -> None )
+              (Some [])
+              sources
+          in
+          if calls = [] && sources = []
+          then None
+          else
+            List.fold_left
+              (fun result (call : Observation.execution_call) ->
+                let arg =
+                  List.find_opt
+                    (fun (arg : Observation.execution_arg) ->
+                      arg.position = position
+                      && ( arg.field = Canonical.parameter_field symbol
+                         || arg.field = "" ) )
+                    call.execution_args
+                in
+                match
+                  ( result
+                  , match arg with
+                    | None when List.mem position call.execution_defaults ->
+                        Option.bind
+                          (List.assoc_opt symbol t.defaults)
+                          (possible_targets t (symbol :: visiting))
+                    | None -> None
+                    | Some arg ->
+                        let field = Canonical.parameter_field symbol in
+                        let target =
+                          if
+                            field <> ""
+                            && arg.field = ""
+                            && ( parameter arg.target <> None
+                               || String.starts_with ~prefix:"<result>" field
+                               || String.starts_with ~prefix:"<elements>" field
+                               )
+                          then arg.target ^ "." ^ field
+                          else arg.target
+                        in
+                        possible_targets t (symbol :: visiting) target )
+                with
+                | Some old, Some next ->
+                    Some (List.sort_uniq compare (old @ next))
+                | _ -> None )
+              initial
+              calls
 
 let bind_calls t (execution : Observation.execution) =
   let rec round remaining =

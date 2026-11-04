@@ -4,7 +4,7 @@ function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-Deno.test("owned service facets cannot receive another family's private callbacks", async () => {
+Deno.test("approved Utility continuations retain caller ownership and unresolved storage evidence", async () => {
   const project = await Deno.makeTempDir({
     prefix: "szaniec-service-callbacks-",
   });
@@ -116,7 +116,7 @@ consumers = ["Task_manager"]
         checked.err + checked.out,
       );
       assert(
-        report.findings.some((
+        !report.findings.some((
           f: {
             rule: string;
             participants: string[];
@@ -130,18 +130,18 @@ consumers = ["Task_manager"]
             l.path === "lib/task_manager/task_manager_impl.ml"
           )
         ),
-        "Receiving service must expose the private callback boundary violation: " +
+        "A Utility continuation must retain its originating service boundary: " +
           checked.err + checked.out,
       );
       assert(
         report.findings.some((f: { rule: string }) =>
           f.rule === "GAP-UNRESOLVED-CALL"
         ),
-        "The unresolved stored invocation must remain a gap alongside the violation",
+        "Unknown stored invocation evidence must remain explicit",
       );
       assert(
         checked.code === 2,
-        "Violation plus unresolved target remains incomplete",
+        "Unresolved stored invocation remains incomplete",
       );
     }
     await Deno.writeTextFile(
@@ -163,6 +163,183 @@ let ordinary ctx = within_family (fun () -> ignore (Task_access.list ~ctx ~limit
         f.participants.includes("Task_manager")
       ),
       "Private same-family callbacks do not cross a service boundary",
+    );
+    await write(
+      "lib/transaction_utility/transaction_api.ml",
+      `
+type scope = { mutable after_commit: (unit -> unit) list }
+let scope = {after_commit=[]}
+let on_rollback f = scope.after_commit <- f :: scope.after_commit
+let run f = f ()
+let collect () =
+  let callbacks = List.rev scope.after_commit in
+  scope.after_commit <- [];
+  (true, callbacks)
+let compensate () =
+  let _, callbacks = collect () in
+  List.iter (fun callback -> callback ()) callbacks
+`,
+    );
+    await Deno.writeTextFile(
+      source,
+      original + `
+let register ctx = Transaction_api.run (fun () ->
+  Transaction_api.on_rollback (fun () -> ignore (Task_access.list ~ctx ~limit:1)))
+`,
+    );
+    const stored = await run("check", "--rebuild", "--json", "--no-callgraph");
+    assert(
+      stored.code === 0,
+      "Known callback queue must resolve without adopting Manager code: " +
+        stored.err + stored.out,
+    );
+    const appDune = `${project}/lib/dune`;
+    await Deno.writeTextFile(
+      policy,
+      (await Deno.readTextFile(policy)).replace(
+        'consumers = ["Task_manager"]',
+        'consumers = ["Task_manager", "Web_client"]',
+      ),
+    );
+    assert(
+      (await run("approve")).code === 0,
+      "approve the Client's technical Utility facet",
+    );
+    await Deno.writeTextFile(
+      appDune,
+      (await Deno.readTextFile(appDune)).replace(
+        "contract\n",
+        "contract\n  transaction_utility\n",
+      ),
+    );
+    const client = `${project}/lib/web_client/tasks_page.ml`;
+    const clientSource = await Deno.readTextFile(client);
+    await Deno.writeTextFile(
+      client,
+      clientSource + `
+let forbidden_continuation () =
+  Transaction_api.run (fun () -> ignore (Task_access.list ~ctx:ctx_w ~limit:1))
+`,
+    );
+    const forbidden = await run(
+      "check",
+      "--rebuild",
+      "--json",
+      "--no-callgraph",
+    );
+    assert(
+      JSON.parse(forbidden.out).findings.some((
+        f: { rule: string; participants: string[] },
+      ) =>
+        f.rule === "ID-CLIENT-ACCESS" && f.participants.includes("Web_client")
+      ),
+      "Utility must not launder a Client's Access call: " + forbidden.out,
+    );
+    await Deno.writeTextFile(client, clientSource);
+    const utilityInterface =
+      `${project}/lib/transaction_utility/transaction_api.mli`;
+    const knownQueueInterface = await Deno.readTextFile(utilityInterface);
+    const utilitySource =
+      `${project}/lib/transaction_utility/transaction_api.ml`;
+    const knownQueueSource = await Deno.readTextFile(utilitySource);
+    await Deno.writeTextFile(
+      utilityInterface,
+      (await Deno.readTextFile(utilityInterface)) +
+        "\nval unknown_writer : (unit -> (unit -> unit) list) -> unit\n",
+    );
+    await Deno.writeTextFile(
+      `${project}/lib/transaction_utility/transaction_api.ml`,
+      (await Deno.readTextFile(
+        `${project}/lib/transaction_utility/transaction_api.ml`,
+      )) + `\nlet unknown_writer make = scope.after_commit <- make ()\n`,
+    );
+    const unknown = await run("check", "--rebuild", "--json", "--no-callgraph");
+    assert(
+      !JSON.parse(unknown.out).findings.some((f: { rule: string }) =>
+        f.rule === "GAP-BUILD"
+      ),
+      "Unknown-writer scenario must compile: " + unknown.err,
+    );
+    assert(
+      unknown.code === 2 &&
+        JSON.parse(unknown.out).findings.some((f: { rule: string }) =>
+          f.rule === "GAP-UNRESOLVED-CALL"
+        ),
+      "Unknown queue writers must preserve incomplete analysis: " + unknown.out,
+    );
+    await Deno.writeTextFile(
+      policy,
+      (await Deno.readTextFile(policy)).replaceAll(
+        "TransactionUtility",
+        "Transaction_engine",
+      ),
+    );
+    assert(
+      (await run("approve")).code === 0,
+      "approve an Engine facet without allowing private implementation sharing",
+    );
+    const business = await run(
+      "check",
+      "--rebuild",
+      "--json",
+      "--no-callgraph",
+    );
+    assert(
+      !JSON.parse(business.out).findings.some((f: { rule: string }) =>
+        f.rule === "GAP-BUILD"
+      ) && JSON.parse(business.out).findings.some((
+        f: { rule: string; participants: string[] },
+      ) =>
+        f.rule === "IMPL-ACCESS-CROSS-SERVICE" &&
+        f.participants.includes("Transaction_engine") &&
+        f.participants.includes("Task_manager")
+      ),
+      "Business service facets still reject private callbacks: " + business.out,
+    );
+    await Deno.writeTextFile(
+      policy,
+      (await Deno.readTextFile(policy)).replaceAll(
+        "Transaction_engine",
+        "TransactionUtility",
+      ),
+    );
+    assert((await run("approve")).code === 0, "restore the approved Utility");
+    await Deno.writeTextFile(
+      `${project}/lib/well_stub/well.ml`,
+      (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
+        "\nlet opaque_store_transfer _ = ()\n",
+    );
+    const utilityDune = `${project}/lib/transaction_utility/dune`;
+    await Deno.writeTextFile(
+      utilityDune,
+      (await Deno.readTextFile(utilityDune)).replace(
+        "(wrapped false)",
+        "(wrapped false) (libraries well)",
+      ),
+    );
+    await Deno.writeTextFile(
+      utilityInterface,
+      knownQueueInterface + "\nval opaque_writer : unit -> unit\n",
+    );
+    await Deno.writeTextFile(
+      utilitySource,
+      knownQueueSource +
+        "\nlet opaque_writer () = Well.opaque_store_transfer scope\n",
+    );
+    const escaped = await run("check", "--rebuild", "--json", "--no-callgraph");
+    const escapedReport = JSON.parse(escaped.out);
+    assert(
+      !escapedReport.findings.some((f: { rule: string }) =>
+        f.rule === "GAP-BUILD"
+      ),
+      "Opaque-record scenario must compile: " + escaped.err,
+    );
+    assert(
+      escaped.code === 2 &&
+        escapedReport.findings.some((f: { rule: string }) =>
+          f.rule === "GAP-UNRESOLVED-CALL"
+        ),
+      "Opaque record transfer must preserve unknown writers: " + escaped.out,
     );
   } finally {
     await Deno.remove(project, { recursive: true });

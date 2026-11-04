@@ -82,10 +82,16 @@ and interprets interactions. It consumes the observation, the resolved
 policy, and evidence it derives from registration calls in the code
 itself. It does not read the repository and does not call ProgramAccess.
 
-First delivery contains one framework adapter: `szaniec-well-adapter/3.8.1`
+First delivery contains one framework adapter: `szaniec-well-adapter/3.9.0`
 for Well applications, plus the boundary binding. The recognized
 messaging surface is the public Well API recorded by the tasks-app
 fixture (Well revision `5c573753367f10d7226f5eaedf1adbeacab2c09d`).
+
+Approved Utility continuations retain caller ownership. Their registration alone
+does not create reverse implementation access by the Utility. Body interactions
+and private references remain checked, and non-Utility service facets retain the
+private callback exposure rule. Compiler-observed callback-list provenance can
+resolve later iterator invocations; unsupported writers retain analysis gaps.
 
 `callbacks` records execution phase per source site, resolved callee and typed target: same-path,
 independent activation, deferred or unknown. Known iterators and immediate APIs

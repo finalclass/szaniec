@@ -312,6 +312,17 @@ and private-access checks remain independent of this limit.
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
 
+### Callback-list provenance (adapter 1.11.0)
+
+`execution.value_origins` retains possible callback elements written to observed
+record list fields, aliases, `List.rev` results and tuple result projections.
+Element delivery to supported List iterators binds the iterator body's callable
+parameter. Field identity comes from the compiler label UID, not its spelling.
+All observed writes contribute targets; clearing a queue does not erase evidence
+of callbacks that can have been scheduled earlier. Unknown producers and opaque
+record escapes preserve unknown targets. The analysis supplies possible targets,
+not concrete queue contents, invocation counts, commit outcomes or scheduling order.
+
 ### Annotated callable bindings (adapter 1.10.1)
 
 Typed wildcard-alias bindings retain their compiler identifier in executable

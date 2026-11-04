@@ -937,6 +937,19 @@ let observe
     | [] -> Location.none )
     true ;
   iterator.structure iterator structure ;
+  value_origins :=
+    Callback_collections.observe
+      ~known:
+        (List.map
+           (fun (d : Observation.execution_definition) -> d.symbol)
+           !definitions )
+      ~resolve:resolved
+      ~symbol:function_symbol
+      ~result_source
+      ~call_result
+      ~site:site_of_loc
+      structure
+    @ !value_origins ;
   let ambiguous_parameters = Hashtbl.create 8 in
   let parameter_target symbol =
     match Hashtbl.find_opt parameter_symbols symbol with

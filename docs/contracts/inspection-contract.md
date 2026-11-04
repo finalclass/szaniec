@@ -104,9 +104,9 @@ as a request edge in `szaniec.json`.
     "snapshotDigest": "sha256:...",
     "compiler": "5.4.1",
     "adapters": {
-      "programAccess": "szaniec-ocaml-adapter/1.10.1",
+      "programAccess": "szaniec-ocaml-adapter/1.11.0",
       "interpretation": "szaniec-well-adapter/3.7.1",
-      "rules": "szaniec-rules/3.2.0"
+      "rules": "szaniec-rules/3.3.0"
     },
     "exclusions": ["...", "..."]
   },

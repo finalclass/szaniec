@@ -17,11 +17,11 @@ let observation_format = "szaniec-observation/8"
 
 let interpretation_format = "szaniec-interpretation/7"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.10.1"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.11.0"
 
-let adapter_well = "szaniec-well-adapter/3.8.1"
+let adapter_well = "szaniec-well-adapter/3.9.0"
 
-let rules = "szaniec-rules/3.2.0"
+let rules = "szaniec-rules/3.3.0"
 
 let coverage_format = "szaniec-coverage/1"
 

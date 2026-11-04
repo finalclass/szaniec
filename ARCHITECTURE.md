@@ -188,6 +188,13 @@ Distinguish:
 Shared code is not categorically forbidden. The checker enforces approved sharing
 boundaries without needing to infer whether arbitrary code contains business logic.
 
+An approved Utility facet may accept a caller-owned continuation. The Utility
+owns its technical orchestration; the continuation retains its lexical service
+owner and all checks on its body. Passing that continuation is not reverse
+implementation reuse by the Utility. This does not approve direct references to
+another service's private methods, nor private callbacks passed to business
+service facets. Stored invocation targets still require provenance evidence.
+
 Use an explicitly selected approved policy identity. CI selects this outside the
 implementation patch; an architect selects it locally. A modified manifest in the
 same patch is not automatically approved. Record the selected identity in the report.
@@ -259,7 +266,7 @@ Implementation-level contracts resolved under this architecture:
 - [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
 - [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
 - [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.2.0`, don'ts-based.
+- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.3.0`, don'ts-based.
 - [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cognitive/1`, local function inventory.
 - [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
 - [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
