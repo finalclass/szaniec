@@ -13,7 +13,7 @@ let cyclomatic_metric = "szaniec-cc/1"
 
 let config_format = "szaniec-config/1"
 
-let observation_format = "szaniec-observation/8"
+let observation_format = "szaniec-observation/9"
 
 let interpretation_format = "szaniec-interpretation/7"
 

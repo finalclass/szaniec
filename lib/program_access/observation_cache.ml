@@ -22,7 +22,7 @@ let create ~project_root ~evidence =
   ; identity=
       String.concat
         "\n"
-        [ "szaniec-observation-cache/50"
+        [ "szaniec-observation-cache/52"
         ; Version.observation_format
         ; Version.adapter_ocaml
         ; Sys.ocaml_version

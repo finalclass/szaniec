@@ -31,6 +31,7 @@ let project names invocations =
     ; returned_functions= []
     ; returned_constructors= []
     ; value_origins= []
+    ; callback_collections= []
     ; parameter_defaults= []
     ; functor_instances= []
     ; ordered= [] }

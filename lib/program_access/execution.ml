@@ -937,8 +937,9 @@ let observe
     | [] -> Location.none )
     true ;
   iterator.structure iterator structure ;
-  value_origins :=
+  let callback_collections =
     Callback_collections.observe
+      ~unit_canonical
       ~known:
         (List.map
            (fun (d : Observation.execution_definition) -> d.symbol)
@@ -949,7 +950,7 @@ let observe
       ~call_result
       ~site:site_of_loc
       structure
-    @ !value_origins ;
+  in
   let ambiguous_parameters = Hashtbl.create 8 in
   let parameter_target symbol =
     match Hashtbl.find_opt parameter_symbols symbol with
@@ -1019,6 +1020,7 @@ let observe
     ; returned_functions= List.sort_uniq compare !returned_functions
     ; returned_constructors= List.sort_uniq compare !returned_constructors
     ; value_origins= List.sort_uniq compare !value_origins
+    ; callback_collections
     ; parameter_defaults= List.sort_uniq compare !parameter_defaults
     ; functor_instances= List.sort_uniq compare !functor_instances
     ; invocations= List.sort_uniq compare !invocations

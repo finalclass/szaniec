@@ -8,6 +8,26 @@ module Bodies = Hashtbl.Make (struct
   let hash = Hashtbl.hash
 end)
 
+(* These protected scopes return the body callback's result; the finalizer's
+   result is discarded. Keep this library knowledge in InterpretationEngine. *)
+let continuation_result_origins (execution : Observation.execution) =
+  List.filter_map
+    (fun (call : Observation.execution_call) ->
+      if
+        List.mem
+          call.execution_callee
+          ["Stdlib.Fun.protect"; "Eio.Cancel.protect"]
+      then
+        Option.map
+          (fun (arg : Observation.execution_arg) ->
+            (call.execution_result, [arg.target ^ ".<result>"]) )
+          (List.find_opt
+             (fun (arg : Observation.execution_arg) ->
+               arg.label = "" && arg.field = "" )
+             call.execution_args )
+      else None )
+    execution.invocations
+
 (* ProgramAccess records compiler-proven callable result projections. Only the
    framework adapter gives an external producer's result an execution meaning. *)
 let bounded_appends (execution : Observation.execution) =

@@ -3,16 +3,22 @@ open Typedtree
 (* Conservative element provenance for locally observed callback lists. Empty
    writes clear a queue; all other writes contribute possible targets. Unknown
    producers remain explicit empty-string targets, never successful evidence. *)
-let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
-    =
+let observe
+    ~unit_canonical
+    ~known
+    ~resolve
+    ~symbol
+    ~result_source
+    ~call_result
+    ~site
+    structure =
   let edges = ref [] in
   let locals = Hashtbl.create 32 in
   let add key values =
     List.iter (fun value -> edges := (key, value) :: !edges) values
   in
   let expanded env typ =
-    try Ctype.expand_head (Envaux.env_of_only_summary env) typ with
-    | _ -> typ
+    Ctype.expand_head (Envaux.env_of_only_summary env) typ
   in
   let callback_list env typ =
     match Types.get_desc (expanded env typ) with
@@ -24,12 +30,31 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
     | _ -> false
   in
   let list e = callback_list e.exp_env e.exp_type in
-  let field_key label =
-    "<callback-store@"
-    ^ Format.asprintf "%a" Types.Uid.print label.Data_types.lbl_uid
-    ^ ">"
+  let type_name path =
+    match resolve path with
+    | "" -> unit_canonical ^ "." ^ Path.name path
+    | name -> name
+  in
+  let field_key env label =
+    let identity =
+      match Types.get_desc (expanded env label.Data_types.lbl_res) with
+      | Types.Tconstr (path, _, _) -> type_name path ^ "/" ^ label.lbl_name
+      | _ -> Format.asprintf "%a" Types.Uid.print label.lbl_uid
+    in
+    "<callback-store@" ^ identity ^ ">"
   in
   let element source = source ^ ".<elements>" in
+  let never_returns e =
+    match e.exp_desc with
+    | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, _) ->
+        List.mem
+          (resolve path)
+          [ "Stdlib.raise"
+          ; "Stdlib.raise_notrace"
+          ; "Stdlib.failwith"
+          ; "Stdlib.invalid_arg" ]
+    | _ -> false
+  in
   let key e =
     let at = site e.exp_loc in
     Printf.sprintf
@@ -39,33 +64,38 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
       at.col
   in
   let rec sources e =
-    match e.exp_desc with
-    | Texp_construct (_, description, [])
-      when description.Data_types.cstr_name = "[]" ->
-        []
-    | Texp_construct (_, description, [head; tail])
-      when description.Data_types.cstr_name = "::" ->
-        symbol head :: sources tail
-    | Texp_field (_, _, label) when list e -> [field_key label]
-    | Texp_ident (Path.Pident id, _, _) when Hashtbl.mem locals id ->
-        [Hashtbl.find locals id]
-    | Texp_ident (path, _, _) ->
-        let source = result_source e in
-        [element (if source = "" then resolve path else source)]
-    | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, [(_, Arg value)])
-      when resolve path = "Stdlib.List.rev" ->
-        sources value
-    | Texp_apply _ -> [element (call_result e)]
-    | Texp_ifthenelse (_, yes, no) ->
-        sources yes @ Option.fold ~none:[] ~some:sources no
-    | Texp_let (_, _, body)
-     |Texp_sequence (_, body)
-     |Texp_open (_, body) ->
-        sources body
-    | _ -> [""]
+    if never_returns e
+    then []
+    else
+      match e.exp_desc with
+      | Texp_construct (_, description, [])
+        when description.Data_types.cstr_name = "[]" ->
+          []
+      | Texp_construct (_, description, [head; tail])
+        when description.Data_types.cstr_name = "::" ->
+          symbol head :: sources tail
+      | Texp_field (_, _, label) when list e -> [field_key e.exp_env label]
+      | Texp_ident (Path.Pident id, _, _) when Hashtbl.mem locals id ->
+          [Hashtbl.find locals id]
+      | Texp_ident (path, _, _) ->
+          let source = result_source e in
+          [element (if source = "" then resolve path else source)]
+      | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, [(_, Arg value)])
+        when resolve path = "Stdlib.List.rev" ->
+          sources value
+      | Texp_apply _ -> [element (call_result e)]
+      | Texp_ifthenelse (_, yes, no) ->
+          sources yes @ Option.fold ~none:[] ~some:sources no
+      | Texp_let (_, _, body)
+       |Texp_sequence (_, body)
+       |Texp_open (_, body) ->
+          sources body
+      | _ -> [""]
   in
   let rec returned source e =
-    if list e
+    if never_returns e
+    then ()
+    else if list e
     then add (element source) (sources e)
     else
       match e.exp_desc with
@@ -87,7 +117,23 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
             (fun i (_, value) ->
               returned (source ^ ".<tuple@" ^ string_of_int i ^ ">") value )
             values
-      | _ -> ()
+      | _ ->
+          let base = result_source e in
+          let rec forward source projection typ =
+            match Types.get_desc (expanded e.exp_env typ) with
+            | Types.Ttuple values ->
+                List.iteri
+                  (fun i (_, typ) ->
+                    let suffix = ".<tuple@" ^ string_of_int i ^ ">" in
+                    forward (source ^ suffix) (projection ^ suffix) typ )
+                  values
+            | _ when callback_list e.exp_env typ ->
+                add
+                  (element source)
+                  [(if base = "" then "" else element (base ^ projection))]
+            | _ -> ()
+          in
+          forward source "" e.exp_type
   in
   let iterator = Tast_iterator.default_iterator in
   let iterator =
@@ -114,11 +160,11 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
                   then
                     match value with
                     | Overridden (_, value) ->
-                        add (field_key label) (sources value)
+                        add (field_key e.exp_env label) (sources value)
                     | Kept _ -> () )
                 fields
           | Texp_setfield (_, _, label, value) when list value ->
-              add (field_key label) (sources value)
+              add (field_key e.exp_env label) (sources value)
           | Texp_apply ({exp_desc= Texp_ident (path, _, _); _}, arguments) ->
               let target = resolve path in
               let arguments =
@@ -146,7 +192,7 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
   let shapes = Hashtbl.create 8 in
   let type_key env typ =
     match Types.get_desc (expanded env typ) with
-    | Types.Tconstr (path, _, _) -> resolve path
+    | Types.Tconstr (path, _, _) -> type_name path
     | _ -> ""
   in
   let note_label env label =
@@ -158,7 +204,7 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
         Hashtbl.replace
           shapes
           key
-          ( field_key label
+          ( field_key env label
           :: Option.value ~default:[] (Hashtbl.find_opt shapes key) )
   in
   let labels =
@@ -175,41 +221,71 @@ let observe ~known ~resolve ~symbol ~result_source ~call_result ~site structure
           Tast_iterator.default_iterator.expr self e ) }
   in
   labels.structure labels structure ;
-  let rec record_fields env typ =
+  let rec record_fields visiting env typ =
     let typ = expanded env typ in
     match Types.get_desc typ with
     | Types.Tconstr (path, arguments, _) ->
-        Option.value ~default:[] (Hashtbl.find_opt shapes (resolve path))
-        @ List.concat_map (record_fields env) arguments
+        let key = type_name path in
+        let identity =
+          key
+          ^ ":"
+          ^ String.concat
+              ","
+              (List.map (fun typ -> string_of_int (Types.get_id typ)) arguments)
+        in
+        if List.length visiting >= 32
+        then failwith "Callback-store record traversal exceeds supported depth" ;
+        let nested =
+          if List.mem identity visiting
+          then []
+          else
+            try
+              let full_env = Envaux.env_of_only_summary env in
+              let declaration = Env.find_type path full_env in
+              match declaration.Types.type_kind with
+              | Types.Type_record (fields, _) ->
+                  List.concat_map
+                    (fun field ->
+                      let typ =
+                        Ctype.apply
+                          full_env
+                          declaration.type_params
+                          field.Types.ld_type
+                          arguments
+                      in
+                      ( if callback_list env typ
+                        then
+                          [ "<callback-store@"
+                            ^ key
+                            ^ "/"
+                            ^ Ident.name field.ld_id
+                            ^ ">" ]
+                        else [] )
+                      @ record_fields (identity :: visiting) env typ )
+                    fields
+              | _ -> []
+            with
+            | exn ->
+                failwith
+                  ( "Callback-store type evidence unavailable: "
+                  ^ Printexc.to_string exn )
+        in
+        Option.value ~default:[] (Hashtbl.find_opt shapes key)
+        @ nested
+        @ List.concat_map (record_fields (identity :: visiting) env) arguments
     | Types.Ttuple values ->
-        List.concat_map (fun (_, typ) -> record_fields env typ) values
+        List.concat_map (fun (_, typ) -> record_fields visiting env typ) values
     | _ -> []
   in
-  let escapes =
-    { Tast_iterator.default_iterator with
-      expr=
-        (fun self e ->
-          ( match e.exp_desc with
-          | Texp_apply (fn, args) ->
-              let target = symbol fn in
-              let primitive =
-                List.exists
-                  (fun prefix -> String.starts_with ~prefix target)
-                  ["Stdlib.List."; "Stdlib.Option."; "Stdlib.Hashtbl."]
-              in
-              if (not primitive) && not (List.mem target known)
-              then
-                List.iter
-                  (fun key -> add key [""])
-                  ( record_fields e.exp_env e.exp_type
-                  @ List.concat_map
-                      (function
-                        | _, Arg value ->
-                            record_fields value.exp_env value.exp_type
-                        | _ -> [] )
-                      args )
-          | _ -> () ) ;
-          Tast_iterator.default_iterator.expr self e ) }
-  in
-  escapes.structure escapes structure ;
+  Opaque_transfers.observe
+    ~known
+    ~resolve
+    ~symbol
+    ~emit:(fun ~target ~result e ->
+      let fields = record_fields [] e.exp_env e.exp_type in
+      List.iter
+        (fun key ->
+          add key [(if result then "<opaque-result@" ^ target ^ ">" else "")] )
+        fields )
+    structure ;
   List.sort_uniq compare !edges

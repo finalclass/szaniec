@@ -1257,8 +1257,32 @@ let interpret
       | _ -> Repetition.callback_mode api argument )
     | _ -> Repetition.callback_mode api argument
   in
+  let closed_results = Hashtbl.create 64 in
+  List.iter
+    (fun (d : Observation.execution_definition) ->
+      if not (unavailable_target d.symbol)
+      then
+        match (owner_of_path d.symbol).owner_class with
+        | Implementation_of _
+         |Helper_of _
+         |CompositionRoot ->
+            Hashtbl.replace closed_results d.symbol ()
+        | _ -> () )
+    execution.definitions ;
   let parameter_callbacks =
     Parameter_callbacks.create
+      ~result_is_closed:(fun api ->
+        Hashtbl.mem closed_results api
+        || List.mem
+             api
+             [ "Stdlib.raise"
+             ; "Stdlib.raise_notrace"
+             ; "Stdlib.failwith"
+             ; "Stdlib.invalid_arg" ]
+        || List.exists
+             (fun prefix -> String.starts_with ~prefix api)
+             ["Stdlib.List."; "Stdlib.Option."; "Stdlib.Hashtbl."] )
+      ~result_origins:(Result_callbacks.continuation_result_origins execution)
       ~callback_mode:known_callback_mode
       ~supplied_parameter:(fun api argument position field ->
         if

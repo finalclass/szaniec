@@ -171,11 +171,16 @@ type scope = { mutable after_commit: (unit -> unit) list }
 let scope = {after_commit=[]}
 let on_rollback f = scope.after_commit <- f :: scope.after_commit
 let run f = f ()
+let locked f = Fun.protect ~finally:(fun () -> ()) f
+let owned () = if Sys.opaque_identity true then scope else failwith "No scope"
 let collect () =
+  locked (fun () ->
+  let scope = owned () in
   let callbacks = List.rev scope.after_commit in
   scope.after_commit <- [];
-  (true, callbacks)
+  (true, callbacks))
 let compensate () =
+  ignore (locked (fun () -> 123));
   let _, callbacks = collect () in
   List.iter (fun callback -> callback ()) callbacks
 `,
@@ -267,13 +272,28 @@ let forbidden_continuation () =
         ),
       "Unknown queue writers must preserve incomplete analysis: " + unknown.out,
     );
-    await Deno.writeTextFile(
-      policy,
-      (await Deno.readTextFile(policy)).replaceAll(
-        "TransactionUtility",
-        "Transaction_engine",
-      ),
-    );
+    async function receiverRole(engine: boolean) {
+      const from = engine ? "transaction_utility" : "transaction_engine";
+      const to = engine ? "transaction_engine" : "transaction_utility";
+      await Deno.rename(`${project}/lib/${from}`, `${project}/lib/${to}`);
+      for (
+        const file of [
+          `${project}/lib/${to}/dune`,
+          `${project}/lib/task_manager/dune`,
+          `${project}/lib/dune`,
+          policy,
+        ]
+      ) {
+        await Deno.writeTextFile(
+          file,
+          (await Deno.readTextFile(file)).replaceAll(from, to).replaceAll(
+            engine ? "TransactionUtility" : "Transaction_engine",
+            engine ? "Transaction_engine" : "TransactionUtility",
+          ),
+        );
+      }
+    }
+    await receiverRole(true);
     assert(
       (await run("approve")).code === 0,
       "approve an Engine facet without allowing private implementation sharing",
@@ -286,7 +306,12 @@ let forbidden_continuation () =
     );
     assert(
       !JSON.parse(business.out).findings.some((f: { rule: string }) =>
-        f.rule === "GAP-BUILD"
+        [
+          "GAP-BUILD",
+          "GAP-LOCAL-SERVICE",
+          "GAP-PUBLIC-CONTRACT",
+          "POLICY-UNCLASSIFIED",
+        ].includes(f.rule)
       ) && JSON.parse(business.out).findings.some((
         f: { rule: string; participants: string[] },
       ) =>
@@ -296,13 +321,7 @@ let forbidden_continuation () =
       ),
       "Business service facets still reject private callbacks: " + business.out,
     );
-    await Deno.writeTextFile(
-      policy,
-      (await Deno.readTextFile(policy)).replaceAll(
-        "Transaction_engine",
-        "TransactionUtility",
-      ),
-    );
+    await receiverRole(false);
     assert((await run("approve")).code === 0, "restore the approved Utility");
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
@@ -340,6 +359,99 @@ let forbidden_continuation () =
           f.rule === "GAP-UNRESOLVED-CALL"
         ),
       "Opaque record transfer must preserve unknown writers: " + escaped.out,
+    );
+    await Deno.writeTextFile(utilitySource, knownQueueSource);
+    await Deno.writeTextFile(
+      utilityInterface,
+      "type scope = { mutable after_commit: (unit -> unit) list }\nval scope : scope\n" +
+        knownQueueInterface,
+    );
+    for (
+      const transfer of [
+        "Well.opaque_store_transfer Transaction_api.scope",
+        "Well.opaque_store_transfer {payload=Transaction_api.scope}",
+        "List.iter Well.opaque_store_transfer [Transaction_api.scope]",
+        "Option.iter Well.opaque_store_transfer (Some Transaction_api.scope)",
+        "forward Transaction_api.scope",
+        "alias_forward Transaction_api.scope",
+        "forward (Some Transaction_api.scope)",
+        "local_list_forward [Transaction_api.scope]",
+        "List.iter (fun payload -> forward payload) [Transaction_api.scope]",
+      ]
+    ) {
+      await write(
+        "lib/transaction_utility/opaque_transfer.ml",
+        `type envelope = {payload:Transaction_api.scope}
+let forward payload = Well.opaque_store_transfer payload
+let alias_forward payload = let alias = payload in Well.opaque_store_transfer alias
+let local_list_forward payloads = List.iter Well.opaque_store_transfer payloads
+let run () = ${transfer}
+`,
+      );
+      const checked = await run(
+        "check",
+        "--rebuild",
+        "--json",
+        "--no-callgraph",
+      );
+      const report = JSON.parse(checked.out);
+      assert(
+        !report.findings.some((f: { rule: string }) =>
+          [
+            "GAP-BUILD",
+            "GAP-LOCAL-SERVICE",
+            "GAP-PUBLIC-CONTRACT",
+            "POLICY-UNCLASSIFIED",
+          ].includes(f.rule)
+        ),
+        "Transfer fixture must compile and retain ownership: " + checked.err +
+          checked.out,
+      );
+      assert(
+        checked.code === 2 &&
+          report.findings.some((f: { rule: string }) =>
+            f.rule === "GAP-UNRESOLVED-CALL"
+          ),
+        "Foreign-module and iterator transfers must retain unknown writers: " +
+          transfer + checked.out,
+      );
+    }
+    await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
+    await Deno.writeTextFile(
+      `${project}/lib/well_stub/well.ml`,
+      (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
+        "\nlet unknown_queue () = (true, [])\n",
+    );
+    await Deno.writeTextFile(
+      utilitySource,
+      knownQueueSource.replace(
+        "let collect () =",
+        "let collect () = if Sys.opaque_identity true then (",
+      ).replace(
+        "(true, callbacks))",
+        "(true, callbacks))) else Well.unknown_queue ()",
+      ),
+    );
+    const alternative = await run(
+      "check",
+      "--rebuild",
+      "--json",
+      "--no-callgraph",
+    );
+    const alternativeReport = JSON.parse(alternative.out);
+    assert(
+      !alternativeReport.findings.some((f: { rule: string }) =>
+        f.rule === "GAP-BUILD"
+      ),
+      "Alternative producer fixture must compile: " + alternative.err,
+    );
+    assert(
+      alternative.code === 2 &&
+        alternativeReport.findings.some((f: { rule: string }) =>
+          f.rule === "GAP-UNRESOLVED-CALL"
+        ),
+      "Known projection must not hide an unknown whole-result branch: " +
+        alternative.out,
     );
   } finally {
     await Deno.remove(project, { recursive: true });

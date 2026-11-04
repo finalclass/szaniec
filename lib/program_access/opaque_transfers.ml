@@ -1,0 +1,176 @@
+open Typedtree
+open Szaniec_model
+
+(* Follow data parameters through local aliases and helpers before declaring a
+   queue-bearing record closed. An unresolved callback's data effects are opaque. *)
+let observe ~known ~resolve ~symbol ~emit structure =
+  let aliases = Hashtbl.create 32 in
+  let roots expression =
+    let found = ref [] in
+    let iterator =
+      { Tast_iterator.default_iterator with
+        expr=
+          (fun self e ->
+            ( match e.exp_desc with
+            | Texp_ident (Path.Pident id, _, _) -> (
+                found :=
+                  Option.value ~default:[] (Hashtbl.find_opt aliases id)
+                  @ !found ;
+                match Canonical.parameter_symbol (resolve (Path.Pident id)) with
+                | Some (owner, position) ->
+                    found :=
+                      (owner ^ ".<parameter@" ^ string_of_int position ^ ">")
+                      :: !found
+                | None -> () )
+            | _ -> () ) ;
+            Tast_iterator.default_iterator.expr self e ) }
+    in
+    iterator.expr iterator expression ;
+    List.sort_uniq String.compare !found
+  in
+  let bind pattern values =
+    let iterator =
+      { Tast_iterator.default_iterator with
+        pat=
+          (fun (type k) self (p : k general_pattern) ->
+            ( match p.pat_desc with
+            | Tpat_var (id, _, _)
+             |Tpat_alias (_, id, _, _, _) ->
+                Hashtbl.replace aliases id values
+            | _ -> () ) ;
+            Tast_iterator.default_iterator.pat self p ) }
+    in
+    iterator.pat iterator pattern
+  in
+  let calls = ref [] in
+  let iterator =
+    { Tast_iterator.default_iterator with
+      value_binding=
+        (fun self binding ->
+          Tast_iterator.default_iterator.value_binding self binding ;
+          bind binding.vb_pat (roots binding.vb_expr) )
+    ; expr=
+        (fun self e ->
+          ( match e.exp_desc with
+          | Texp_function (parameters, body) -> (
+              List.iteri
+                (fun position parameter ->
+                  let key =
+                    symbol e ^ ".<parameter@" ^ string_of_int position ^ ">"
+                  in
+                  Hashtbl.replace aliases parameter.fp_param [key] ;
+                  match parameter.fp_kind with
+                  | Tparam_pat p
+                   |Tparam_optional_default (p, _) ->
+                      bind p [key] )
+                parameters ;
+              match body with
+              | Tfunction_cases {cases; _} ->
+                  List.iter
+                    (fun c ->
+                      bind
+                        c.c_lhs
+                        [ symbol e
+                          ^ ".<parameter@"
+                          ^ string_of_int (List.length parameters)
+                          ^ ">" ] )
+                    cases
+              | _ -> () )
+          | _ -> () ) ;
+          Tast_iterator.default_iterator.expr self e ;
+          match e.exp_desc with
+          | Texp_apply (fn, args) -> calls := (e, symbol fn, args) :: !calls
+          | _ -> () ) }
+  in
+  iterator.structure iterator structure ;
+  let expanded e =
+    Ctype.expand_head (Envaux.env_of_only_summary e.exp_env) e.exp_type
+  in
+  let generic e =
+    match Types.get_desc (expanded e) with
+    | Types.Tarrow _ -> false
+    | _ ->
+        let seen = Hashtbl.create 8 and found = ref false in
+        let rec scan typ =
+          if not (Hashtbl.mem seen (Types.get_id typ))
+          then begin
+            Hashtbl.add seen (Types.get_id typ) () ;
+            match Types.get_desc typ with
+            | Types.Tvar _
+             |Types.Tunivar _ ->
+                found := true
+            | _ -> Btype.iter_type_expr scan typ
+          end
+        in
+        scan (expanded e) ;
+        !found
+  in
+  let escaped = Hashtbl.create 16 and owners = Hashtbl.create 16 in
+  let primitive target args =
+    List.exists
+      (fun prefix -> String.starts_with ~prefix target)
+      ["Stdlib.List."; "Stdlib.Option."; "Stdlib.Hashtbl."]
+    && List.for_all
+         (function
+           | _, Arg value -> (
+             match Types.get_desc (expanded value) with
+             | Types.Tarrow _ ->
+                 let target = symbol value in
+                 List.mem target known && not (Hashtbl.mem owners target)
+             | _ -> true )
+           | _ -> true )
+         args
+  in
+  let selected target args =
+    List.mapi
+      (fun position arg ->
+        if primitive target args
+        then None
+        else
+          match arg with
+          | _, Arg value
+            when (not (List.mem target known))
+                 || Hashtbl.mem
+                      escaped
+                      (target ^ ".<parameter@" ^ string_of_int position ^ ">")
+            ->
+              Some value
+          | _ -> None )
+      args
+    |> List.filter_map Fun.id
+  in
+  let rec close remaining =
+    let changed = ref false in
+    List.iter
+      (fun (_, target, args) ->
+        List.iter
+          (fun value ->
+            if generic value
+            then
+              List.iter
+                (fun key ->
+                  if not (Hashtbl.mem escaped key)
+                  then begin
+                    Hashtbl.replace escaped key () ;
+                    Option.iter
+                      (fun (owner, _) -> Hashtbl.replace owners owner ())
+                      (Canonical.parameter_symbol key) ;
+                    changed := true
+                  end )
+                (roots value) )
+          (selected target args) )
+      !calls ;
+    if !changed
+    then
+      if remaining = 0
+      then
+        failwith "Opaque callback-store parameter flow exceeds supported depth"
+      else close (remaining - 1)
+  in
+  close 64 ;
+  List.iter
+    (fun (e, target, args) ->
+      List.iter (emit ~target ~result:false) (selected target args) ;
+      if (not (List.mem target known)) && not (primitive target args)
+      then emit ~target ~result:true e )
+    !calls

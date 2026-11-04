@@ -56,6 +56,7 @@ type execution =
   ; returned_functions: (string * string) list
   ; returned_constructors: (string * string) list
   ; value_origins: (string * string) list
+  ; callback_collections: (string * string) list
   ; parameter_defaults: (string * string) list
   ; functor_instances: (string * string * string * site) list
   ; ordered: (string * ordered_step list) list }
@@ -66,6 +67,7 @@ let empty_execution =
   ; returned_functions= []
   ; returned_constructors= []
   ; value_origins= []
+  ; callback_collections= []
   ; parameter_defaults= []
   ; functor_instances= []
   ; ordered= [] }

@@ -1,6 +1,6 @@
 # Contract: program observation
 
-Format identifier (conceptual): `szaniec-observation/8`.
+Format identifier (conceptual): `szaniec-observation/9`.
 
 ProgramAccess produces one normalized observation per check run. It is an
 in-memory contract between the ProgramAccess component and the
@@ -314,14 +314,23 @@ dropped by later stages.
 
 ### Callback-list provenance (adapter 1.11.0)
 
-`execution.value_origins` retains possible callback elements written to observed
+`execution.callback_collections` retains possible callback elements written to observed
 record list fields, aliases, `List.rev` results and tuple result projections.
 Element delivery to supported List iterators binds the iterator body's callable
-parameter. Field identity comes from the compiler label UID, not its spelling.
+parameter. Field identity combines the compiler-resolved nominal record type and
+field name, so interface and implementation declarations share the same store.
 All observed writes contribute targets; clearing a queue does not erase evidence
 of callbacks that can have been scheduled earlier. Unknown producers and opaque
 record escapes preserve unknown targets. The analysis supplies possible targets,
 not concrete queue contents, invocation counts, commit outcomes or scheduling order.
+Type declarations identify queue-bearing records even in modules without field
+projections and through named record wrappers. Local generic data forwarding and
+opaque iterator callbacks retain possible foreign writers. Unsupported type
+traversal or exhausted analysis bounds produce incomplete extraction evidence.
+Opaque record-result origins remain conditional: interpretation may close them
+only for observed implementation bodies or supported standard-library operations;
+their opaque argument transfers still contribute unknown writers. Every returning
+branch contributes projected origins; raising branches contribute no result.
 
 ### Annotated callable bindings (adapter 1.10.1)
 
