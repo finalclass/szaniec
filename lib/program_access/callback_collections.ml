@@ -232,48 +232,63 @@ let observe
     else begin
       if List.length visiting >= 32
       then failwith "Callback-store type traversal exceeds supported depth" ;
+      let parents = visiting in
       let visiting = typ :: visiting in
       match Types.get_desc typ with
       | Types.Tconstr (path, arguments, _) ->
           let key = type_name path in
           let nested =
-            let declaration = Env.find_type path full_env in
-            let payload typ =
-              Ctype.apply full_env declaration.type_params typ arguments
-              |> record_fields visiting env
-            in
-            let fields fields =
-              List.concat_map (fun field -> payload field.Types.ld_type) fields
-            in
-            match declaration.Types.type_kind with
-            | Types.Type_record (fields, _) ->
+            (* Fixed payloads have already been visited for a repeated nominal
+               declaration. Its newly substituted arguments still need traversal. *)
+            if
+              List.exists
+                (fun previous ->
+                  match Types.get_desc previous with
+                  | Types.Tconstr (previous, _, _) -> Path.same previous path
+                  | _ -> false )
+                parents
+            then []
+            else
+              let declaration = Env.find_type path full_env in
+              let payload typ =
+                Ctype.apply full_env declaration.type_params typ arguments
+                |> record_fields visiting env
+              in
+              let fields fields =
                 List.concat_map
-                  (fun field ->
-                    let typ =
-                      Ctype.apply
-                        full_env
-                        declaration.type_params
-                        field.Types.ld_type
-                        arguments
-                    in
-                    ( if callback_list env typ
-                      then
-                        [ "<callback-store@"
-                          ^ key
-                          ^ "/"
-                          ^ Ident.name field.ld_id
-                          ^ ">" ]
-                      else [] )
-                    @ record_fields visiting env typ )
+                  (fun field -> payload field.Types.ld_type)
                   fields
-            | Types.Type_variant (constructors, _) ->
-                List.concat_map
-                  (fun constructor ->
-                    match constructor.Types.cd_args with
-                    | Types.Cstr_tuple values -> List.concat_map payload values
-                    | Types.Cstr_record values -> fields values )
-                  constructors
-            | _ -> []
+              in
+              match declaration.Types.type_kind with
+              | Types.Type_record (fields, _) ->
+                  List.concat_map
+                    (fun field ->
+                      let typ =
+                        Ctype.apply
+                          full_env
+                          declaration.type_params
+                          field.Types.ld_type
+                          arguments
+                      in
+                      ( if callback_list env typ
+                        then
+                          [ "<callback-store@"
+                            ^ key
+                            ^ "/"
+                            ^ Ident.name field.ld_id
+                            ^ ">" ]
+                        else [] )
+                      @ record_fields visiting env typ )
+                    fields
+              | Types.Type_variant (constructors, _) ->
+                  List.concat_map
+                    (fun constructor ->
+                      match constructor.Types.cd_args with
+                      | Types.Cstr_tuple values ->
+                          List.concat_map payload values
+                      | Types.Cstr_record values -> fields values )
+                    constructors
+              | _ -> []
           in
           Option.value ~default:[] (Hashtbl.find_opt shapes key)
           @ nested

@@ -374,6 +374,7 @@ let forbidden_continuation () =
         "Well.opaque_store_transfer (Inline {payload=Transaction_api.scope})",
         "Well.opaque_store_transfer (`Payload Transaction_api.scope)",
         "Well.opaque_store_transfer ((`Payload Transaction_api.scope) : poly_envelope)",
+        "Well.opaque_store_transfer (More (Leaf (0, Transaction_api.scope)))",
         "List.iter Well.opaque_store_transfer [Transaction_api.scope]",
         "Option.iter Well.opaque_store_transfer (Some Transaction_api.scope)",
         "forward Transaction_api.scope",
@@ -389,6 +390,7 @@ let forbidden_continuation () =
 type variant_envelope = Payload of Transaction_api.scope
 type inline_envelope = Inline of {payload:Transaction_api.scope}
 type poly_envelope = [\`Payload of Transaction_api.scope]
+type 'a nested_envelope = Leaf of 'a | More of ('a * Transaction_api.scope) nested_envelope
 let forward payload = Well.opaque_store_transfer payload
 let alias_forward payload = let alias = payload in Well.opaque_store_transfer alias
 let local_list_forward payloads = List.iter Well.opaque_store_transfer payloads

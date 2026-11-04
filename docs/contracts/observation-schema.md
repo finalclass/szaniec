@@ -339,6 +339,9 @@ projections. Typed initializer evidence supplies a closed seed; opaque producers
 still keep the union incomplete. Nominal and polymorphic variant payloads retain
 queue-bearing record fields. Recursive type traversal compares compiler type
 structure rather than allocation identifiers, which change during instantiation.
+Each nominal declaration expands once along a traversal path; repeated heads
+still traverse their substituted arguments. This retains transformed payloads
+without unrolling nonregular GADTs indefinitely.
 An observed definition alone does not close those dependencies. The result
 check is conservative: unused opaque generic results can keep the record store
 incomplete rather than inventing a complete set of queue targets.
