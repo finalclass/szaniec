@@ -424,14 +424,34 @@ let rec possible_targets ?(arguments = []) t visiting symbol =
   then None
   else if List.mem symbol visiting
   then Some []
-  else if
-    String.starts_with ~prefix:"<opaque-result@" symbol
-    && String.ends_with ~suffix:">" symbol
+  else if String.ends_with ~suffix:".<opaque-result>" symbol
   then
-    let target = String.sub symbol 15 (String.length symbol - 16) in
+    let target = String.sub symbol 0 (String.length symbol - 16) in
     match possible_targets ~arguments t (symbol :: visiting) target with
     | Some (_ :: _ as targets) when List.for_all t.result_is_closed targets ->
-        Some []
+        List.fold_left
+          (fun previous target ->
+            let dependencies =
+              Option.value
+                ~default:[]
+                (Hashtbl.find_opt t.origins (target ^ ".<generic-result>"))
+            in
+            List.fold_left
+              (fun previous dependency ->
+                match
+                  ( previous
+                  , possible_targets
+                      ~arguments
+                      t
+                      (symbol :: visiting)
+                      dependency )
+                with
+                | Some _, Some _ -> Some []
+                | _ -> None )
+              previous
+              dependencies )
+          (Some [])
+          targets
     | _ -> None
   else
     let substitute target =

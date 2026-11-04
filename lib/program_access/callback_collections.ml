@@ -242,6 +242,15 @@ let observe
             try
               let full_env = Envaux.env_of_only_summary env in
               let declaration = Env.find_type path full_env in
+              let payload typ =
+                Ctype.apply full_env declaration.type_params typ arguments
+                |> record_fields (identity :: visiting) env
+              in
+              let fields fields =
+                List.concat_map
+                  (fun field -> payload field.Types.ld_type)
+                  fields
+              in
               match declaration.Types.type_kind with
               | Types.Type_record (fields, _) ->
                   List.concat_map
@@ -263,6 +272,14 @@ let observe
                         else [] )
                       @ record_fields (identity :: visiting) env typ )
                     fields
+              | Types.Type_variant (constructors, _) ->
+                  List.concat_map
+                    (fun constructor ->
+                      match constructor.Types.cd_args with
+                      | Types.Cstr_tuple values ->
+                          List.concat_map payload values
+                      | Types.Cstr_record values -> fields values )
+                    constructors
               | _ -> []
             with
             | exn ->
@@ -281,11 +298,13 @@ let observe
     ~known
     ~resolve
     ~symbol
+    ~result_dependency:(fun owner target ->
+      add (owner ^ ".<generic-result>") [target ^ ".<opaque-result>"] )
     ~emit:(fun ~target ~result e ->
       let fields = record_fields [] e.exp_env e.exp_type in
       List.iter
         (fun key ->
-          add key [(if result then "<opaque-result@" ^ target ^ ">" else "")] )
+          add key [(if result then target ^ ".<opaque-result>" else "")] )
         fields )
     structure ;
   List.sort_uniq compare !edges

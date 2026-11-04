@@ -370,6 +370,8 @@ let forbidden_continuation () =
       const transfer of [
         "Well.opaque_store_transfer Transaction_api.scope",
         "Well.opaque_store_transfer {payload=Transaction_api.scope}",
+        "Well.opaque_store_transfer (Payload Transaction_api.scope)",
+        "Well.opaque_store_transfer (Inline {payload=Transaction_api.scope})",
         "List.iter Well.opaque_store_transfer [Transaction_api.scope]",
         "Option.iter Well.opaque_store_transfer (Some Transaction_api.scope)",
         "forward Transaction_api.scope",
@@ -382,6 +384,8 @@ let forbidden_continuation () =
       await write(
         "lib/transaction_utility/opaque_transfer.ml",
         `type envelope = {payload:Transaction_api.scope}
+type variant_envelope = Payload of Transaction_api.scope
+type inline_envelope = Inline of {payload:Transaction_api.scope}
 let forward payload = Well.opaque_store_transfer payload
 let alias_forward payload = let alias = payload in Well.opaque_store_transfer alias
 let local_list_forward payloads = List.iter Well.opaque_store_transfer payloads
@@ -417,6 +421,63 @@ let run () = ${transfer}
       );
     }
     await Deno.remove(`${project}/lib/transaction_utility/opaque_transfer.ml`);
+    await Deno.writeTextFile(
+      `${project}/lib/well_stub/well.ml`,
+      (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +
+        "\nlet unknown_value () = Obj.magic 0\n",
+    );
+    await write(
+      "lib/transaction_utility/opaque_return.ml",
+      "let obtain () = Well.unknown_value ()\n",
+    );
+    for (
+      const producer of [
+        "Well.unknown_value ()",
+        "obtain ()",
+        "Opaque_return.obtain ()",
+        "_protected_obtain ()",
+        "_forwarded_obtain ()",
+      ]
+    ) {
+      await Deno.writeTextFile(
+        utilitySource,
+        knownQueueSource + `
+let obtain () = Well.unknown_value ()
+let _protected_obtain () = Fun.protect ~finally:(fun () -> ()) obtain
+let identity value = value
+let _forwarded_obtain () = identity (Well.unknown_value ())
+let _foreign_compensation () =
+  let foreign : scope = ${producer} in
+  List.iter (fun callback -> callback ()) foreign.after_commit
+`,
+      );
+      const checked = await run(
+        "check",
+        "--rebuild",
+        "--json",
+        "--no-callgraph",
+      );
+      const report = JSON.parse(checked.out);
+      assert(
+        !report.findings.some((f: { rule: string }) =>
+          ["GAP-BUILD", "GAP-LOCAL-SERVICE", "GAP-PUBLIC-CONTRACT"].includes(
+            f.rule,
+          )
+        ),
+        "Generic producer fixture must compile and retain ownership: " +
+          checked.err + checked.out,
+      );
+      assert(
+        checked.code === 2 &&
+          report.findings.some((f: { rule: string }) =>
+            f.rule === "GAP-UNRESOLVED-CALL"
+          ),
+        "Generic producers must retain their opaque result origins: " +
+          producer +
+          checked.out,
+      );
+    }
+    await Deno.remove(`${project}/lib/transaction_utility/opaque_return.ml`);
     await Deno.writeTextFile(
       `${project}/lib/well_stub/well.ml`,
       (await Deno.readTextFile(`${project}/lib/well_stub/well.ml`)) +

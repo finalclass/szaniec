@@ -3,7 +3,7 @@ open Szaniec_model
 
 (* Follow data parameters through local aliases and helpers before declaring a
    queue-bearing record closed. An unresolved callback's data effects are opaque. *)
-let observe ~known ~resolve ~symbol ~emit structure =
+let observe ~known ~resolve ~symbol ~result_dependency ~emit structure =
   let aliases = Hashtbl.create 32 in
   let roots expression =
     let found = ref [] in
@@ -42,7 +42,7 @@ let observe ~known ~resolve ~symbol ~emit structure =
     in
     iterator.pat iterator pattern
   in
-  let calls = ref [] in
+  let calls = ref [] and owner = ref "" in
   let iterator =
     { Tast_iterator.default_iterator with
       value_binding=
@@ -51,8 +51,10 @@ let observe ~known ~resolve ~symbol ~emit structure =
           bind binding.vb_pat (roots binding.vb_expr) )
     ; expr=
         (fun self e ->
+          let previous_owner = !owner in
           ( match e.exp_desc with
           | Texp_function (parameters, body) -> (
+              owner := symbol e ;
               List.iteri
                 (fun position parameter ->
                   let key =
@@ -78,9 +80,11 @@ let observe ~known ~resolve ~symbol ~emit structure =
               | _ -> () )
           | _ -> () ) ;
           Tast_iterator.default_iterator.expr self e ;
-          match e.exp_desc with
-          | Texp_apply (fn, args) -> calls := (e, symbol fn, args) :: !calls
-          | _ -> () ) }
+          ( match e.exp_desc with
+          | Texp_apply (fn, args) ->
+              calls := (!owner, e, symbol fn, args) :: !calls
+          | _ -> () ) ;
+          owner := previous_owner ) }
   in
   iterator.structure iterator structure ;
   let expanded e =
@@ -142,7 +146,7 @@ let observe ~known ~resolve ~symbol ~emit structure =
   let rec close remaining =
     let changed = ref false in
     List.iter
-      (fun (_, target, args) ->
+      (fun (_, _, target, args) ->
         List.iter
           (fun value ->
             if generic value
@@ -169,8 +173,22 @@ let observe ~known ~resolve ~symbol ~emit structure =
   in
   close 64 ;
   List.iter
-    (fun (e, target, args) ->
+    (fun (owner, e, target, args) ->
+      (* A generic result can acquire a queue-bearing type at another callsite.
+         Retain its possible opaque producers even without concrete fields here.
+         Callback arguments may produce that result through a protected scope. *)
+      if owner <> "" && generic e
+      then begin
+        result_dependency owner target ;
+        List.iter
+          (function
+            | _, Arg value -> (
+              match Types.get_desc (expanded value) with
+              | Types.Tarrow _ -> result_dependency owner (symbol value)
+              | _ -> () )
+            | _ -> () )
+          args
+      end ;
       List.iter (emit ~target ~result:false) (selected target args) ;
-      if (not (List.mem target known)) && not (primitive target args)
-      then emit ~target ~result:true e )
+      if not (primitive target args) then emit ~target ~result:true e )
     !calls

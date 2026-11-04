@@ -324,13 +324,18 @@ of callbacks that can have been scheduled earlier. Unknown producers and opaque
 record escapes preserve unknown targets. The analysis supplies possible targets,
 not concrete queue contents, invocation counts, commit outcomes or scheduling order.
 Type declarations identify queue-bearing records even in modules without field
-projections and through named record wrappers. Local generic data forwarding and
+projections and through named record and variant wrappers. Local generic data forwarding and
 opaque iterator callbacks retain possible foreign writers. Unsupported type
 traversal or exhausted analysis bounds produce incomplete extraction evidence.
 Opaque record-result origins remain conditional: interpretation may close them
 only for observed implementation bodies or supported standard-library operations;
 their opaque argument transfers still contribute unknown writers. Every returning
 branch contributes projected origins; raising branches contribute no result.
+Generic result computations retain dependencies on possible opaque producers and
+their callback bodies even before a caller instantiates the result to a record
+type. An observed definition alone does not close those dependencies. The result
+check is conservative: unused opaque generic results can keep the record store
+incomplete rather than inventing a complete set of queue targets.
 
 ### Annotated callable bindings (adapter 1.10.1)
 
