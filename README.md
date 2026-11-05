@@ -863,7 +863,8 @@ trusted Dune dependencies: an ordinary build gives current evidence and their
 generated code is still checked. For MLX, action preprocessors and compiler
 `-pp`/`-ppx` flags, `--rebuild` records
 local transformation receipts; later checks revalidate their input and tool
-identities. Missing inputs, stale content and unverifiable transformation
+identities. A receipt covers only its source, transformed input, tools and the
+Dune files governing that directory, so edits elsewhere do not invalidate it. Missing inputs, stale content and unverifiable transformation
 provenance have distinct diagnostics. Receipts stay under `_build`.
 Typed local functions, aliases, exact passed callbacks and immutable record
 callbacks are supported. Dynamic or mutable targets remain explicit gaps.

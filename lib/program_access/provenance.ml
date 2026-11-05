@@ -1,10 +1,16 @@
 open Szaniec_model
 
+(* Build configuration evidence per Dune file: the file's own digest, the
+   identities of its declared dependencies and run commands, and whether all
+   of them were available. A receipt covers only the Dune files that govern
+   its unit (see [governing_files]), not every project input. *)
+type dune_file =
+  { file_identity: string list
+  ; file_available: bool }
+
 type t =
   { root: string
-  ; inputs: string
-  ; tools: string
-  ; tools_available: bool
+  ; files: (string, dune_file) Hashtbl.t
   ; unavailable: string list
   ; digests: (string, string) Hashtbl.t }
 
@@ -308,171 +314,159 @@ let create ~root ~inputs =
         Hashtbl.add digests path identity ;
         identity
   in
-  let tools_available = ref true in
-  let dependencies =
-    List.filter
-      (fun file ->
-        List.mem
-          (Filename.basename file)
-          ["dune"; "dune-project"; "dune-workspace"] )
-      inputs
-    |> List.concat_map (fun file ->
-        try
-          let tokens = dune_tokens (Filename.concat root file) in
-          let explicit =
-            dune_dependencies tokens
-            |> List.map (fun dependency ->
-                let relative =
-                  let dependency = expand_workspace ~root dependency in
-                  if Filename.is_relative dependency
-                  then Filename.concat (Filename.dirname file) dependency
-                  else dependency
-                in
-                let source =
-                  if Filename.is_relative relative
-                  then Filename.concat root relative
-                  else relative
+  let dependencies file =
+    let tokens = dune_tokens (Filename.concat root file) in
+    let explicit =
+      dune_dependencies tokens
+      |> List.map (fun dependency ->
+          let relative =
+            let dependency = expand_workspace ~root dependency in
+            if Filename.is_relative dependency
+            then Filename.concat (Filename.dirname file) dependency
+            else dependency
+          in
+          let source =
+            if Filename.is_relative relative
+            then Filename.concat root relative
+            else relative
+          in
+          let path =
+            if Sys.file_exists source
+            then source
+            else
+              Filename.concat (Filename.concat root "_build/default") relative
+          in
+          path ^ ":" ^ digest path )
+    in
+    explicit
+    @ ( tokens
+      |> List.filter_map (fun token ->
+          List.find_map
+            (fun prefix ->
+              if
+                String.starts_with ~prefix token
+                && String.ends_with ~suffix:"}" token
+              then
+                let value =
+                  String.sub
+                    token
+                    (String.length prefix)
+                    (String.length token - String.length prefix - 1)
                 in
                 let path =
-                  if Sys.file_exists source
-                  then source
+                  Filename.concat
+                    root
+                    (Filename.concat (Filename.dirname file) value)
+                in
+                let path =
+                  if Sys.file_exists path
+                  then path
                   else
                     Filename.concat
                       (Filename.concat root "_build/default")
-                      relative
+                      (Filename.concat (Filename.dirname file) value)
                 in
-                let identity = digest path in
-                if identity = "missing" then tools_available := false ;
-                path ^ ":" ^ identity )
-          in
-          explicit
-          @ ( tokens
-            |> List.filter_map (fun token ->
-                List.find_map
-                  (fun prefix ->
-                    if
-                      String.starts_with ~prefix token
-                      && String.ends_with ~suffix:"}" token
-                    then (
-                      let value =
-                        String.sub
-                          token
-                          (String.length prefix)
-                          (String.length token - String.length prefix - 1)
-                      in
-                      let path =
-                        Filename.concat
-                          root
-                          (Filename.concat (Filename.dirname file) value)
-                      in
-                      let path =
-                        if Sys.file_exists path
-                        then path
-                        else
-                          Filename.concat
-                            (Filename.concat root "_build/default")
-                            (Filename.concat (Filename.dirname file) value)
-                      in
-                      let identity = digest path in
-                      if identity = "missing" then tools_available := false ;
-                      Some (path ^ ":" ^ identity) )
-                    else None )
-                  ["%{dep:"; "%{read:"; "%{read-lines:"; "%{read-strings:"] ) )
-        with
-        | Sys_error _ ->
-            tools_available := false ;
-            [file ^ ":unavailable"] )
-    |> List.sort_uniq compare
+                Some (path ^ ":" ^ digest path)
+              else None )
+            ["%{dep:"; "%{read:"; "%{read-lines:"; "%{read-strings:"] ) )
   in
-  let rec ppx_tools directory =
-    try
-      Array.to_list (Sys.readdir directory)
-      |> List.sort compare
-      |> List.concat_map (fun name ->
-          let path = Filename.concat directory name in
-          if Sys.is_directory path
-          then ppx_tools path
-          else if
-            List.exists
-              (Filename.check_suffix name)
-              [".exe"; ".bc"; ".cmxs"; ".so"]
-          then [path ^ ":" ^ digest path]
-          else [] )
-    with
-    | Sys_error _ -> []
+  let commands file =
+    dune_commands (Filename.concat root file)
+    |> List.map (fun command ->
+        let command =
+          if
+            String.starts_with ~prefix:"%{bin:" command
+            && String.ends_with ~suffix:"}" command
+          then String.sub command 6 (String.length command - 7)
+          else expand_workspace ~root command
+        in
+        let executable =
+          if not (Filename.is_relative command)
+          then Some command
+          else if String.contains command '/'
+          then
+            let build =
+              Filename.concat
+                (Filename.concat root "_build/default")
+                (Filename.concat (Filename.dirname file) command)
+            in
+            if Sys.file_exists build
+            then Some build
+            else
+              Some
+                (Filename.concat
+                   root
+                   (Filename.concat (Filename.dirname file) command) )
+          else executable_on_path command
+        in
+        match executable with
+        | Some path when Sys.file_exists path -> command ^ ":" ^ digest path
+        | _ -> command ^ ":unavailable" )
   in
-  let tools =
-    List.filter
-      (fun file ->
+  let missing identity =
+    String.ends_with ~suffix:":missing" identity
+    || String.ends_with ~suffix:":unavailable" identity
+  in
+  let files = Hashtbl.create 64 in
+  List.iter
+    (fun file ->
+      if
         List.mem
           (Filename.basename file)
-          ["dune"; "dune-project"; "dune-workspace"] )
-      inputs
-    |> List.concat_map (fun file ->
-        try
-          dune_commands (Filename.concat root file)
-          |> List.map (fun command ->
-              let command =
-                if
-                  String.starts_with ~prefix:"%{bin:" command
-                  && String.ends_with ~suffix:"}" command
-                then String.sub command 6 (String.length command - 7)
-                else expand_workspace ~root command
-              in
-              let executable =
-                if not (Filename.is_relative command)
-                then Some command
-                else if String.contains command '/'
-                then
-                  let build =
-                    Filename.concat
-                      (Filename.concat root "_build/default")
-                      (Filename.concat (Filename.dirname file) command)
-                  in
-                  if Sys.file_exists build
-                  then Some build
-                  else
-                    Some
-                      (Filename.concat
-                         root
-                         (Filename.concat (Filename.dirname file) command) )
-                else executable_on_path command
-              in
-              match executable with
-              | Some path when Sys.file_exists path ->
-                  let identity = digest path in
-                  if identity = "missing" then tools_available := false ;
-                  command ^ ":" ^ identity
-              | _ ->
-                  tools_available := false ;
-                  command ^ ":unavailable" )
-        with
-        | Sys_error _ ->
-            tools_available := false ;
-            [file ^ ":unavailable"] )
-    |> List.sort_uniq compare
-  in
+          ["dune"; "dune-project"; "dune-workspace"]
+      then
+        let identity =
+          try
+            (file ^ ":" ^ digest (Filename.concat root file))
+            :: dependencies file
+            @ commands file
+            |> List.sort_uniq compare
+          with
+          | Sys_error _ -> [file ^ ":unavailable"]
+        in
+        Hashtbl.replace
+          files
+          file
+          { file_identity= identity
+          ; file_available= not (List.exists missing identity) } )
+    inputs ;
   { root
+  ; files
   ; unavailable=
-      List.filter
-        (fun identity ->
-          String.ends_with ~suffix:":missing" identity
-          || String.ends_with ~suffix:":unavailable" identity )
-        (dependencies @ tools)
-  ; tools=
-      String.concat
-        "\n"
-        (tools @ ppx_tools (Filename.concat root "_build/default/.ppx"))
-  ; tools_available= !tools_available
-  ; digests= Hashtbl.create 16
-  ; inputs=
-      hash
-        (String.concat
-           "\n"
-           ( dependencies
-           @ List.map
-               (fun p -> p ^ ":" ^ digest (Filename.concat root p))
-               inputs ) ) }
+      Hashtbl.fold
+        (fun _ file acc -> List.filter missing file.file_identity @ acc)
+        files
+        []
+      |> List.sort_uniq compare
+  ; digests= Hashtbl.create 16 }
+
+(* The Dune files that can change how a source is transformed: the project
+   and workspace files (dialects such as MLX) and every [dune] file from the
+   source directory up to the root (stanzas apply to subdirectories through
+   [include_subdirs]). Edits elsewhere in the project do not invalidate the
+   receipt; imported interfaces are checked separately by the adapter. *)
+let governing_files t source =
+  let relative =
+    List.find_map
+      (fun prefix ->
+        if String.starts_with ~prefix source
+        then
+          Some
+            (String.sub
+               source
+               (String.length prefix)
+               (String.length source - String.length prefix) )
+        else None )
+      [Filename.concat t.root "_build/default/"; t.root ^ "/"]
+    |> Option.value ~default:source
+  in
+  let rec ancestors directory =
+    let file = if directory = "." then "dune" else directory ^ "/dune" in
+    let parent = Filename.dirname directory in
+    file :: (if parent = directory then [] else ancestors parent)
+  in
+  "dune-project" :: "dune-workspace" :: ancestors (Filename.dirname relative)
+  |> List.filter_map (Hashtbl.find_opt t.files)
 
 let path t (cmt : Cmt_format.cmt_infos) input =
   if Filename.is_relative input
@@ -534,66 +528,101 @@ let identity t ~source cmt artifact =
         tools := (command ^ ":" ^ identity) :: !tools ) )
     cmt.cmt_args ;
   let input = Option.map (path t cmt) cmt.cmt_sourcefile in
+  let governing = governing_files t source in
+  (* The receipt certifies the transformation, not the compilation: the
+     artifact only has to be compiled from the receipted input. A recompile
+     caused by a changed imported interface keeps the receipt valid. Dune PPX
+     drivers under [_build/default/.ppx] are Dune targets whose bytes need not
+     be reproducible across builds; Dune reruns a rewrite when its driver
+     changes, and the rewritten input digest is part of the identity. Tools
+     Dune does not track (dialect commands, compiler [-pp]/[-ppx]) stay. *)
+  ignore artifact ;
   if
     (not !available)
-    || (not t.tools_available)
-    || Option.fold ~none:true ~some:(fun p -> not (Sys.file_exists p)) input
+    || List.exists (fun file -> not file.file_available) governing
+    ||
+    match input with
+    | Some input when Sys.file_exists input ->
+        Some (Digest.file input) <> cmt.cmt_source_digest
+    | _ -> true
   then None
   else
     Some
       (hash
          (String.concat
             "\n"
-            [ Version.adapter_ocaml
-            ; t.root
-            ; t.inputs
-            ; t.tools
-            ; source
-            ; digest source
-            ; artifact
-            ; digest artifact
-            ; Option.fold ~none:"missing" ~some:digest input
-            ; String.concat "\n" (Array.to_list cmt.cmt_args)
-            ; String.concat "\n" (List.rev !tools) ] ) )
+            ( [ Version.adapter_ocaml
+              ; t.root
+              ; source
+              ; digest source
+              ; Option.fold ~none:"missing" ~some:digest input
+              ; String.concat "\n" (Array.to_list cmt.cmt_args)
+              ; String.concat "\n" (List.rev !tools) ]
+            @ List.concat_map (fun file -> file.file_identity) governing ) ) )
 
-let current t ~source cmt artifact =
-  let receipt = artifact ^ ".szaniec-provenance" in
-  match identity t ~source cmt artifact with
-  | None -> false
-  | Some expected -> (
+(* Dune deletes files it did not produce from its build directories on every
+   build, so a receipt beside its artifact would not survive an ordinary
+   external build. Receipts live in [_build/.szaniec-provenance], which Dune
+   does not manage, named by the artifact path below [_build/default]. *)
+let receipt_directory = "_build/.szaniec-provenance"
+
+let receipt_path artifact =
+  let marker = "/_build/default/" in
+  let length = String.length artifact in
+  let rec find index =
+    if index + String.length marker > length
+    then None
+    else if String.sub artifact index (String.length marker) = marker
+    then Some index
+    else find (index + 1)
+  in
+  Option.map
+    (fun index ->
+      let start = index + String.length marker in
+      Filename.concat
+        (Filename.concat (String.sub artifact 0 index) receipt_directory)
+        (hash (String.sub artifact start (length - start))) )
+    (find 0)
+
+let read_receipt artifact read =
+  match receipt_path artifact with
+  | None -> None
+  | Some receipt -> (
     try
       let input = open_in receipt in
       Fun.protect
         ~finally:(fun () -> close_in_noerr input)
-        (fun () -> input_line input = expected)
+        (fun () -> Some (read input))
     with
     | Sys_error _
      |End_of_file ->
-        false )
+        None )
+
+let current t ~source cmt artifact =
+  match identity t ~source cmt artifact with
+  | None -> false
+  | Some expected -> read_receipt artifact input_line = Some expected
 
 let source_changed ~source artifact =
-  try
-    let input = open_in (artifact ^ ".szaniec-provenance") in
-    Fun.protect
-      ~finally:(fun () -> close_in_noerr input)
-      (fun () ->
-        ignore (input_line input) ;
-        let old_source = input_line input in
-        let old_artifact = input_line input in
-        old_artifact = digest artifact && old_source <> digest source )
-  with
-  | Sys_error _
-   |End_of_file ->
-      false
+  read_receipt artifact (fun input ->
+      ignore (input_line input) ;
+      let old_source = input_line input in
+      let old_artifact = input_line input in
+      old_artifact = digest artifact && old_source <> digest source )
+  = Some true
 
 let record t ~source cmt artifact =
-  match identity t ~source cmt artifact with
-  | None -> ()
-  | Some identity -> (
+  match (identity t ~source cmt artifact, receipt_path artifact) with
+  | None, _
+   |_, None ->
+      ()
+  | Some identity, Some receipt -> (
     try
+      ( try Unix.mkdir (Filename.dirname receipt) 0o700 with
+      | Unix.Unix_error (Unix.EEXIST, _, _) -> () ) ;
       let temporary, output =
         Filename.open_temp_file
-          ~temp_dir:(Filename.dirname artifact)
+          ~temp_dir:(Filename.dirname receipt)
           ".szaniec-proof-"
           ".tmp"
       in
@@ -606,7 +635,7 @@ let record t ~source cmt artifact =
             output
             (identity ^ "\n" ^ digest source ^ "\n" ^ digest artifact ^ "\n") ;
           close_out output ;
-          Unix.rename temporary (artifact ^ ".szaniec-provenance") )
+          Unix.rename temporary receipt )
     with
     | Sys_error _
      |Unix.Unix_error _ ->

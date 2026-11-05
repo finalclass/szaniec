@@ -1222,6 +1222,26 @@ consumers = ["Bootstrap"]
     );
     result = await check();
     assert(result.code === 0, result.out + result.err);
+    // A receipt covers only its own transformation inputs: an unrelated
+    // source or Dune file edit followed by an ordinary build keeps MLX current.
+    for (
+      const [file, note] of [
+        ["lib/task_access/store.ml", "\n(* unrelated edit *)\n"],
+        ["lib/task_access/dune", "\n; unrelated edit\n"],
+      ]
+    ) {
+      await write(file, (await Deno.readTextFile(`${root}/${file}`)) + note);
+    }
+    const unrelatedBuild = await command("dune", ["build"]);
+    assert(
+      unrelatedBuild.code === 0,
+      unrelatedBuild.err + unrelatedBuild.out,
+    );
+    result = await check(false);
+    assert(
+      result.code === 0 && result.report.summary.gaps === 0,
+      "unrelated edit must not invalidate MLX receipts: " + result.out,
+    );
     const transformed = "lib/generated/preprocessed/transform.ts";
     const transformation = await Deno.readTextFile(`${root}/${transformed}`);
     await write(

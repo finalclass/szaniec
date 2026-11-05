@@ -17,7 +17,7 @@ let observation_format = "szaniec-observation/9"
 
 let interpretation_format = "szaniec-interpretation/7"
 
-let adapter_ocaml = "szaniec-ocaml-adapter/1.12.0"
+let adapter_ocaml = "szaniec-ocaml-adapter/1.13.0"
 
 let adapter_well = "szaniec-well-adapter/3.9.0"
 

@@ -270,10 +270,11 @@ Transformation diagnostics distinguish missing compiler inputs
 (`GAP-UNVERIFIABLE-TRANSFORMATION`), and confirmed content/interface mismatch
 (`GAP-STALE-ARTIFACT`). Dune-managed PPX rewrites need no receipt (see
 *Dune-managed PPX rewrites*). After a successful requested build, ProgramAccess stores
-a local transformation receipt keyed by compiler artifact/input bytes, project
-source/build/preprocessor dependencies and transformation executable identity.
-Receipts are revalidated independently of extraction caches; changed or missing
-dependencies invalidate them. No receipt is published after a failed build.
+a local transformation receipt keyed by the authored source, the transformed
+compiler input, the governing Dune configuration and transformation executable
+identity (see *Scoped transformation receipts*). Receipts are revalidated
+independently of extraction caches; changed or missing dependencies invalidate
+them. No receipt is published after a failed build.
 
 Compiler-mapped MLX units are included when their typed source locations point
 to the authored `.mlx` input. ProgramAccess retains the preprocessor command,
@@ -317,6 +318,29 @@ and private-access checks remain independent of this limit.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
+
+### Scoped transformation receipts (adapter 1.13.0)
+
+A receipt certifies one transformation, not the whole project. Its identity
+covers the authored source and its digest, the transformed compiler input and its
+digest, compiler arguments, compiler and `-pp`/`-ppx` executables, and the
+governing Dune files: `dune-project`,
+`dune-workspace` and every `dune` file from the source directory up to the root,
+each with its declared dependencies (`deps`, `preprocessor_deps`, `%{dep:...}`
+and read forms) and run-command executables. The artifact must be compiled from
+the receipted input (its compiler digest equals the input digest), but its own
+bytes are not part of the identity: a recompilation caused by a changed imported
+interface keeps the receipt, while the adapter still checks imported interface
+CRCs. Dune PPX drivers under `_build/default/.ppx` are not part of the identity:
+they are Dune targets whose bytes are not reproducible across builds, Dune reruns
+a rewrite when its driver changes, and the rewritten input digest is covered.
+Run-command executables of the governing Dune files (such as the MLX dialect
+preprocessor) are not tracked by Dune and remain part of the identity. Editing an unrelated source or a Dune file outside that chain therefore no
+longer invalidates MLX receipts. Receipts are stored in
+`_build/.szaniec-provenance`, keyed by the artifact path; Dune deletes files it
+did not produce from its own build directories, so receipts kept beside the
+artifacts did not survive an ordinary external build. Before 1.13.0 every receipt
+sat beside its artifact and covered all project inputs and the artifact bytes.
 
 ### Dune-managed PPX rewrites (adapter 1.12.0)
 
