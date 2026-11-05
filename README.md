@@ -857,7 +857,11 @@ wrapper execution, and resource access beyond policy-declared API prefixes.
 Interface freshness and compiler module aliases are included in the evidence.
 Fresh compiler-mapped MLX units are included with authored source locations;
 unavailable or unmapped transformations remain gaps. The real Well MLX
-preprocessor is used by the capability acceptance suite. `--rebuild` records
+preprocessor is used by the capability acceptance suite. Dune-managed PPX
+rewriters (`(preprocess (pps ...))`, e.g. `ppx_deriving` or `well.ppx`) are
+trusted Dune dependencies: an ordinary build gives current evidence and their
+generated code is still checked. For MLX, action preprocessors and compiler
+`-pp`/`-ppx` flags, `--rebuild` records
 local transformation receipts; later checks revalidate their input and tool
 identities. Missing inputs, stale content and unverifiable transformation
 provenance have distinct diagnostics. Receipts stay under `_build`.

@@ -80,10 +80,15 @@ One entry per observed compilation unit (implementation module):
   Rewriting or touching identical content does not invalidate those artifacts.
   Explicit interfaces must match their `.cmti` input digest and the implementation's
   interface CRC. Resolvable imported interface CRCs must also remain current;
-  missing local dependencies cannot prove freshness. Preprocessed inputs and
-  compiler-applied `-pp`/`-ppx` transformations require a matching local receipt
-  from a successful requested build. A transformed digest alone never establishes
-  original-source freshness. Unproven transformation evidence requires rebuilding.
+  missing local dependencies cannot prove freshness. Dune-managed PPX rewrites
+  (`(preprocess (pps ...))` or `staged_pps`, outside MLX) are current when the
+  compiled `x.pp.ml` matches the compiler digest and Dune's `_build` copy of
+  `x.ml` equals the authored source; see *Dune-managed PPX rewrites*. Other
+  preprocessed inputs (MLX dialects, action preprocessors, per-module
+  specifications) and compiler-applied `-pp`/`-ppx` transformations require a
+  matching local receipt from a successful requested build. A transformed digest
+  alone never establishes original-source freshness. Unproven transformation
+  evidence requires rebuilding.
 - `generated` — dune-generated wrapper units (`.ml-gen` sources); they
   are excluded from rules and diagnostics.
 
@@ -263,7 +268,8 @@ from the conformance unit list.
 Transformation diagnostics distinguish missing compiler inputs
 (`GAP-MISSING-INPUT`), unverified transformation provenance
 (`GAP-UNVERIFIABLE-TRANSFORMATION`), and confirmed content/interface mismatch
-(`GAP-STALE-ARTIFACT`). After a successful requested build, ProgramAccess stores
+(`GAP-STALE-ARTIFACT`). Dune-managed PPX rewrites need no receipt (see
+*Dune-managed PPX rewrites*). After a successful requested build, ProgramAccess stores
 a local transformation receipt keyed by compiler artifact/input bytes, project
 source/build/preprocessor dependencies and transformation executable identity.
 Receipts are revalidated independently of extraction caches; changed or missing
@@ -311,6 +317,25 @@ and private-access checks remain independent of this limit.
 
 All gaps travel with the observation into the report; they are never
 dropped by later stages.
+
+### Dune-managed PPX rewrites (adapter 1.12.0)
+
+PPX rewriters such as `ppx_deriving` or `well.ppx` expand authored source; they
+are not used to introduce calls between services. A library, executable or test
+stanza whose `preprocess` field is exactly `(pps ...)` or `(staged_pps ...)` makes
+the rewriter a Dune build dependency: Dune reruns it when the rewriter, its
+`preprocessor_deps` or the source changes. ProgramAccess therefore trusts such
+rewrites like other Dune targets and requires no transformation receipt, so an
+ordinary external build provides current evidence without `check --rebuild`.
+Generated code is still analyzed, so resource access or calls emitted by a
+rewriter (for example `let%query` SQLite access) remain conformance evidence.
+An unbuilt authored edit is `GAP-STALE-ARTIFACT`.
+
+The trust is limited to the object directory of that stanza. MLX units
+(`.mlx.pp.ml`, `.mlx.ml`) belong to the client layer and keep receipt evidence,
+as do action preprocessors, `per_module` specifications and transformations
+applied through compiler `-pp`/`-ppx` flags, which Dune does not track as
+rewriter dependencies.
 
 ### Callback-list provenance (adapter 1.11.0)
 

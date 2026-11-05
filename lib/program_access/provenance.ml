@@ -105,6 +105,168 @@ let expand_workspace ~root value =
         (String.length value - String.length prefix)
   else value
 
+type dune_token =
+  | Open
+  | Close
+  | Word of string
+  | Datum_comment
+
+(* A Dune s-expression lexer: quoted strings may contain parentheses and
+   semicolons, and line, block and datum comments are dropped. *)
+let dune_lex text =
+  let n = String.length text in
+  let tokens = ref [] in
+  let i = ref 0 in
+  let at offset ch = !i + offset < n && text.[!i + offset] = ch in
+  while !i < n do
+    match text.[!i] with
+    | '(' ->
+        tokens := Open :: !tokens ;
+        incr i
+    | ')' ->
+        tokens := Close :: !tokens ;
+        incr i
+    | ' '
+     |'\t'
+     |'\n'
+     |'\r' ->
+        incr i
+    | ';' ->
+        while !i < n && text.[!i] <> '\n' do
+          incr i
+        done
+    | '#' when at 1 '|' ->
+        let depth = ref 1 in
+        i := !i + 2 ;
+        while !i < n && !depth > 0 do
+          if at 0 '|' && at 1 '#'
+          then (
+            decr depth ;
+            i := !i + 2 )
+          else if at 0 '#' && at 1 '|'
+          then (
+            incr depth ;
+            i := !i + 2 )
+          else incr i
+        done
+    | '#' when at 1 ';' ->
+        tokens := Datum_comment :: !tokens ;
+        i := !i + 2
+    | '"' ->
+        let buffer = Buffer.create 16 in
+        incr i ;
+        while !i < n && text.[!i] <> '"' do
+          if text.[!i] = '\\' && !i + 1 < n
+          then (
+            Buffer.add_char buffer text.[!i + 1] ;
+            i := !i + 2 )
+          else (
+            Buffer.add_char buffer text.[!i] ;
+            incr i )
+        done ;
+        incr i ;
+        tokens := Word (Buffer.contents buffer) :: !tokens
+    | _ ->
+        let start = !i in
+        while !i < n && not (String.contains "() \t\n\r;\"" text.[!i]) do
+          incr i
+        done ;
+        tokens := Word (String.sub text start (!i - start)) :: !tokens
+  done ;
+  List.rev !tokens
+
+type dune_form =
+  | Atom of string
+  | Form of dune_form list
+
+let dune_forms text =
+  let rec items acc = function
+    | [] -> (List.rev acc, [])
+    | Close :: rest -> (List.rev acc, rest)
+    | Open :: rest ->
+        let inner, rest = items [] rest in
+        items (Form inner :: acc) rest
+    | Word word :: rest -> items (Atom word :: acc) rest
+    | Datum_comment :: rest -> items acc (skip rest)
+  and skip = function
+    | Open :: rest -> snd (items [] rest)
+    | Word _ :: rest -> rest
+    | Datum_comment :: rest -> skip (skip rest)
+    | (Close :: _ | []) as rest -> rest
+  in
+  fst (items [] (dune_lex text))
+
+let read_text file =
+  let input = open_in_bin file in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr input)
+    (fun () -> really_input_string input (in_channel_length input))
+
+(* PPX rewriters that Dune runs through [(preprocess (pps ...))] or
+   [staged_pps] are ordinary build dependencies: Dune reruns them when the
+   rewriter, its [preprocessor_deps] or the source change. Their output is
+   therefore trusted like any other Dune target and needs no receipt. Keys
+   are object directories ([dir/.name.objs], [dir/.name.eobjs]). Action
+   preprocessors, per-module specifications, dialects such as MLX and
+   compiler flags ([-pp], [-ppx]) are not covered and keep receipts. *)
+let dune_rewriter_object_dirs ~root inputs =
+  let dirs = Hashtbl.create 16 in
+  List.iter
+    (fun file ->
+      if Filename.basename file = "dune"
+      then
+        try
+          let directory = Filename.dirname file in
+          let prefix = if directory = "." then "" else directory ^ "/" in
+          List.iter
+            (function
+              | Form (Atom kind :: fields) -> (
+                  let field name =
+                    List.find_map
+                      (function
+                        | Form (Atom key :: values) when key = name ->
+                            Some values
+                        | _ -> None )
+                      fields
+                  in
+                  let rewritten =
+                    match field "preprocess" with
+                    | Some [Form (Atom ("pps" | "staged_pps") :: _)] -> true
+                    | _ -> false
+                  in
+                  let names =
+                    List.concat_map
+                      (fun key ->
+                        Option.value ~default:[] (field key)
+                        |> List.filter_map (function
+                          | Atom name -> Some name
+                          | Form _ -> None ) )
+                      ["name"; "names"]
+                  in
+                  let suffix =
+                    match kind with
+                    | "library" -> Some ".objs"
+                    | "executable"
+                     |"executables"
+                     |"test"
+                     |"tests" ->
+                        Some ".eobjs"
+                    | _ -> None
+                  in
+                  match suffix with
+                  | Some suffix when rewritten ->
+                      List.iter
+                        (fun name ->
+                          Hashtbl.replace dirs (prefix ^ "." ^ name ^ suffix) () )
+                        names
+                  | _ -> () )
+              | _ -> () )
+            (dune_forms (read_text (Filename.concat root file)))
+        with
+        | Sys_error _ -> () )
+    inputs ;
+  dirs
+
 (* Build-only OCaml inputs need an authored generator declaration. Merely
    finding a file under _build must not admit an unowned or stale source. *)
 let generated_source ~root relative =

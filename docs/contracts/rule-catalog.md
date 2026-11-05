@@ -251,7 +251,7 @@ callbacks passed to non-Utility service facets retain the exposure rule.
 | `GAP-UNOBSERVED-SOURCE` | in-scope source file without artifact | exit 2 |
 | `GAP-STALE-ARTIFACT` | confirmed source/input content or interface mismatch | exit 2 |
 | `GAP-MISSING-INPUT` | authored or generated compiler input is missing | exit 2 |
-| `GAP-UNVERIFIABLE-TRANSFORMATION` | transformation receipt is absent or its dependency/tool identity changed | exit 2 |
+| `GAP-UNVERIFIABLE-TRANSFORMATION` | receipt for an MLX, action or compiler-applied transformation is absent or its dependency/tool identity changed; Dune-managed PPX rewrites need none | exit 2 |
 | `GAP-SOURCE-MAPPING` | MLX executable locations lack authored compiler mapping | exit 2 |
 | `GAP-LOCAL-SERVICE` | local boundary is unapproved, conflicting, missing or lacks fresh typed evidence | exit 2 |
 | `GAP-UNSUPPORTED-COMPILER` | artifact compiler series outside adapter support | exit 2 |

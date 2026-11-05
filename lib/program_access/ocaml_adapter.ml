@@ -190,7 +190,36 @@ let digest_matches path expected =
   try Some (Digest.file path) = expected with
   | Sys_error _ -> false
 
+(* A Dune-managed PPX rewrite ([pps]) compiles [x.pp.ml] produced from Dune's
+   copy of [x.ml]. The artifact is current when it was compiled from that
+   rewrite and the copy still equals the authored source; the rewriter itself
+   is a Dune dependency. MLX dialects and compiler-applied transformations are
+   excluded and keep receipt evidence. *)
+let dune_rewritten ~rewriter_dirs ~artifact (cmt : Cmt_format.cmt_infos) =
+  match cmt.cmt_sourcefile with
+  | None -> false
+  | Some recorded ->
+      Hashtbl.mem
+        rewriter_dirs
+        (Filename.dirname (Filename.dirname (strip_build_prefix artifact)))
+      && (not
+            (Array.exists (fun arg -> arg = "-pp" || arg = "-ppx") cmt.cmt_args) )
+      && (not (Filename.check_suffix recorded ".mlx.pp.ml"))
+      && List.exists (Filename.check_suffix recorded) [".pp.ml"; ".pp.mli"]
+
+let rewritten_input_current ~source ~input (cmt : Cmt_format.cmt_infos) =
+  let copy =
+    if Filename.check_suffix input ".pp.ml"
+    then Filename.chop_suffix input ".pp.ml" ^ ".ml"
+    else Filename.chop_suffix input ".pp.mli" ^ ".mli"
+  in
+  digest_matches input cmt.cmt_source_digest
+  &&
+  try Digest.file copy = Digest.file source with
+  | Sys_error _ -> false
+
 let current_input
+    ?(rewritten = false)
     ~provenance
     ~project_root
     ~source
@@ -208,7 +237,11 @@ let current_input
           (fun suffix -> Filename.check_suffix recorded suffix)
           [".pp.ml"; ".pp.mli"; ".mlx.ml"]
       in
-      if compiler_transform || transformed
+      if
+        rewritten
+        && List.exists (Filename.check_suffix recorded) [".pp.ml"; ".pp.mli"]
+      then rewritten_input_current ~source ~input cmt
+      else if compiler_transform || transformed
       then Provenance.current provenance ~source cmt artifact
       else if cmt.cmt_source_digest = None
       then false
@@ -290,6 +323,7 @@ let memoized_interface_crc () =
   {read_crc; file_exists; validate}
 
 let current_interface
+    ?(rewritten = false)
     ?provenance
     ?(interface_crc = interface_crc)
     ~project_root
@@ -318,6 +352,7 @@ let current_interface
         List.assoc_opt cmt.cmt_modname cmt.cmt_imports |> Option.join
       in
       current_input
+        ~rewritten
         ~provenance
         ~project_root
         ~source:interface
@@ -1652,6 +1687,9 @@ let observe
       ~root:project_root
       ~inputs:(List.sort_uniq compare !dependency_inputs)
   in
+  let rewriter_dirs =
+    Provenance.dune_rewriter_object_dirs ~root:project_root !dependency_inputs
+  in
   let artifacts = scan_artifacts project_root in
   let gaps = ref [] in
   let selected = ref 0 in
@@ -1781,6 +1819,7 @@ let observe
                 || Filename.check_suffix recorded ".pp.ml"
                 || Filename.check_suffix recorded ".mlx.ml"
               in
+              let rewritten = dune_rewritten ~rewriter_dirs ~artifact cmt in
               (* Dune's wrapped-library stub is often recorded as
                  [lib/name.ml-gen] but kept only inside [_build]. There is
                  no project source to go stale against, so the artifact is
@@ -1796,6 +1835,7 @@ let observe
                       | _ -> false )
                    && Sys.file_exists recorded_input
                    && ( (not transformed)
+                      || rewritten
                       || Option.is_some
                            (Provenance.identity
                               provenance
@@ -1804,12 +1844,14 @@ let observe
                               (project_root // artifact) ) )
                    && ( assume_fresh
                       || current_input
+                           ~rewritten
                            ~provenance
                            ~project_root
                            ~source:source_abs
                            cmt
                            (project_root // artifact)
                          && current_interface
+                              ~rewritten
                               ~interface_crc
                               ~provenance
                               ~project_root
@@ -1865,6 +1907,7 @@ let observe
                   then "GAP-STALE-ARTIFACT"
                   else if
                     transformed
+                    && (not rewritten)
                     && not
                          (Provenance.current
                             provenance
