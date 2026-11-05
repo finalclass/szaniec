@@ -539,16 +539,20 @@ let rec possible_targets ?(arguments = []) t visiting symbol =
         then Some []
         else if aliases <> []
         then
-          List.fold_left
-            (fun previous target ->
-              match
-                ( previous
-                , possible_targets ~arguments t (symbol :: visiting) target )
-              with
-              | Some a, Some b -> Some (List.sort_uniq compare (a @ b))
-              | _ -> None )
-            (Some [])
-            aliases
+          (* Union the branches once; re-sorting the accumulator after every
+             branch made wide fan-in quadratic. *)
+          Option.map (List.sort_uniq compare)
+          @@ List.fold_left
+               (fun previous target ->
+                 match
+                   ( previous
+                   , possible_targets ~arguments t (symbol :: visiting) target
+                   )
+                 with
+                 | Some a, Some b -> Some (List.rev_append b a)
+                 | _ -> None )
+               (Some [])
+               aliases
         else
           match parameter symbol with
           | None ->
@@ -586,8 +590,7 @@ let rec possible_targets ?(arguments = []) t visiting symbol =
                             position
                             (Canonical.parameter_field symbol) )
                       with
-                      | Some old, Some next ->
-                          Some (List.sort_uniq compare (old @ next))
+                      | Some old, Some next -> Some (List.rev_append next old)
                       | _ -> None )
                     (Some [])
                     sources
@@ -595,55 +598,56 @@ let rec possible_targets ?(arguments = []) t visiting symbol =
                 if calls = [] && sources = []
                 then None
                 else
-                  List.fold_left
-                    (fun result (call : Observation.execution_call) ->
-                      let arg =
-                        List.find_opt
-                          (fun (arg : Observation.execution_arg) ->
-                            arg.position = position
-                            && ( arg.field = Canonical.parameter_field symbol
-                               || arg.field = "" ) )
-                          call.execution_args
-                      in
-                      match
-                        ( result
-                        , match arg with
-                          | None when List.mem position call.execution_defaults
-                            ->
-                              Option.bind
-                                (List.assoc_opt symbol t.defaults)
-                                (possible_targets
+                  Option.map (List.sort_uniq compare)
+                  @@ List.fold_left
+                       (fun result (call : Observation.execution_call) ->
+                         let arg =
+                           List.find_opt
+                             (fun (arg : Observation.execution_arg) ->
+                               arg.position = position
+                               && ( arg.field = Canonical.parameter_field symbol
+                                  || arg.field = "" ) )
+                             call.execution_args
+                         in
+                         match
+                           ( result
+                           , match arg with
+                             | None
+                               when List.mem position call.execution_defaults ->
+                                 Option.bind
+                                   (List.assoc_opt symbol t.defaults)
+                                   (possible_targets
+                                      ~arguments
+                                      t
+                                      (symbol :: visiting) )
+                             | None -> None
+                             | Some arg ->
+                                 let field = Canonical.parameter_field symbol in
+                                 let target =
+                                   if
+                                     field <> ""
+                                     && arg.field = ""
+                                     && ( parameter arg.target <> None
+                                        || String.starts_with
+                                             ~prefix:"<result>"
+                                             field
+                                        || String.starts_with
+                                             ~prefix:"<elements>"
+                                             field )
+                                   then arg.target ^ "." ^ field
+                                   else arg.target
+                                 in
+                                 possible_targets
                                    ~arguments
                                    t
-                                   (symbol :: visiting) )
-                          | None -> None
-                          | Some arg ->
-                              let field = Canonical.parameter_field symbol in
-                              let target =
-                                if
-                                  field <> ""
-                                  && arg.field = ""
-                                  && ( parameter arg.target <> None
-                                     || String.starts_with
-                                          ~prefix:"<result>"
-                                          field
-                                     || String.starts_with
-                                          ~prefix:"<elements>"
-                                          field )
-                                then arg.target ^ "." ^ field
-                                else arg.target
-                              in
-                              possible_targets
-                                ~arguments
-                                t
-                                (symbol :: visiting)
-                                target )
-                      with
-                      | Some old, Some next ->
-                          Some (List.sort_uniq compare (old @ next))
-                      | _ -> None )
-                    initial
-                    calls
+                                   (symbol :: visiting)
+                                   target )
+                         with
+                         | Some old, Some next ->
+                             Some (List.rev_append next old)
+                         | _ -> None )
+                       initial
+                       calls
 
 let bind_calls t (execution : Observation.execution) =
   let rec round remaining =
