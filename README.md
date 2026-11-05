@@ -37,7 +37,8 @@ What works:
   `ppx_runtime_libraries`, `public_name` resolution, and every comment form.
 - Classification of dependency names by convention even when the library is
   generated and absent from the tree.
-- `szaniec check` on DG (22 services, 29 stanzas) takes about 22 ms.
+- `szaniec check` on the migrated DG (22 services, 145 stanzas) takes about
+  30 ms.
 - `szaniec complexity` with `szaniec-cognitive/1` and `szaniec-cc/1` for
   OCaml 5.4 artifacts, including Dune PPX and MLX freshness evidence.
 
