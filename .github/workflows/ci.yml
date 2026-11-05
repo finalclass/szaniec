@@ -10,7 +10,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    # Cold compiler fixtures plus packaging exceed one hour on hosted runners.
+    # Cold compiler fixtures plus packaging can exceed one hour on hosted runners.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -21,5 +21,5 @@ jobs:
         run: opam exec -- make build
       - name: Unit and integration suites
         run: opam exec -- make verify
-      - name: Verify packaged coverage and nested launcher
-        run: opam exec -- ./_release/szaniec coverage --project-root test/fixtures/coverage-app
+      - name: Verify packaged check on its own fixture
+        run: opam exec -- ./_release/szaniec check test/fixtures/check/conforming

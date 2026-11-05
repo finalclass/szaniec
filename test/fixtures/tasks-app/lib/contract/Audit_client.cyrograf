@@ -1,1 +1,0 @@
-rpc record(RecordReq) -> OkResponse

@@ -1,0 +1,14 @@
+(library
+ (name task_manager)
+ (libraries
+  task_manager_contract
+  task_manager_spec
+  pricing_engine_contract
+  task_access_contract
+  notification_contract
+  clock
+  app_types
+  well.publish
+  well.subscribe
+  well.rpc
+  yojson))

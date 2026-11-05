@@ -1,0 +1,7 @@
+(library
+ (name notification)
+ (libraries notification_contract well.mail))
+
+(library
+ (name notification_contract)
+ (libraries app_types))

@@ -1,0 +1,9 @@
+(library
+ (name report_client)
+ (libraries x_access_contract order_manager_contract app_types yojson stats_engine
+  audit_manager eio_main))
+
+(library
+ (name order_manager)
+ (libraries order_manager_spec x_access_contract x_access_api x_access
+  pricing_engine app_root))

@@ -1,0 +1,3 @@
+(library
+ (name task_manager_spec)
+ (libraries task_manager_contract app_types well.core))

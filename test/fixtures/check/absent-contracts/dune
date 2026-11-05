@@ -1,0 +1,3 @@
+; Generated contract libraries live in a gitignored directory that is
+; absent when the check runs.
+(dirs :standard \ generated)

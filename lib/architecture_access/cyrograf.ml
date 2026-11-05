@@ -1,83 +1,12 @@
-(* Cyrograf contract files as the approved-architecture projection of
-   services. A .cyrograf file whose stem declares rpc methods is a
-   service; its role is inferred from the name suffix. *)
-
-type role =
-  | Client
-  | Manager
-  | Engine
-  | Access
-  | Utility
-
-let role_to_string = function
-  | Client -> "client"
-  | Manager -> "manager"
-  | Engine -> "engine"
-  | Access -> "access"
-  | Utility -> "utility"
-
-let role_of_suffix (name : string) : role =
-  let lower = String.lowercase_ascii name in
-  let ends_with suffix =
-    let s = String.length suffix and n = String.length lower in
-    n >= s && String.sub lower (n - s) s = suffix
-  in
-  if ends_with "manager"
-  then Manager
-  else if ends_with "client"
-  then Client
-  else if ends_with "engine"
-  then Engine
-  else if ends_with "access"
-  then Access
-  else Utility
+(* Cyrograf contract files: the approved-architecture projection of
+   services. A .cyrograf file that declares rpc methods is a service named
+   after its file stem. Roles are policy and are decided by
+   ConformanceEngine, not here. *)
 
 type method_decl =
   { m_name: string
   ; m_request: string (* request type name from the rpc line *)
   ; m_response: string }
-
-type service =
-  { svc_name: string (* cyrograf file stem *)
-  ; svc_role: role
-  ; svc_methods: method_decl list (* sorted by name *) }
-
-type contract =
-  { contract_name: string
-  ; contract_source: string
-  ; contract_messages: string list }
-
-type t =
-  { services: service list
-  ; contracts: contract list }
-
-let parse_messages content =
-  String.split_on_char '\n' content
-  |> List.filter_map (fun line ->
-      let words =
-        String.split_on_char ' ' (String.trim line) |> List.filter (( <> ) "")
-      in
-      match words with
-      | ("struct" | "enum" | "union" | "variant" | "alias" | "type")
-        :: name
-        :: _ ->
-          let name = String.split_on_char '{' name |> List.hd in
-          if name = "" then None else Some name
-      | _ -> None )
-  |> List.sort_uniq compare
-
-let lowercase_stem (name : string) : string = String.lowercase_ascii name
-
-(* Service-family matching: a path segment equals the service stem
-   ignoring case and underscores ("Task_access" = "taskaccess",
-   "FlowAccess" = "flow_access"). *)
-let normalize_stem (name : string) : string =
-  let buf = Buffer.create (String.length name) in
-  String.iter (fun c -> if c <> '_' then Buffer.add_char buf c) name ;
-  String.lowercase_ascii (Buffer.contents buf)
-
-let segment_matches_service ~(service : string) (segment : string) : bool =
-  String.equal (normalize_stem segment) (normalize_stem service)
 
 (* Parse "rpc name(Req) -> Res" from a .cyrograf file. Anything that is
    not an rpc line is not read by this projection. *)
@@ -130,59 +59,3 @@ let parse_rpcs (content : string) : method_decl list =
           | _ -> () )
       | _ -> () ) ;
   List.sort (fun a b -> String.compare a.m_name b.m_name) !methods
-
-let load ~(project_root : string) ~(program_roots : string list) :
-    (t, string) result =
-  (* scan for .cyrograf files under the program roots *)
-  let rec scan base rel acc =
-    let dir = if rel = "" then base else Filename.concat base rel in
-    try
-      Array.iter
-        (fun e ->
-          if e = "." || e = ".."
-          then ()
-          else if String.length e > 0 && e.[0] = '.'
-          then ()
-          else if List.mem e ["_build"; "node_modules"]
-          then ()
-          else if Sys.is_directory (Filename.concat dir e)
-          then scan base (if rel = "" then e else Filename.concat rel e) acc
-          else if Filename.check_suffix e ".cyrograf"
-          then acc := (if rel = "" then e else Filename.concat rel e) :: !acc )
-        (Sys.readdir dir)
-    with
-    | Sys_error _ -> ()
-  in
-  let files = ref [] in
-  List.iter (fun root -> scan project_root root files) program_roots ;
-  let services = ref [] in
-  let contracts = ref [] in
-  List.iter
-    (fun rel ->
-      let stem = Filename.remove_extension (Filename.basename rel) in
-      let content =
-        try
-          let ic = open_in_bin (Filename.concat project_root rel) in
-          let n = in_channel_length ic in
-          let s = really_input_string ic n in
-          close_in ic ;
-          s
-        with
-        | Sys_error _ -> ""
-      in
-      contracts :=
-        { contract_name= stem
-        ; contract_source= rel
-        ; contract_messages= parse_messages content }
-        :: !contracts ;
-      match parse_rpcs content with
-      | [] -> () (* no rpc methods: not a service *)
-      | methods ->
-          services :=
-            {svc_name= stem; svc_role= role_of_suffix stem; svc_methods= methods}
-            :: !services )
-    !files ;
-  Ok
-    { contracts= List.sort_uniq compare !contracts
-    ; services=
-        List.sort (fun a b -> String.compare a.svc_name b.svc_name) !services }

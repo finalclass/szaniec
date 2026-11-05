@@ -1,0 +1,3 @@
+(library
+ (name app_types)
+ (libraries yojson))

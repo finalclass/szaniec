@@ -1,0 +1,3 @@
+(library
+ (name task_manager_browser)
+ (libraries app_types well.core))

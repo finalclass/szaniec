@@ -1,8 +1,0 @@
-(include_subdirs no)
-
-(library
- (name template_engine_lib)
- (wrapped false)
- (libraries contract well formatting_engine_lib)
- (flags
-  (:standard -bin-annot)))

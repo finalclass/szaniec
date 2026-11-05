@@ -1,0 +1,49 @@
+(include extra.inc)
+
+(library
+ (name clock)
+ (public_name walk.clock))
+
+(library
+ (name planner_manager)
+ (public_name walk.planner))
+
+(library
+ (name report_engine)
+ (libraries walk.planner "walk.clock"))
+
+(library
+ (name walker_client)
+ (libraries
+  clock
+  (select
+   impl.ml
+   from
+   (report_engine -> impl.engine.ml)
+   (!missing_library -> impl.none.ml)
+   (-> impl.default.ml))))
+
+(library
+ (name walker_util)
+ (libraries
+  (re_export clock)))
+
+(library
+ (name vendor_manager_contract)
+ (libraries clock))
+
+(rule
+ (targets banner.txt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo
+    "\| multi-line block string with ) and (
+    "\| second line
+   ))))
+
+(subdir
+ generated/deep
+ (library
+  (name generated_access)
+  (libraries walker_client)))

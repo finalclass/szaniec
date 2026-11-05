@@ -130,7 +130,7 @@ Deno.test("Cognitive Complexity distinguishes dispatch, nesting and Result seque
       "(lang dune 3.17)\n(package (name metric) (allow_empty) (depends (ocaml (and (>= 5.4) (< 5.5))) yojson))\n",
     );
     const fixtureLock =
-      new URL("../fixtures/tasks-app/dune.lock", import.meta.url).pathname;
+      new URL("../fixtures/complexity-app/dune.lock", import.meta.url).pathname;
     const copyLock = await new Deno.Command("cp", {
       args: ["-R", fixtureLock, `${root}/dune.lock`],
     }).output();
@@ -140,9 +140,6 @@ Deno.test("Cognitive Complexity distinguishes dispatch, nesting and Result seque
       "(library (name metric) (flags (:standard -bin-annot)))\n",
     );
     await Deno.writeTextFile(`${root}/lib/metric.ml`, source);
-    const config =
-      `format = "szaniec-config/1"\n[policy]\nname = "metric"\nroots = ["lib"]\n`;
-    await Deno.writeTextFile(`${root}/szaniec.toml`, config);
     async function run(...args: string[]) {
       const result = await new Deno.Command(bin, {
         args: ["complexity", "--project-root", root, "--json", ...args],
@@ -186,18 +183,10 @@ Deno.test("Cognitive Complexity distinguishes dispatch, nesting and Result seque
         );
       }
     }
-    await Deno.writeTextFile(
-      `${root}/szaniec.toml`,
-      config + '[complexity]\nmetric = "cyclomatic"\n',
-    );
-    assert(
-      (await run()).report.metric === "szaniec-cc/1",
-      "configured metric ignored",
-    );
     assert(
       (await run("--metric", "cognitive")).report.metric ===
         "szaniec-cognitive/1",
-      "CLI metric override ignored",
+      "explicit metric ignored",
     );
     // An external build creates transformed artifacts without the checker's
     // provenance receipt. Missing evidence must not become a successful zero.
@@ -278,7 +267,8 @@ let exported = shadow
     const lock = await new Deno.Command("cp", {
       args: [
         "-R",
-        new URL("../fixtures/tasks-app/dune.lock", import.meta.url).pathname,
+        new URL("../fixtures/complexity-app/dune.lock", import.meta.url)
+          .pathname,
         `${root}/dune.lock`,
       ],
     }).output();
@@ -296,10 +286,6 @@ let exported = shadow
     await Deno.writeTextFile(
       `${root}/lib/empty.ml`,
       "open List\nlet value = 1\n",
-    );
-    await Deno.writeTextFile(
-      `${root}/szaniec.toml`,
-      'format = "szaniec-config/1"\n[policy]\nname = "metric"\nroots = ["lib"]\n',
     );
     async function run(metric: string, rebuild = false, cache = true) {
       const result = await new Deno.Command(bin, {

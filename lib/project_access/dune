@@ -1,0 +1,3 @@
+(library
+ (name szaniec_project_access)
+ (libraries szaniec_model unix))

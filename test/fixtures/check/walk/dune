@@ -1,0 +1,6 @@
+; Directory sets are honoured exactly as dune does.
+(dirs :standard \ excluded)
+(data_only_dirs data)
+(vendored_dirs vendor)
+#| a block comment with (unbalanced parens and "a string )" |#
+#;(library (name commented_out) (libraries report_engine))

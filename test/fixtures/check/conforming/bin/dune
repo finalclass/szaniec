@@ -1,0 +1,17 @@
+(executable
+ (name main)
+ (libraries
+  well
+  well.core
+  well.cap
+  well.service
+  well.cli
+  task_manager
+  task_manager_spec
+  task_manager_wire
+  order_manager
+  pricing_engine
+  task_access
+  notification
+  web_client
+  sqlite3))

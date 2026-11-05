@@ -43,8 +43,8 @@ jobs:
         run: opam exec -- deno run --allow-read --allow-write --allow-run scripts/release.ts "$RELEASE_TAG"
       - name: Verify source acceptance
         run: opam exec -- make verify
-      - name: Verify packaged coverage and nested launcher
-        run: opam exec -- ./_release/szaniec coverage --project-root test/fixtures/coverage-app
+      - name: Verify packaged check on its own fixture
+        run: opam exec -- ./_release/szaniec check test/fixtures/check/conforming
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}

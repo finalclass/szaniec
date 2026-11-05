@@ -1,0 +1,4 @@
+// Data-only contract: no rpc, so not a service.
+struct Task {
+  title: String
+}

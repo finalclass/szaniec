@@ -1,0 +1,7 @@
+(library
+ (name pricing_engine)
+ (libraries pricing_engine_contract task_access_contract clock))
+
+(library
+ (name pricing_engine_contract)
+ (libraries app_types))

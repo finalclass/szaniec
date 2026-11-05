@@ -475,7 +475,7 @@ let path t (cmt : Cmt_format.cmt_infos) input =
   then input
   else
     let prefix = cmt.cmt_builddir ^ "/" in
-    if Canonical.starts_with ~prefix input
+    if String.starts_with ~prefix input
     then
       Filename.concat
         (Filename.concat t.root "_build/default")

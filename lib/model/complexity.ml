@@ -1,6 +1,6 @@
 (* Complexity report. Mirrors docs/contracts/complexity-metric.md.
    Measurement lives in ProgramAccess; this module is the rendered
-   inventory, including ownership joined from interpretation. *)
+   inventory. *)
 
 open Observation
 
@@ -9,12 +9,9 @@ type entry =
   ; name: string
   ; qualname: string
   ; kind: string (* "named" | "anonymous" *)
-  ; binding: string (* "function" | "rpc" *)
   ; nested: bool
   ; provenance: string
   ; module_path: string
-  ; service: string (* "" when the unit has no service *)
-  ; ownership: string
   ; path: string
   ; line: int
   ; col: int
@@ -26,9 +23,6 @@ type entry =
 type t =
   { metric: string
   ; status: string (* "ok" | "incomplete" *)
-  ; policy_name: string
-  ; policy_digest: string
-  ; approved: bool
   ; snapshot_digest: string
   ; compiler: string
   ; profile: string

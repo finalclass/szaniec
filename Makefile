@@ -14,48 +14,8 @@ release:
 
 verify:
 	dune exec ocamlformat -- --check $$(git ls-files '*.ml')
-	dune build @test/unit/runtest test/acceptance/contract_bindings_probe.exe test/performance/evaluation.exe test/performance/acquisition.exe
-	dune exec test/performance/rendering.exe
-	dune build @test/coaching/runtest bin/szaniec.exe
-	deno fmt --check test/coaching/run.ts
-	deno check test/coaching/run.ts
-	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_COACHING_BINARY test/coaching/run.ts
-	deno fmt --check test/performance/acquisition.ts
-	deno check test/performance/acquisition.ts
-	deno fmt --check test/performance/complexity.ts
-	deno check test/performance/complexity.ts
-	deno test --allow-read --allow-write --allow-run --allow-env test/performance/acquisition.ts
-	deno fmt --check test/performance/conformance.ts
-	deno check test/performance/conformance.ts
-	deno fmt --check test/config/run.ts
-	deno test --allow-read --allow-write --allow-run test/config/run.ts
-	deno fmt --check test/loops/run.ts
-	deno test --allow-read --allow-write --allow-run test/loops/run.ts
-	deno fmt --check test/loops/token-admission.ts
-	deno check test/loops/token-admission.ts
-	deno test --allow-read --allow-write --allow-run test/loops/token-admission.ts
-	deno fmt --check test/flows/run.ts
-	deno test --allow-read --allow-write --allow-run test/flows/run.ts
-	deno fmt --check test/acceptance/public_contracts.ts
-	dune build test/acceptance/contract_observation.exe
-	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/public_contracts.ts
-	deno fmt --check test/acceptance/application_contracts.ts
-	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/application_contracts.ts
-	deno fmt --check test/acceptance/service_callbacks.ts
-	deno check test/acceptance/service_callbacks.ts
-	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_CALLBACK_BINARY test/acceptance/service_callbacks.ts
-	deno fmt --check test/acceptance/stream_callbacks.ts
-	deno check test/acceptance/stream_callbacks.ts
-	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/stream_callbacks.ts
-	deno fmt --check test/acceptance/capabilities.ts
-	deno check test/acceptance/capabilities.ts
-	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/capabilities.ts
-	deno fmt --check test/acceptance/ppx_rewriters.ts
-	deno check test/acceptance/ppx_rewriters.ts
-	deno test --allow-read --allow-write --allow-run --allow-env test/acceptance/ppx_rewriters.ts
-	deno fmt --check test/complexity/run.ts
-	deno check test/complexity/run.ts
-	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_COMPLEXITY_BINARY test/complexity/run.ts
-	test/acceptance/run.sh
-	test/acceptance/suggestions.sh
-	test/coverage/run.sh
+	dune build bin/szaniec.exe
+	deno fmt --check scripts test/check test/complexity
+	deno check scripts/release.ts scripts/install.ts test/check/run.ts test/complexity/run.ts test/complexity/fixture.ts
+	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_CHECK_BINARY test/check/run.ts
+	deno test --allow-read --allow-write --allow-run --allow-env=SZANIEC_COMPLEXITY_BINARY test/complexity/run.ts test/complexity/fixture.ts

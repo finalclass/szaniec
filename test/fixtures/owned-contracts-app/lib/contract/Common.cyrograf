@@ -1,7 +1,0 @@
-struct Message {
-  value: String
-}
-
-struct Payload {
-  value: String
-}

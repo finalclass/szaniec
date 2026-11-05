@@ -1,9 +1,9 @@
 (library
  (name szaniec_inspection_manager)
- (libraries szaniec_config
+ (libraries
   szaniec_model
-  szaniec_program_access
+  szaniec_project_access
   szaniec_architecture_access
-  szaniec_interpretation_engine
   szaniec_conformance_engine
+  szaniec_program_access
   unix))

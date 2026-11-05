@@ -1,0 +1,3 @@
+(library
+ (name task_manager_wire)
+ (libraries app_types well.core well.rpc yojson))

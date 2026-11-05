@@ -1,4 +1,0 @@
-(library
- (name coverage_app_mark)
- (kind ppx_rewriter)
- (libraries ppxlib))

@@ -1,23 +1,13 @@
-(* OCaml ProgramAccess adapter.
+(* OCaml ProgramAccess adapter (measurement).
 
-   Extracts normalized program facts from compiler-typed artifacts (.cmt)
-   produced by dune for the inspected project. See
-   docs/contracts/observation-schema.md and docs/decisions/stack.md.
-
-   The adapter reports facts only; architectural meaning is decided by the
-   InterpretationEngine. Supported artifacts: OCaml
+   Reads compiler-typed artifacts (.cmt) produced by dune for the inspected
+   project, verifies that each one is current for its source, and measures
+   every syntactic function. See docs/contracts/complexity-metric.md and
+   docs/decisions/stack.md. Supported artifacts: OCaml
    [Szaniec_model.Version.supported_compiler_series] .cmt files. *)
 
 module Measurement = Complexity
 open Szaniec_model
-
-module Physical_ordered_step = Hashtbl.Make (struct
-  type t = Observation.ordered_step
-
-  let equal a b = a == b
-
-  let hash = Hashtbl.hash
-end)
 
 let ( // ) = Filename.concat
 
@@ -177,7 +167,7 @@ let compiler_path
   then path
   else
     let prefix = cmt.cmt_builddir ^ "/" in
-    if Canonical.starts_with ~prefix path
+    if String.starts_with ~prefix path
     then
       build_root
       // String.sub
@@ -404,1198 +394,6 @@ let read_file (path : string) : string =
   with
   | Sys_error _ -> ""
 
-let normalize_fname ~(project_root : string) (fname : string) : string =
-  if Filename.is_relative fname
-  then strip_build_prefix fname
-  else
-    let root = String.length project_root in
-    if
-      String.length fname > root
-      && String.sub fname 0 root = project_root
-      && fname.[root] = '/'
-    then String.sub fname (root + 1) (String.length fname - root - 1)
-    else fname
-
-let site_of_loc ~(project_root : string) (loc : Location.t) : Observation.site =
-  let start = loc.Location.loc_start in
-  { Observation.site_path= normalize_fname ~project_root start.Lexing.pos_fname
-  ; line= start.Lexing.pos_lnum
-  ; col= start.Lexing.pos_cnum - start.Lexing.pos_bol }
-
-(* ── typed tree walk ──────────────────────────────────────────────── *)
-
-type facts =
-  { mutable calls: Observation.call list
-  ; mutable vrefs: Observation.value_ref list
-  ; mutable trefs: Observation.type_ref list
-  ; mutable symbols: (string * string) list
-  ; mutable aliases: (string * string) list
-  ; mutable unsupported: Observation.site list
-  ; mutable execution: Observation.execution
-  ; mutable flows: Observation.exec_paths list }
-
-(* Executable alternatives of one expression. Above [max_path_alts] the
-   function is ambiguous: use-case and queue fan-out rules then gap
-   instead of guessing. *)
-type flow =
-  { alts: Observation.path_step list list
-  ; ambiguous: bool
-  ; reason: string }
-
-let flow_empty = {alts= [[]]; ambiguous= false; reason= ""}
-
-let flow_ambiguous =
-  {alts= []; ambiguous= true; reason= "unsupported executable construct"}
-
-let summary_flow = function
-  | Ok alts -> {alts; ambiguous= false; reason= ""}
-  | Error reason -> {alts= []; ambiguous= true; reason}
-
-let flow_one (step : Observation.path_step) =
-  {alts= [[step]]; ambiguous= false; reason= ""}
-
-let flow_has_call (f : flow) : bool = List.exists (fun alt -> alt <> []) f.alts
-
-let flow_union (a : flow) (b : flow) : flow =
-  if a.ambiguous || b.ambiguous
-  then if a.ambiguous then a else b
-  else summary_flow (Execution_paths.union a.alts b.alts)
-
-let flow_seq (a : flow) (b : flow) : flow =
-  if a.ambiguous || b.ambiguous
-  then if a.ambiguous then a else b
-  else summary_flow (Execution_paths.sequence a.alts b.alts)
-
-let flow_seqs (fs : flow list) : flow = List.fold_left flow_seq flow_empty fs
-
-let union_all (fs : flow list) : flow =
-  match fs with
-  | [] -> flow_empty
-  | f :: rest -> List.fold_left flow_union f rest
-
-let step_key (s : Observation.path_step) =
-  ( s.Observation.step_callee
-  , s.Observation.step_resolution
-  , s.Observation.step_site.Observation.site_path
-  , s.Observation.step_site.Observation.line
-  , s.Observation.step_site.Observation.col )
-
-let normalize_flow (f : flow) : flow =
-  if f.ambiguous then f else summary_flow (Execution_paths.summarize f.alts)
-
-let same_flow (a : Observation.exec_paths) (b : Observation.exec_paths) : bool =
-  String.equal a.Observation.paths_unit b.Observation.paths_unit
-  && String.equal a.Observation.paths_caller b.Observation.paths_caller
-
-let add_flow
-    (unit_canonical : string)
-    (facts : facts)
-    (caller : string)
-    (f : flow) =
-  let f = normalize_flow f in
-  let fresh =
-    { Observation.paths_unit= unit_canonical
-    ; paths_caller= caller
-    ; alternatives= f.alts
-    ; ambiguous= f.ambiguous
-    ; limiting_reason= f.reason }
-  in
-  match List.find_opt (same_flow fresh) facts.flows with
-  | None -> facts.flows <- fresh :: facts.flows
-  | Some prev ->
-      let merged =
-        if prev.Observation.ambiguous || fresh.Observation.ambiguous
-        then
-          { prev with
-            Observation.alternatives= []
-          ; ambiguous= true
-          ; limiting_reason=
-              ( if prev.ambiguous
-                then prev.limiting_reason
-                else fresh.limiting_reason ) }
-        else
-          let alts =
-            prev.Observation.alternatives @ fresh.Observation.alternatives
-          in
-          match Execution_paths.summarize alts with
-          | Error reason ->
-              { prev with
-                Observation.alternatives= []
-              ; ambiguous= true
-              ; limiting_reason= reason }
-          | Ok alts -> {prev with Observation.alternatives= alts}
-      in
-      facts.flows <-
-        merged :: List.filter (fun p -> not (same_flow fresh p)) facts.flows
-
-type ctx =
-  { project_root: string
-  ; local_targets: bool
-  ; unit_canonical: string
-  ; lib_cap: string
-  ; defined: (Ident.t, string) Hashtbl.t
-  ; aliases: (Ident.t, string) Hashtbl.t
-  ; native_apis: (Ident.t, string) Hashtbl.t
-  ; mutable invocation:
-      Typedtree.expression -> Observation.execution_call option
-  ; mutable expression_owner: Typedtree.expression -> string option
-  ; mutable def_loc: Location.t }
-
-type resolution =
-  [ `Canonical of string
-  | `LocalVar
-  | `Dynamic ]
-
-let canonicalize (c : ctx) (p : Path.t) : resolution =
-  let rec go (acc : string list) (p : Path.t) : (Ident.t * string list) option =
-    match p with
-    | Pident id -> Some (id, acc)
-    | Pdot (p, s) -> go (s :: acc) p
-    | Pextra_ty (p, _) -> go acc p
-    | Papply _ -> None
-  in
-  match go [] p with
-  | None -> `Dynamic
-  | Some (root, rest) ->
-      if (not (Ident.persistent root)) && not (Ident.global root)
-      then
-        if Hashtbl.mem c.defined root
-        then
-          (* Structure-level [module Alias = Path] resolves to Path.
-             A nested alias recorded on a later segment resolves the same
-             way. Anything else stays a member of this compilation unit. *)
-          let aliased target more =
-            if more = []
-            then `Canonical target
-            else `Canonical (target ^ "." ^ String.concat "." more)
-          in
-          match Hashtbl.find_opt c.aliases root with
-          | Some target -> aliased target rest
-          | None -> aliased (Hashtbl.find c.defined root) rest
-        else `LocalVar
-      else
-        `Canonical
-          (Canonical.of_ref
-             ~unit_canonical:c.unit_canonical
-             ~lib_cap:c.lib_cap
-             (Ident.name root :: rest) )
-
-let add_defined (c : ctx) (id : Ident.t) =
-  if (not (Ident.persistent id)) && not (Ident.global id)
-  then Hashtbl.replace c.defined id (c.unit_canonical ^ "." ^ Ident.name id)
-
-let rec collect_pat_vars
-    (p : 'k Typedtree.general_pattern)
-    (acc : Ident.t list ref) =
-  match p.Typedtree.pat_desc with
-  | Tpat_var (id, _, _) -> acc := id :: !acc
-  | Tpat_alias (q, id, _, _, _) ->
-      collect_pat_vars q acc ;
-      acc := id :: !acc
-  | Tpat_tuple ps -> List.iter (fun (_l, q) -> collect_pat_vars q acc) ps
-  | Tpat_construct (_, _, ps, _) ->
-      List.iter (fun q -> collect_pat_vars q acc) ps
-  | Tpat_variant (_, q, _) -> (
-    match q with
-    | Some q -> collect_pat_vars q acc
-    | None -> () )
-  | Tpat_record (fs, _) ->
-      List.iter (fun (_l, _ld, q) -> collect_pat_vars q acc) fs
-  | Tpat_array (_, ps) -> List.iter (fun q -> collect_pat_vars q acc) ps
-  | Tpat_lazy q -> collect_pat_vars q acc
-  | Tpat_or (a, b, _) ->
-      collect_pat_vars a acc ;
-      collect_pat_vars b acc
-  | _ -> ()
-
-let rec module_body (m : Typedtree.module_expr) =
-  match m.mod_desc with
-  | Tmod_constraint (body, _, _, _) -> module_body body
-  | _ -> m
-
-let rec pre_collect (c : ctx) (items : Typedtree.structure_item list) =
-  List.iter
-    (fun (i : Typedtree.structure_item) ->
-      match i.str_desc with
-      | Tstr_value (_, vbs) ->
-          List.iter
-            (fun vb ->
-              let acc = ref [] in
-              collect_pat_vars vb.Typedtree.vb_pat acc ;
-              List.iter (add_defined c) !acc )
-            vbs
-      | Tstr_module mb -> (
-          ( match mb.Typedtree.mb_id with
-          | Some id -> add_defined c id
-          | None -> () ) ;
-          match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
-          | Tmod_ident (p, _) -> (
-            match canonicalize c p with
-            | `Canonical target -> (
-              match mb.Typedtree.mb_id with
-              | Some id -> Hashtbl.replace c.aliases id target
-              | None -> () )
-            | _ -> () )
-          | Tmod_structure s -> (
-            match mb.Typedtree.mb_id with
-            | Some id ->
-                let sub =
-                  {c with unit_canonical= c.unit_canonical ^ "." ^ Ident.name id}
-                in
-                pre_collect sub s.str_items
-            | None -> () )
-          | _ -> () )
-      | Tstr_recmodule mbs ->
-          List.iter
-            (fun mb ->
-              ( match mb.Typedtree.mb_id with
-              | Some id -> add_defined c id
-              | None -> () ) ;
-              match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
-              | Tmod_structure s -> (
-                match mb.Typedtree.mb_id with
-                | Some id ->
-                    let sub =
-                      { c with
-                        unit_canonical= c.unit_canonical ^ "." ^ Ident.name id
-                      }
-                    in
-                    pre_collect sub s.str_items
-                | None -> () )
-              | _ -> () )
-            mbs
-      | Tstr_primitive vd -> (
-          add_defined c vd.Typedtree.val_id ;
-          match vd.val_val.Types.val_kind with
-          | Types.Val_prim primitive ->
-              Hashtbl.replace
-                c.native_apis
-                vd.val_id
-                ("Native_primitive." ^ primitive.Primitive.prim_name)
-          | _ -> () )
-      | Tstr_include inc -> (
-        match (module_body inc.incl_mod).Typedtree.mod_desc with
-        | Tmod_structure s -> pre_collect c s.str_items
-        | Tmod_ident (path, _) -> (
-          match canonicalize c path with
-          | `Canonical target ->
-              List.iter
-                (function
-                  | Types.Sig_value (id, _, _)
-                   |Types.Sig_module (id, _, _, _, _) ->
-                      Hashtbl.replace c.defined id (target ^ "." ^ Ident.name id)
-                  | _ -> () )
-                inc.incl_type
-          | _ -> () )
-        | _ -> () )
-      | Tstr_open od -> (
-        match (module_body od.open_expr).mod_desc with
-        | Tmod_structure s ->
-            pre_collect c s.str_items ;
-            List.iter
-              (function
-                | Types.Sig_value (id, _, _)
-                 |Types.Sig_module (id, _, _, _, _) ->
-                    add_defined c id
-                | _ -> () )
-              od.open_bound_items
-        | _ -> () )
-      | _ -> () )
-    items
-
-let rec walk_core_type
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (t : Typedtree.core_type) =
-  match t.Typedtree.ctyp_desc with
-  | Ttyp_constr (p, _, args) ->
-      ( match canonicalize c p with
-      | `Canonical target ->
-          facts.trefs <-
-            { Observation.tref_unit= c.unit_canonical
-            ; tref_caller= caller
-            ; tref_target= target
-            ; tref_site=
-                site_of_loc ~project_root:c.project_root t.Typedtree.ctyp_loc }
-            :: facts.trefs
-      | _ -> () ) ;
-      List.iter (walk_core_type c facts caller) args
-  | Ttyp_arrow (_, a, b) ->
-      walk_core_type c facts caller a ;
-      walk_core_type c facts caller b
-  | Ttyp_tuple ts ->
-      List.iter (fun (_l, t) -> walk_core_type c facts caller t) ts
-  | Ttyp_alias (t, _) -> walk_core_type c facts caller t
-  | Ttyp_poly (_, t) -> walk_core_type c facts caller t
-  | _ -> ()
-
-let walk_pat
-    (type k)
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (p : k Typedtree.general_pattern) =
-  (* Type references are taken from this pattern node's constraint extra.
-     Sub-patterns are not descended (documented coverage). *)
-  List.iter
-    (fun (extra, _loc, _attrs) ->
-      match extra with
-      | Typedtree.Tpat_constraint t -> walk_core_type c facts caller t
-      | _ -> () )
-    p.Typedtree.pat_extra
-
-let fallback_loc (c : ctx) (e : Typedtree.expression) (loc : Location.t) :
-    Location.t =
-  let pos = loc.Location.loc_start in
-  if pos.Lexing.pos_fname = "" || pos.Lexing.pos_lnum <= 0
-  then
-    let p2 = e.exp_loc.Location.loc_start in
-    if p2.Lexing.pos_fname = "" || p2.Lexing.pos_lnum <= 0
-    then c.def_loc
-    else e.exp_loc
-  else loc
-
-let rec record_call
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (callee : Path.t)
-    (resolution : Observation.resolution)
-    (loc : Location.t)
-    (args : Observation.call_arg list) : Observation.path_step =
-  let site = site_of_loc ~project_root:c.project_root loc in
-  match canonicalize c callee with
-  | `Canonical target ->
-      facts.calls <-
-        { Observation.call_unit= c.unit_canonical
-        ; caller
-        ; callee= target
-        ; resolution
-        ; site
-        ; args }
-        :: facts.calls ;
-      { step_callee= target
-      ; step_resolution= resolution
-      ; step_site= site
-      ; step_args= args
-      ; step_resumed= false
-      ; step_exit= List.mem target ["Stdlib.raise"; "Stdlib.raise_notrace"] }
-  | _ ->
-      (* Keep the reason the walker already decided. A local variable is
-         not a canonical path, but it is not an arbitrary dynamic
-         expression either. *)
-      let resolution =
-        if resolution = Observation.Resolved
-        then Observation.Unresolved_dynamic
-        else resolution
-      in
-      facts.calls <-
-        { Observation.call_unit= c.unit_canonical
-        ; caller
-        ; callee= ""
-        ; resolution
-        ; site
-        ; args }
-        :: facts.calls ;
-      { step_callee= ""
-      ; step_resolution= resolution
-      ; step_site= site
-      ; step_args= args
-      ; step_resumed= false
-      ; step_exit= false }
-
-and record_ref
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (target : Path.t)
-    (loc : Location.t) =
-  match canonicalize c target with
-  | `Canonical target ->
-      facts.vrefs <-
-        { Observation.ref_unit= c.unit_canonical
-        ; ref_caller= caller
-        ; ref_target= target
-        ; ref_site= site_of_loc ~project_root:c.project_root loc }
-        :: facts.vrefs
-  | _ -> ()
-
-and walk_expr
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (e : Typedtree.expression) : flow =
-  let push_unresolved resolution loc args =
-    let site =
-      site_of_loc ~project_root:c.project_root (fallback_loc c e loc)
-    in
-    facts.calls <-
-      { Observation.call_unit= c.unit_canonical
-      ; caller
-      ; callee= ""
-      ; resolution
-      ; site
-      ; args }
-      :: facts.calls ;
-    { Observation.step_callee= ""
-    ; step_resolution= resolution
-    ; step_site= site
-    ; step_args= args
-    ; step_resumed= false
-    ; step_exit= false }
-  in
-  match e.Typedtree.exp_desc with
-  | Texp_apply (tfun0, outer_args) ->
-      let rec collapse t acc =
-        match t.Typedtree.exp_desc with
-        | Texp_apply (tfun, inner) ->
-            collapse tfun (Application_args.merge inner acc)
-        | _ -> (t, acc)
-      in
-      let tfun, args = collapse tfun0 outer_args in
-      let label_of = function
-        | Asttypes.Nolabel -> ""
-        | Asttypes.Labelled name
-         |Asttypes.Optional name ->
-            name
-      in
-      let arg_flows = ref [] in
-      let metas = ref [] in
-      List.iter
-        (fun (lbl, arg) ->
-          let label = label_of lbl in
-          match arg with
-          | Typedtree.Omitted _ -> ()
-          | Typedtree.Arg a -> (
-            match a.Typedtree.exp_desc with
-            | Texp_ident (p, loc, _d) -> (
-              match canonicalize c p with
-              | `Canonical target ->
-                  record_ref c facts caller p loc.loc ;
-                  metas :=
-                    { Observation.arg_label= label
-                    ; arg_target= target
-                    ; arg_literal= "" }
-                    :: !metas
-              | `LocalVar
-               |`Dynamic ->
-                  metas :=
-                    { Observation.arg_label= label
-                    ; arg_target= ""
-                    ; arg_literal= "" }
-                    :: !metas )
-            | Texp_constant (Const_string (literal, _, _)) ->
-                metas :=
-                  { Observation.arg_label= label
-                  ; arg_target= ""
-                  ; arg_literal= literal }
-                  :: !metas
-            | _ -> arg_flows := walk_expr c facts caller a :: !arg_flows ) )
-        args ;
-      let args_meta = List.rev !metas in
-      let nested = flow_seqs (List.rev !arg_flows) in
-      let call_flow =
-        match c.invocation e with
-        | Some execution ->
-            let inner =
-              match tfun.exp_desc with
-              | Texp_ident _ -> flow_empty
-              | Texp_field (record, _, _) -> walk_expr c facts caller record
-              | _ -> walk_expr c facts caller tfun
-            in
-            facts.calls <-
-              { Observation.call_unit= c.unit_canonical
-              ; caller
-              ; callee= execution.execution_callee
-              ; resolution= execution.execution_resolution
-              ; site= execution.execution_site
-              ; args= args_meta }
-              :: facts.calls ;
-            flow_seq
-              inner
-              (flow_one
-                 { Observation.step_callee= execution.execution_callee
-                 ; step_resolution= execution.execution_resolution
-                 ; step_site= execution.execution_site
-                 ; step_args= args_meta
-                 ; step_resumed= false
-                 ; step_exit=
-                     List.mem
-                       execution.execution_callee
-                       ["Stdlib.raise"; "Stdlib.raise_notrace"] } )
-        | None -> (
-          match tfun.Typedtree.exp_desc with
-          | Texp_ident (p, loc, _d) -> (
-            match canonicalize c p with
-            | `Canonical _ ->
-                flow_one
-                  (record_call
-                     c
-                     facts
-                     caller
-                     p
-                     Observation.Resolved
-                     loc.loc
-                     args_meta )
-            | `LocalVar ->
-                flow_one
-                  (record_call
-                     c
-                     facts
-                     caller
-                     p
-                     Observation.Unresolved_local
-                     (fallback_loc c e loc.loc)
-                     args_meta )
-            | `Dynamic ->
-                flow_one
-                  (record_call
-                     c
-                     facts
-                     caller
-                     p
-                     Observation.Unresolved_dynamic
-                     (fallback_loc c e loc.loc)
-                     args_meta ) )
-          | Texp_field _ ->
-              flow_one
-                (push_unresolved
-                   Observation.Unresolved_field
-                   tfun.Typedtree.exp_loc
-                   args_meta )
-          | _ ->
-              let inner = walk_expr c facts caller tfun in
-              flow_seq
-                inner
-                (flow_one
-                   (push_unresolved
-                      Observation.Unresolved_dynamic
-                      tfun.Typedtree.exp_loc
-                      args_meta ) ) )
-      in
-      flow_seq nested call_flow
-  | Texp_ident (p, loc, _d) -> (
-    match canonicalize c p with
-    | `Canonical _ ->
-        record_ref c facts caller p loc.loc ;
-        flow_empty
-    | `LocalVar
-     |`Dynamic ->
-        flow_empty )
-  | Texp_pack m ->
-      walk_module_expr c facts caller m ;
-      flow_empty
-  | Texp_function (params, body) ->
-      List.iter
-        (fun fp ->
-          match fp.Typedtree.fp_kind with
-          | Tparam_pat p -> walk_pat c facts caller p
-          | _ -> () )
-        params ;
-      ( match body with
-      | Tfunction_body b -> ignore (walk_expr c facts caller b)
-      | Tfunction_cases {cases; _} ->
-          List.iter
-            (fun k ->
-              walk_pat c facts caller k.Typedtree.c_lhs ;
-              ignore (walk_expr c facts caller k.Typedtree.c_rhs) )
-            cases ) ;
-      flow_empty
-  | Texp_construct (_, _, args) ->
-      flow_seqs (List.map (walk_expr c facts caller) args)
-  | Texp_constant _ -> flow_empty
-  | Texp_let (_, vbs, body) ->
-      if c.local_targets
-      then
-        List.iter
-          (fun vb ->
-            match Execution.binding_id vb.Typedtree.vb_pat with
-            | Some id -> (
-              match (Execution.binding_expression vb.vb_expr).exp_desc with
-              | Texp_function _ ->
-                  Hashtbl.replace
-                    c.defined
-                    id
-                    ( c.unit_canonical
-                    ^ "."
-                    ^ caller
-                    ^ "."
-                    ^ Ident.name id
-                    ^ "@"
-                    ^ string_of_int vb.vb_loc.loc_start.pos_lnum )
-              | Texp_ident (path, _, _) -> (
-                match canonicalize c path with
-                | `Canonical target -> Hashtbl.replace c.defined id target
-                | _ -> () )
-              | _ -> () )
-            | _ -> () )
-          vbs ;
-      let bindings =
-        List.map
-          (fun vb ->
-            walk_pat c facts caller vb.Typedtree.vb_pat ;
-            match
-              ( Execution.binding_id vb.vb_pat
-              , (Execution.binding_expression vb.vb_expr).exp_desc )
-            with
-            | Some id, Texp_function _ when c.local_targets ->
-                let full = Hashtbl.find c.defined id in
-                let symbol =
-                  String.sub
-                    full
-                    (String.length c.unit_canonical + 1)
-                    (String.length full - String.length c.unit_canonical - 1)
-                in
-                let flow = walk_as_binding c facts symbol vb.vb_expr in
-                add_flow c.unit_canonical facts symbol flow ;
-                flow_empty
-            | _ -> walk_expr c facts caller vb.Typedtree.vb_expr )
-          vbs
-      in
-      flow_seq (flow_seqs bindings) (walk_expr c facts caller body)
-  | Texp_match (scrut, comp_cases, val_cases, _) ->
-      let case_flow (type k) (kase : k Typedtree.case) =
-        walk_pat c facts caller kase.Typedtree.c_lhs ;
-        let guard =
-          match kase.Typedtree.c_guard with
-          | None -> flow_empty
-          | Some guard -> walk_expr c facts caller guard
-        in
-        flow_seq guard (walk_expr c facts caller kase.Typedtree.c_rhs)
-      in
-      flow_seq
-        (walk_expr c facts caller scrut)
-        (union_all
-           (List.map case_flow comp_cases @ List.map case_flow val_cases) )
-  | Texp_try (body, cases, eff_cases) ->
-      let body_flow = walk_expr c facts caller body in
-      let handlers =
-        union_all
-          ( List.map (fun k -> walk_expr c facts caller k.Typedtree.c_rhs) cases
-          @ List.map
-              (fun k -> walk_expr c facts caller k.Typedtree.c_rhs)
-              eff_cases )
-      in
-      let exception_path description =
-        match description.Data_types.cstr_tag with
-        | Data_types.Cstr_extension (path, _) -> Some (Path.name path)
-        | _ -> None
-      in
-      let explicit_raise =
-        match body.exp_desc with
-        | Texp_apply
-            ( {exp_desc= Texp_ident (path, _, _); _}
-            , [ ( _
-                , Typedtree.Arg
-                    {exp_desc= Texp_construct (_, description, []); _} ) ] )
-          -> (
-          match canonicalize c path with
-          | `Canonical ("Stdlib.raise" | "Stdlib.raise_notrace") ->
-              exception_path description
-          | _ -> None )
-        | _ -> None
-      in
-      let rec select exception_ = function
-        | [] -> Some body_flow
-        | case :: rest ->
-            let matches =
-              match case.Typedtree.c_lhs.pat_desc with
-              | Tpat_any
-               |Tpat_var _ ->
-                  true
-              | Tpat_construct (_, description, [], _) ->
-                  exception_path description = Some exception_
-              | _ -> false
-            in
-            if matches
-            then
-              if case.c_guard = None
-              then Some (walk_expr c facts caller case.c_rhs)
-              else None
-            else select exception_ rest
-      in
-      if eff_cases <> []
-      then
-        { flow_ambiguous with
-          reason= "try/with effect-handler execution is unsupported" }
-      else if explicit_raise <> None
-      then
-        match
-          Option.bind explicit_raise (fun exception_ -> select exception_ cases)
-        with
-        | Some flow -> flow
-        | None ->
-            { flow_ambiguous with
-              reason= "explicit exception handler guard cannot be resolved" }
-      else if
-        match body.exp_desc with
-        | Texp_constant _
-         |Texp_construct (_, _, []) ->
-            true
-        | _ -> false
-      then body_flow
-      else if
-        (not handlers.ambiguous)
-        && List.for_all
-             (List.for_all (fun (step : Observation.path_step) ->
-                  List.mem
-                    step.step_callee
-                    ["Stdlib.raise"; "Stdlib.raise_notrace"] ) )
-             handlers.alts
-      then flow_union body_flow handlers
-      else if flow_has_call body_flow && flow_has_call handlers
-      then
-        { flow_ambiguous with
-          reason=
-            "try/with: throwing call completion and handler selection are not \
-             proven" }
-      else if flow_has_call handlers
-      then handlers
-      else body_flow
-  | Texp_ifthenelse (cond, yes, no) ->
-      let no_flow =
-        match no with
-        | Some no -> walk_expr c facts caller no
-        | None -> flow_empty
-      in
-      flow_seq
-        (walk_expr c facts caller cond)
-        (flow_union (walk_expr c facts caller yes) no_flow)
-  | Texp_sequence (a, b) ->
-      flow_seq (walk_expr c facts caller a) (walk_expr c facts caller b)
-  | Texp_record {fields; extended_expression= rest; _} ->
-      let field_flows =
-        Array.to_list fields
-        |> List.filter_map (fun (_lbl, d) ->
-            match d with
-            | Typedtree.Overridden (_li, expr) ->
-                Some (walk_expr c facts caller expr)
-            | Typedtree.Kept _ -> None )
-      in
-      let rest_flow =
-        match rest with
-        | Some expr -> walk_expr c facts caller expr
-        | None -> flow_empty
-      in
-      flow_seq (flow_seqs field_flows) rest_flow
-  | Texp_field (expr, _, _) -> walk_expr c facts caller expr
-  | Texp_setfield (expr, _, _, value) ->
-      flow_seq (walk_expr c facts caller expr) (walk_expr c facts caller value)
-  | Texp_atomic_loc (expr, _, _) -> walk_expr c facts caller expr
-  | Texp_array (_, elements) ->
-      flow_seqs (List.map (walk_expr c facts caller) elements)
-  | Texp_tuple elements ->
-      flow_seqs
-        (List.map (fun (_lbl, expr) -> walk_expr c facts caller expr) elements)
-  | Texp_open (od, body) ->
-      walk_module_expr c facts caller od.open_expr ;
-      walk_expr c facts caller body
-  | Texp_letmodule (_, _, _, m, body) ->
-      walk_module_expr c facts caller m ;
-      walk_expr c facts caller body
-  | Texp_letexception (_, body) -> walk_expr c facts caller body
-  | Texp_letop {let_; ands; body; _} ->
-      flow_seq
-        (flow_seqs
-           ( walk_expr c facts caller let_.Typedtree.bop_exp
-           :: List.map
-                (fun b -> walk_expr c facts caller b.Typedtree.bop_exp)
-                ands ) )
-        (walk_expr c facts caller body.Typedtree.c_rhs)
-  | Texp_variant (_, payload) -> (
-    match payload with
-    | Some expr -> walk_expr c facts caller expr
-    | None -> flow_empty )
-  | Texp_lazy expr -> walk_expr c facts caller expr
-  | Texp_send _ ->
-      let caller =
-        match c.expression_owner e with
-        | Some symbol
-          when String.starts_with ~prefix:(c.unit_canonical ^ ".") symbol ->
-            String.sub
-              symbol
-              (String.length c.unit_canonical + 1)
-              (String.length symbol - String.length c.unit_canonical - 1)
-        | _ -> caller
-      in
-      let call =
-        { Observation.call_unit= c.unit_canonical
-        ; caller
-        ; callee= ""
-        ; resolution= Observation.Unresolved_field
-        ; site= site_of_loc ~project_root:c.project_root e.exp_loc
-        ; args= [] }
-      in
-      facts.calls <- call :: facts.calls ;
-      flow_one
-        { Observation.step_callee= ""
-        ; step_resolution= Observation.Unresolved_field
-        ; step_site= call.site
-        ; step_args= []
-        ; step_resumed= false
-        ; step_exit= false }
-  | Texp_object _ ->
-      facts.unsupported <-
-        site_of_loc ~project_root:c.project_root e.exp_loc :: facts.unsupported ;
-      flow_ambiguous
-  | Texp_while (cond, body) ->
-      flow_seq (walk_expr c facts caller cond) (walk_expr c facts caller body)
-  | Texp_for (_i, _p, start, stop, _dir, body) ->
-      flow_seqs
-        [ walk_expr c facts caller start
-        ; walk_expr c facts caller stop
-        ; walk_expr c facts caller body ]
-  | Texp_assert (expr, _) -> walk_expr c facts caller expr
-  | Texp_extension_constructor _
-   |Texp_unreachable ->
-      flow_empty
-  | Texp_new _ -> flow_empty
-  | Texp_instvar _
-   |Texp_setinstvar _
-   |Texp_override _ ->
-      flow_empty
-
-and walk_as_binding
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (e : Typedtree.expression) : flow =
-  match e.Typedtree.exp_desc with
-  | Texp_open (({open_expr= {mod_desc= Tmod_ident _; _}; _} as opened), body) ->
-      walk_module_expr c facts caller opened.open_expr ;
-      walk_as_binding c facts caller body
-  | Texp_function (params, Tfunction_body body) ->
-      List.iter
-        (fun fp ->
-          match fp.Typedtree.fp_kind with
-          | Tparam_pat p -> walk_pat c facts caller p
-          | _ -> () )
-        params ;
-      walk_expr c facts caller body
-  | Texp_function (params, Tfunction_cases {cases; _}) ->
-      List.iter
-        (fun fp ->
-          match fp.Typedtree.fp_kind with
-          | Tparam_pat p -> walk_pat c facts caller p
-          | _ -> () )
-        params ;
-      union_all
-        (List.map
-           (fun k ->
-             walk_pat c facts caller k.Typedtree.c_lhs ;
-             let guard =
-               match k.Typedtree.c_guard with
-               | None -> flow_empty
-               | Some guard -> walk_expr c facts caller guard
-             in
-             flow_seq guard (walk_expr c facts caller k.Typedtree.c_rhs) )
-           cases )
-  | _ -> walk_expr c facts caller e
-
-and note_unsupported (c : ctx) (facts : facts) (loc : Location.t) =
-  facts.unsupported <-
-    site_of_loc ~project_root:c.project_root loc :: facts.unsupported
-
-and walk_module_expr
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (m : Typedtree.module_expr) =
-  match m.mod_desc with
-  | Tmod_ident (p, lid) -> (
-    match canonicalize c p with
-    | `Canonical _ -> record_ref c facts caller p lid.loc
-    | `LocalVar
-     |`Dynamic ->
-        note_unsupported c facts lid.loc )
-  | Tmod_structure s -> walk_structure c facts caller s.str_items
-  | Tmod_functor (_, body) -> walk_module_expr c facts caller body
-  | Tmod_apply (f, a, _) ->
-      ( match ((module_body f).mod_desc, (module_body a).mod_desc) with
-      | Tmod_ident (path, _), Tmod_ident _
-        when match canonicalize c path with
-             | `Canonical api ->
-                 List.mem api ["Stdlib.Set.Make"; "Stdlib.Map.Make"]
-             | _ -> false ->
-          ()
-      | _ -> note_unsupported c facts m.mod_loc ) ;
-      walk_module_expr c facts caller f ;
-      walk_module_expr c facts caller a
-  | Tmod_apply_unit m ->
-      note_unsupported c facts m.mod_loc ;
-      walk_module_expr c facts caller m
-  | Tmod_unpack (e, _) ->
-      ( match e.exp_desc with
-      | Texp_ident _ -> ()
-      | _ -> note_unsupported c facts m.mod_loc ) ;
-      ignore (walk_expr c facts caller e)
-  | Tmod_constraint (m, _, _, _) -> walk_module_expr c facts caller m
-
-and walk_structure
-    (c : ctx)
-    (facts : facts)
-    (outer : string)
-    (items : Typedtree.structure_item list) =
-  List.iter
-    (fun (i : Typedtree.structure_item) ->
-      match i.str_desc with
-      | Tstr_value (_, vbs) ->
-          List.iter
-            (fun vb ->
-              let name =
-                match Execution.binding_id vb.Typedtree.vb_pat with
-                | Some id -> Ident.name id
-                | _ -> "<toplevel>"
-              in
-              let caller = if outer = "" then name else outer ^ "." ^ name in
-              facts.symbols <- (caller, "value") :: facts.symbols ;
-              let old_def = c.def_loc in
-              c.def_loc <- vb.Typedtree.vb_loc ;
-              walk_pat c facts caller vb.Typedtree.vb_pat ;
-              let flow = walk_as_binding c facts caller vb.Typedtree.vb_expr in
-              add_flow c.unit_canonical facts caller flow ;
-              c.def_loc <- old_def )
-            vbs
-      | Tstr_module mb ->
-          let name =
-            match mb.Typedtree.mb_name.txt with
-            | Some n -> n
-            | None -> "<toplevel>"
-          in
-          let sub = if outer = "" then name else outer ^ "." ^ name in
-          facts.symbols <- (sub, "module") :: facts.symbols ;
-          ( match (module_body mb.Typedtree.mb_expr).Typedtree.mod_desc with
-          | Tmod_ident (p, _) -> (
-            match canonicalize c p with
-            | `Canonical target ->
-                facts.aliases <-
-                  (c.unit_canonical ^ "." ^ sub, target) :: facts.aliases
-            | _ -> () )
-          | _ -> () ) ;
-          walk_module_expr c facts sub mb.Typedtree.mb_expr
-      | Tstr_recmodule mbs ->
-          List.iter
-            (fun mb ->
-              let name =
-                match mb.Typedtree.mb_name.txt with
-                | Some n -> n
-                | None -> "<toplevel>"
-              in
-              let sub = if outer = "" then name else outer ^ "." ^ name in
-              facts.symbols <- (sub, "module") :: facts.symbols ;
-              walk_module_expr c facts sub mb.Typedtree.mb_expr )
-            mbs
-      | Tstr_include inc -> walk_module_expr c facts outer inc.incl_mod
-      | Tstr_open od -> walk_module_expr c facts outer od.open_expr
-      | Tstr_eval (e, _) ->
-          let caller = if outer = "" then "<toplevel>" else outer in
-          let flow = walk_expr c facts caller e in
-          add_flow c.unit_canonical facts caller flow
-      | Tstr_modtype mtd -> (
-        match mtd.Typedtree.mtd_type with
-        | Some mty -> walk_module_type c facts outer mty
-        | None -> () )
-      | Tstr_primitive vd ->
-          walk_core_type c facts outer vd.Typedtree.val_desc ;
-          let caller =
-            if outer = ""
-            then vd.val_name.txt
-            else outer ^ "." ^ vd.val_name.txt
-          in
-          facts.symbols <- (caller, "native primitive") :: facts.symbols ;
-          let primitive =
-            match vd.val_val.Types.val_kind with
-            | Types.Val_prim primitive -> primitive.Primitive.prim_name
-            | _ -> vd.val_name.txt
-          in
-          let callee = "Native_primitive." ^ primitive in
-          let site = site_of_loc ~project_root:c.project_root vd.val_loc in
-          facts.calls <-
-            { Observation.call_unit= c.unit_canonical
-            ; caller
-            ; callee
-            ; resolution= Observation.Resolved
-            ; site
-            ; args= [] }
-            :: facts.calls ;
-          add_flow
-            c.unit_canonical
-            facts
-            caller
-            (flow_one
-               { Observation.step_callee= callee
-               ; step_resolution= Observation.Resolved
-               ; step_site= site
-               ; step_args= []
-               ; step_resumed= false
-               ; step_exit= false } )
-      | Tstr_type (_, tds) ->
-          List.iter
-            (fun td ->
-              List.iter
-                (fun (ct, _vi) -> walk_core_type c facts outer ct)
-                td.Typedtree.typ_params )
-            tds
-      | Tstr_typext _
-       |Tstr_exception _
-       |Tstr_attribute _
-       |Tstr_class _
-       |Tstr_class_type _ ->
-          () )
-    items
-
-and walk_module_type
-    (c : ctx)
-    (facts : facts)
-    (caller : string)
-    (mty : Typedtree.module_type) =
-  match mty.mty_desc with
-  | Tmty_signature sig_items ->
-      List.iter
-        (fun (si : Typedtree.signature_item) ->
-          match si.sig_desc with
-          | Tsig_value vd -> walk_core_type c facts caller vd.Typedtree.val_desc
-          | _ -> () )
-        sig_items.Typedtree.sig_items
-  | Tmty_functor (_, mty) -> walk_module_type c facts caller mty
-  | Tmty_with (mty, _) -> walk_module_type c facts caller mty
-  | _ -> ()
-
-let walk_unit
-    ?(execution = true)
-    ~(project_root : string)
-    ~(lib : string)
-    ~(unit_name : string)
-    (cmt : Cmt_format.cmt_infos)
-    (facts : facts) =
-  match cmt.Cmt_format.cmt_annots with
-  | Cmt_format.Implementation s ->
-      Load_path.init
-        ~auto_include:Load_path.no_auto_include
-        ~visible:
-          (List.map (compiler_path ~project_root cmt) cmt.cmt_loadpath.visible)
-        ~hidden:
-          (List.map (compiler_path ~project_root cmt) cmt.cmt_loadpath.hidden) ;
-      Env.reset_cache () ;
-      Envaux.reset_cache () ;
-      let s = if execution then Binding_operators.lower s else s in
-      let unit_canonical = Canonical.of_unit_name ~library:lib ~unit_name in
-      let c =
-        { project_root
-        ; local_targets= true
-        ; unit_canonical
-        ; lib_cap= String.capitalize_ascii lib
-        ; defined= Hashtbl.create 64
-        ; aliases= Hashtbl.create 8
-        ; native_apis= Hashtbl.create 8
-        ; invocation= (fun _ -> None)
-        ; expression_owner= (fun _ -> None)
-        ; def_loc= Location.none }
-      in
-      pre_collect c s.str_items ;
-      (let observed, invocation, expression_owner =
-         Execution.observe
-           ~with_ordered:execution
-           ~unit_canonical
-           ~resolve:(fun path ->
-             match path with
-             | Path.Pident id when Hashtbl.mem c.native_apis id ->
-                 Hashtbl.find c.native_apis id
-             | _ -> (
-               match canonicalize c path with
-               | `Canonical symbol -> symbol
-               | _ -> "" ) )
-           ~site_of_loc:(site_of_loc ~project_root)
-           s
-       in
-       if execution then facts.execution <- observed ;
-       c.invocation <- invocation ;
-       c.expression_owner <- expression_owner ) ;
-      walk_structure c facts "" s.str_items ;
-      if execution
-      then
-        (* Operand-order alternatives share nested step nodes. Re-walking
-           each reference expands a small typed tree exponentially. *)
-        let path_memo = Physical_ordered_step.create 64 in
-        let rec path_flow steps = List.map step_flow steps |> flow_seqs
-        and step_flow step =
-          match Physical_ordered_step.find_opt path_memo step with
-          | Some flow -> flow
-          | None ->
-              let flow =
-                match step with
-                | Observation.Invoke call ->
-                    let args =
-                      List.find_opt
-                        (fun (raw : Observation.call) ->
-                          raw.site = call.execution_site )
-                        facts.calls
-                      |> Option.fold ~none:[] ~some:(fun raw ->
-                          raw.Observation.args )
-                    in
-                    flow_one
-                      { Observation.step_callee= call.execution_callee
-                      ; step_resolution= call.execution_resolution
-                      ; step_site= call.execution_site
-                      ; step_args= args
-                      ; step_resumed= call.execution_resumed
-                      ; step_exit=
-                          List.mem
-                            call.execution_callee
-                            ["Stdlib.raise"; "Stdlib.raise_notrace"] }
-                | Observation.Choose branches ->
-                    union_all
-                      (List.map (fun (_, steps) -> path_flow steps) branches)
-                | Observation.Repeat (_, _, condition, body) ->
-                    flow_seq (path_flow condition) (path_flow body)
-                | Observation.Unknown_order
-                    ("operand evaluation order unspecified", _) ->
-                    flow_empty
-                | Observation.Unknown_order (reason, _) ->
-                    {flow_ambiguous with reason}
-                | Observation.Leave _ -> flow_empty
-              in
-              Physical_ordered_step.add path_memo step flow ;
-              flow
-        in
-        List.iter
-          (fun (symbol, steps) ->
-            let relative =
-              String.sub
-                symbol
-                (String.length unit_canonical + 1)
-                (String.length symbol - String.length unit_canonical - 1)
-            in
-            if
-              (not
-                 (List.exists
-                    (fun (paths : Observation.exec_paths) ->
-                      paths.paths_unit = unit_canonical
-                      && paths.paths_caller = relative )
-                    facts.flows ) )
-              && ( Option.is_some (find_substring symbol ".<callback@")
-                 || Option.is_some (find_substring symbol ".<module@") )
-            then add_flow unit_canonical facts relative (path_flow steps) )
-          facts.execution.ordered
-  | Cmt_format.Interface _
-   |Cmt_format.Packed _
-   |Cmt_format.Partial_implementation _
-   |Cmt_format.Partial_interface _ ->
-      ()
-
-type evidence =
-  | Architecture
-  | Measurement
-  | All
-
-type extracted =
-  { facts: facts
-  ; alias_only: bool
-  ; functions: Observation.function_def list
-  ; measure_gaps: Observation.gap list
-  ; measured: bool }
-
 let strip_tree (cmt : Cmt_format.cmt_infos) =
   let cmt_annots =
     match cmt.cmt_annots with
@@ -1629,22 +427,84 @@ let in_scope (roots : string list) (path : string) : bool =
          && String.sub path 0 (String.length root + 1) = root // "" )
     roots
 
-let rec alias_only_structure (s : Typedtree.structure) =
-  let rec module_alias (m : Typedtree.module_expr) =
-    match m.mod_desc with
-    | Tmod_ident _ -> true
-    | Tmod_structure s -> alias_only_structure s
-    | Tmod_constraint (m, _, _, _) -> module_alias m
-    | _ -> false
-  in
-  s.str_items <> []
-  && List.for_all
-       (fun (i : Typedtree.structure_item) ->
-         match i.str_desc with
-         | Tstr_module mb -> module_alias mb.mb_expr
-         | Tstr_attribute _ -> true
-         | _ -> false )
-       s.str_items
+type extracted =
+  { functions: Observation.function_def list
+  ; measure_gaps: Observation.gap list
+  ; measured: bool }
+
+let gap code path detail =
+  {Observation.gap_code= code; gap_path= path; gap_detail= detail}
+
+let measure_unit ~project_root ~source_path ~unit_canonical current =
+  match current.Cmt_format.cmt_annots with
+  | Cmt_format.Implementation structure -> (
+    try
+      let fns, gaps =
+        Measurement.measure ~project_root ~source_path ~unit_canonical structure
+      in
+      {functions= fns; measure_gaps= gaps; measured= true}
+    with
+    | exn ->
+        { functions= []
+        ; measure_gaps=
+            [ gap
+                "GAP-UNMEASURABLE"
+                source_path
+                ("complexity walk failed: " ^ Printexc.to_string exn) ]
+        ; measured= false } )
+  | _ ->
+      { functions= []
+      ; measure_gaps=
+          [ gap
+              "GAP-UNMEASURABLE"
+              source_path
+              "typedtree is not a complete implementation" ]
+      ; measured= false }
+
+(* Why an artifact is not current for its source. *)
+let staleness
+    ~provenance
+    ~project_root
+    ~source_exists
+    ~recorded
+    ~recorded_input
+    ~transformed
+    ~rewritten
+    ~source_abs
+    ~artifact
+    cmt =
+  if (not source_exists) || not (Sys.file_exists recorded_input)
+  then
+    ( "GAP-MISSING-INPUT"
+    , "authored or generated compiler input missing: " ^ recorded )
+  else if Provenance.source_changed ~source:source_abs (project_root // artifact)
+  then
+    ( "GAP-STALE-ARTIFACT"
+    , "compiler input content or interface identity differs from the current \
+       source/build" )
+  else if
+    transformed
+    && (not rewritten)
+    && not
+         (Provenance.current
+            provenance
+            ~source:source_abs
+            cmt
+            (project_root // artifact) )
+  then
+    ( "GAP-UNVERIFIABLE-TRANSFORMATION"
+    , "transformation provenance unavailable or changed for "
+      ^ recorded
+      ^ ( if provenance.Provenance.unavailable = []
+          then ""
+          else
+            "; unavailable build evidence: "
+            ^ String.concat ", " provenance.unavailable )
+      ^ "; run complexity --rebuild" )
+  else
+    ( "GAP-STALE-ARTIFACT"
+    , "compiler input content or interface identity differs from the current \
+       source/build" )
 
 (* [assume_fresh] marks every existing artifact as current: the caller
    performed a successful rebuild, and dune guarantees content freshness of
@@ -1652,24 +512,13 @@ let rec alias_only_structure (s : Typedtree.structure) =
    transformation timestamp evidence; an unchanged plain-source rewrite is
    current even if Dune did not rewrite its artifact. *)
 let observe
-    ?(evidence = All)
     ~(project_root : string)
     ~(program_roots : string list)
     ~(assume_fresh : bool)
     () : Observation.t =
-  let architecture = evidence <> Measurement in
-  let measurement = evidence <> Architecture in
   let interfaces = memoized_interface_crc () in
   let interface_crc = interfaces.read_crc in
-  let cache =
-    Observation_cache.create
-      ~project_root
-      ~evidence:
-        ( match evidence with
-        | Architecture -> "architecture"
-        | Measurement -> "measurement"
-        | All -> "all" )
-  in
+  let cache = Observation_cache.create ~project_root ~evidence:"measurement" in
   let sources = scan_sources project_root program_roots in
   let dependency_inputs = ref [] in
   scan
@@ -1703,27 +552,21 @@ let observe
             let key =
               Observation_cache.key cache ~kind:"metadata" ~artifact ~source:""
             in
-            let cmt =
-              match Observation_cache.read cache key with
-              | Some cmt -> cmt
-              | None ->
-                  Observation_cache.note_read cache ;
-                  let cmt =
-                    strip_tree (Cmt_format.read_cmt (project_root // artifact))
-                  in
-                  Observation_cache.write cache key cmt ;
-                  cmt
-            in
-            Some cmt
+            match Observation_cache.read cache key with
+            | Some cmt -> Some cmt
+            | None ->
+                Observation_cache.note_read cache ;
+                let cmt =
+                  strip_tree (Cmt_format.read_cmt (project_root // artifact))
+                in
+                Observation_cache.write cache key cmt ;
+                Some cmt
           with
           | _ -> None
         with
         | None ->
             gaps :=
-              { Observation.gap_code= "GAP-ARTIFACT-READ"
-              ; gap_path= rel
-              ; gap_detail= "artifact could not be read" }
-              :: !gaps ;
+              gap "GAP-ARTIFACT-READ" rel "artifact could not be read" :: !gaps ;
             None
         | Some cmt -> Some (lib, cmt.Cmt_format.cmt_modname, artifact, cmt) )
       artifacts
@@ -1741,26 +584,9 @@ let observe
           then Hashtbl.replace units_tbl modname artifact
       | None -> Hashtbl.add units_tbl modname artifact )
     read_infos ;
-  let units = ref [] in
-  let calls = ref [] in
-  let execution_definitions = ref [] in
-  let execution_invocations = ref [] in
-  let execution_ordered = ref [] in
-  let returned_functions = ref [] in
-  let returned_constructors = ref [] in
-  let value_origins = ref [] in
-  let callback_collections = ref [] in
-  let parameter_defaults = ref [] in
-  let functor_instances = ref [] in
-  let vrefs = ref [] in
-  let module_aliases = ref [] in
-  let alias_only_units = ref [] in
-  let defined_values = ref [] in
-  let trefs = ref [] in
+  let observed_sources = Hashtbl.create 64 in
   let functions = ref [] in
-  let measure_gaps = ref [] in
   let measured_paths = ref [] in
-  let flows = ref [] in
   let compiler_series = ref "unknown" in
   List.iter
     (fun (lib, modname, artifact, cmt) ->
@@ -1780,25 +606,25 @@ let observe
             |> Option.map (fun a -> not (String.equal a artifact))
             |> Option.value ~default:false
           then ()
-          else
-            let () = incr selected in
-            let () =
-              if Sys.getenv_opt "SZANIEC_ACQUISITION_TRACE" = Some "1"
-              then Printf.eprintf "szaniec acquire: %s\n%!" source_path
-            in
+          else (
+            incr selected ;
+            if Sys.getenv_opt "SZANIEC_ACQUISITION_TRACE" = Some "1"
+            then Printf.eprintf "szaniec acquire: %s\n%!" source_path ;
+            if not generated
+            then Hashtbl.replace observed_sources source_path () ;
             let series = compiler_series_of_args cmt.Cmt_format.cmt_args in
             if !compiler_series = "unknown" then compiler_series := series ;
             if series <> Version.supported_compiler_series
             then
               gaps :=
-                { Observation.gap_code= "GAP-UNSUPPORTED-COMPILER"
-                ; gap_path= source_path
-                ; gap_detail=
-                    Printf.sprintf
-                      "artifact built with compiler series %s, adapter \
-                       supports %s"
-                      series
-                      Version.supported_compiler_series }
+                gap
+                  "GAP-UNSUPPORTED-COMPILER"
+                  source_path
+                  (Printf.sprintf
+                     "artifact built with compiler series %s, adapter supports \
+                      %s"
+                     series
+                     Version.supported_compiler_series )
                 :: !gaps
             else
               let source_abs =
@@ -1823,16 +649,10 @@ let observe
               (* Dune's wrapped-library stub is often recorded as
                  [lib/name.ml-gen] but kept only inside [_build]. There is
                  no project source to go stale against, so the artifact is
-                 the inventory source. A wrapper file that does exist in
-                 the tree is held to the same mtime check as other sources. *)
+                 the inventory source. *)
               let fresh =
                 (generated && not source_exists)
                 || source_exists
-                   && ( (not architecture)
-                      ||
-                      match cmt.Cmt_format.cmt_annots with
-                      | Cmt_format.Implementation _ -> true
-                      | _ -> false )
                    && Sys.file_exists recorded_input
                    && ( (not transformed)
                       || rewritten
@@ -1891,88 +711,25 @@ let observe
                   | _ -> () ) ;
               if not fresh
               then
-                let code =
-                  if
-                    match cmt.Cmt_format.cmt_annots with
-                    | Cmt_format.Implementation _ -> false
-                    | _ -> true
-                  then "GAP-INCOMPLETE-ARTIFACT"
-                  else if
-                    (not source_exists) || not (Sys.file_exists recorded_input)
-                  then "GAP-MISSING-INPUT"
-                  else if
-                    Provenance.source_changed
-                      ~source:source_abs
-                      (project_root // artifact)
-                  then "GAP-STALE-ARTIFACT"
-                  else if
-                    transformed
-                    && (not rewritten)
-                    && not
-                         (Provenance.current
-                            provenance
-                            ~source:source_abs
-                            cmt
-                            (project_root // artifact) )
-                  then "GAP-UNVERIFIABLE-TRANSFORMATION"
-                  else "GAP-STALE-ARTIFACT"
+                let code, detail =
+                  staleness
+                    ~provenance
+                    ~project_root
+                    ~source_exists
+                    ~recorded
+                    ~recorded_input
+                    ~transformed
+                    ~rewritten
+                    ~source_abs
+                    ~artifact
+                    cmt
                 in
-                let detail =
-                  if code = "GAP-INCOMPLETE-ARTIFACT"
-                  then
-                    "compiler artifact does not contain a complete typed \
-                     implementation"
-                  else if code = "GAP-MISSING-INPUT"
-                  then
-                    "authored or generated compiler input missing: " ^ recorded
-                  else if code = "GAP-UNVERIFIABLE-TRANSFORMATION"
-                  then
-                    "transformation provenance unavailable or changed for "
-                    ^ recorded
-                    ^ ( if provenance.Provenance.unavailable = []
-                        then ""
-                        else
-                          "; unavailable build evidence: "
-                          ^ String.concat ", " provenance.unavailable )
-                    ^ "; run check --rebuild"
-                  else
-                    "compiler input content or interface identity differs from \
-                     the current source/build"
-                in
-                (* Wrapper units stay out of the conformance unit list.
-                   Their staleness is a coverage fact for the inventory.
-                   Fresh wrappers are still measured below. *)
-                if generated
-                then
-                  measure_gaps :=
-                    { Observation.gap_code= code
-                    ; gap_path= source_path
-                    ; gap_detail= detail }
-                    :: !measure_gaps
-                else (
-                  gaps :=
-                    { Observation.gap_code= code
-                    ; gap_path= source_path
-                    ; gap_detail= detail }
-                    :: !gaps ;
-                  units :=
-                    { Observation.unit_id= modname
-                    ; canonical= unit_canonical
-                    ; source_path
-                    ; source_header= ""
-                    ; source_digest=
-                        Option.fold
-                          ~none:""
-                          ~some:Digest.to_hex
-                          cmt.cmt_source_digest
-                    ; artifact_path= artifact
-                    ; fresh= false }
-                    :: !units )
+                gaps := gap code source_path detail :: !gaps
               else
                 let cache_key =
                   Observation_cache.key
                     cache
-                    ~kind:"facts"
+                    ~kind:"functions"
                     ~artifact
                     ~source:source_path
                 in
@@ -1984,80 +741,22 @@ let observe
                       let current =
                         Cmt_format.read_cmt (project_root // artifact)
                       in
-                      let facts =
-                        { calls= []
-                        ; vrefs= []
-                        ; trefs= []
-                        ; symbols= []
-                        ; aliases= []
-                        ; unsupported= []
-                        ; execution= Observation.empty_execution
-                        ; flows= [] }
-                      in
-                      walk_unit
-                        ~execution:architecture
-                        ~project_root
-                        ~lib
-                        ~unit_name:modname
-                        current
-                        facts ;
-                      if not architecture then facts.flows <- [] ;
-                      let alias_only =
-                        match current.Cmt_format.cmt_annots with
-                        | Cmt_format.Implementation structure ->
-                            alias_only_structure structure
-                        | _ -> false
-                      in
-                      let functions, measure_gaps, measured =
-                        if not measurement
-                        then ([], [], false)
-                        else
-                          match current.Cmt_format.cmt_annots with
-                          | Cmt_format.Implementation structure -> (
-                            try
-                              let fns, gaps =
-                                Measurement.measure
-                                  ~project_root
-                                  ~source_path
-                                  ~unit_canonical
-                                  structure
-                              in
-                              (fns, gaps, true)
-                            with
-                            | exn ->
-                                ( []
-                                , [ { Observation.gap_code= "GAP-UNMEASURABLE"
-                                    ; gap_path= source_path
-                                    ; gap_detail=
-                                        "complexity walk failed: "
-                                        ^ Printexc.to_string exn } ]
-                                , false ) )
-                          | _ ->
-                              ( []
-                              , [ { Observation.gap_code= "GAP-UNMEASURABLE"
-                                  ; gap_path= source_path
-                                  ; gap_detail=
-                                      "typedtree is not a complete \
-                                       implementation" } ]
-                              , false )
-                      in
                       let extracted =
-                        {facts; alias_only; functions; measure_gaps; measured}
+                        measure_unit
+                          ~project_root
+                          ~source_path
+                          ~unit_canonical
+                          current
                       in
                       if
-                        facts.unsupported = []
-                        && measure_gaps = []
+                        extracted.measure_gaps = []
                         && Observation_cache.artifact_current cache ~artifact
                         && Observation_cache.key
                              cache
-                             ~kind:"facts"
+                             ~kind:"functions"
                              ~artifact
                              ~source:source_path
                            = cache_key
-                        &&
-                        match current.cmt_annots with
-                        | Cmt_format.Implementation _ -> true
-                        | _ -> false
                       then Observation_cache.write cache cache_key extracted ;
                       extracted
                 in
@@ -2068,135 +767,15 @@ let observe
                 if
                   Observation_cache.key
                     cache
-                    ~kind:"facts"
+                    ~kind:"functions"
                     ~artifact
                     ~source:source_path
                   <> cache_key
                 then raise (Sys_error "source changed during observation") ;
-                let facts = extracted.facts in
-                ( if Filename.check_suffix source_path ".mlx"
-                  then
-                    let unmapped =
-                      List.exists
-                        (fun (call : Observation.call) ->
-                          call.site.site_path <> source_path )
-                        facts.calls
-                      || List.exists
-                           (fun (call : Observation.execution_call) ->
-                             call.execution_site.site_path <> source_path )
-                           facts.execution.invocations
-                    in
-                    if unmapped
-                    then (
-                      if Sys.getenv_opt "SZANIEC_ACQUISITION_TRACE" = Some "1"
-                      then
-                        List.iter
-                          (fun (call : Observation.execution_call) ->
-                            if call.execution_site.site_path <> source_path
-                            then
-                              Printf.eprintf
-                                "unmapped %s: %s -> %s at %s:%d:%d\n%!"
-                                source_path
-                                call.execution_caller
-                                call.execution_callee
-                                call.execution_site.site_path
-                                call.execution_site.line
-                                call.execution_site.col )
-                          facts.execution.invocations ;
-                      gaps :=
-                        { Observation.gap_code= "GAP-SOURCE-MAPPING"
-                        ; gap_path= source_path
-                        ; gap_detail=
-                            "MLX executable locations do not map to the \
-                             authored input; compiler/preprocessor source \
-                             mapping is required" }
-                        :: !gaps ) ) ;
-                module_aliases := List.rev_append facts.aliases !module_aliases ;
-                if extracted.alias_only
-                then alias_only_units := unit_canonical :: !alias_only_units ;
-                if not generated
-                then (
-                  defined_values :=
-                    List.rev_append
-                      (List.filter_map
-                         (fun (name, kind) ->
-                           if kind = "value"
-                           then Some (unit_canonical ^ "." ^ name)
-                           else None )
-                         facts.symbols )
-                      !defined_values ;
-                  gaps :=
-                    List.map
-                      (fun site ->
-                        { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
-                        ; gap_path= site.Observation.site_path
-                        ; gap_detail=
-                            Printf.sprintf
-                              "construct at line %d cannot be followed by this \
-                               adapter"
-                              site.Observation.line } )
-                      (List.sort_uniq compare facts.unsupported)
-                    @ !gaps ;
-                  calls := List.rev_append facts.calls !calls ;
-                  execution_definitions :=
-                    List.rev_append
-                      facts.execution.definitions
-                      !execution_definitions ;
-                  execution_invocations :=
-                    List.rev_append
-                      facts.execution.invocations
-                      !execution_invocations ;
-                  execution_ordered :=
-                    List.rev_append facts.execution.ordered !execution_ordered ;
-                  returned_functions :=
-                    List.rev_append
-                      facts.execution.returned_functions
-                      !returned_functions ;
-                  returned_constructors :=
-                    List.rev_append
-                      facts.execution.returned_constructors
-                      !returned_constructors ;
-                  value_origins :=
-                    List.rev_append facts.execution.value_origins !value_origins ;
-                  callback_collections :=
-                    List.rev_append
-                      facts.execution.callback_collections
-                      !callback_collections ;
-                  parameter_defaults :=
-                    List.rev_append
-                      facts.execution.parameter_defaults
-                      !parameter_defaults ;
-                  functor_instances :=
-                    List.rev_append
-                      facts.execution.functor_instances
-                      !functor_instances ;
-                  vrefs := List.rev_append facts.vrefs !vrefs ;
-                  trefs := List.rev_append facts.trefs !trefs ;
-                  flows := List.rev_append facts.flows !flows ;
-                  units :=
-                    { Observation.unit_id= modname
-                    ; canonical= unit_canonical
-                    ; source_path
-                    ; source_header=
-                        (let ic = open_in_bin source_abs in
-                         Fun.protect
-                           ~finally:(fun () -> close_in ic)
-                           (fun () ->
-                             try input_line ic with
-                             | End_of_file -> "" ) )
-                    ; source_digest=
-                        Option.fold
-                          ~none:""
-                          ~some:Digest.to_hex
-                          cmt.cmt_source_digest
-                    ; artifact_path= artifact
-                    ; fresh= true }
-                    :: !units ) ;
                 functions := List.rev_append extracted.functions !functions ;
-                measure_gaps :=
-                  List.rev_append extracted.measure_gaps !measure_gaps ;
+                gaps := List.rev_append extracted.measure_gaps !gaps ;
                 if extracted.measured
-                then measured_paths := source_path :: !measured_paths )
+                then measured_paths := source_path :: !measured_paths ) )
     read_infos ;
   Observation_cache.finish
     cache
@@ -2205,17 +784,13 @@ let observe
   (* sources without artifacts *)
   List.iter
     (fun source ->
-      if
-        not
-          (List.exists
-             (fun (u : Observation.unit_info) ->
-               String.equal u.Observation.source_path source )
-             !units )
+      if not (Hashtbl.mem observed_sources source)
       then
         gaps :=
-          { Observation.gap_code= "GAP-UNOBSERVED-SOURCE"
-          ; gap_path= source
-          ; gap_detail= "no build artifact found for this source file" }
+          gap
+            "GAP-UNOBSERVED-SOURCE"
+            source
+            "no build artifact found for this source file"
           :: !gaps )
     sources ;
   let inputs = ref sources in
@@ -2224,114 +799,17 @@ let observe
       scan
         project_root
         root
-        (fun e ->
-          Filename.check_suffix e ".mli" || Filename.check_suffix e ".cyrograf" )
+        (fun e -> Filename.check_suffix e ".mli")
         inputs
         false )
     program_roots ;
   let source_files =
-    let generated_inputs =
-      !units
-      |> List.filter_map (fun (u : Observation.unit_info) ->
-          if Sys.file_exists (project_root // u.source_path)
-          then None
-          else
-            Option.map
-              (fun path -> (u.source_path, sha256_hex (read_file path)))
-              (Provenance.generated_source ~root:project_root u.source_path) )
-    in
-    ( List.sort_uniq compare !inputs
-    |> List.map (fun s -> (s, sha256_hex (read_file (project_root // s)))) )
-    @ generated_inputs
-    |> List.sort_uniq compare
+    List.sort_uniq compare !inputs
+    |> List.map (fun s -> (s, sha256_hex (read_file (project_root // s))))
   in
   let snapshot_digest =
     sha256_hex
       (String.concat "\n" (List.map (fun (p, d) -> p ^ ":" ^ d) source_files))
-  in
-  let module_aliases =
-    List.filter (fun (a, b) -> a <> b) !module_aliases |> List.sort_uniq compare
-  in
-  let resolve_alias = Canonical.alias_resolver module_aliases in
-  let resolve path =
-    match resolve_alias path with
-    | Some resolved -> resolved
-    | None ->
-        gaps :=
-          { Observation.gap_code= "GAP-UNSUPPORTED-CONSTRUCT"
-          ; gap_path= path
-          ; gap_detail= "cyclic module alias" }
-          :: !gaps ;
-        path
-  in
-  let resolve_args args =
-    List.map
-      (fun (a : Observation.call_arg) ->
-        {a with arg_target= resolve a.arg_target} )
-      args
-  in
-  calls :=
-    List.map
-      (fun (c : Observation.call) ->
-        {c with callee= resolve c.callee; args= resolve_args c.args} )
-      !calls ;
-  vrefs :=
-    List.map
-      (fun (v : Observation.value_ref) ->
-        {v with ref_target= resolve v.ref_target} )
-      !vrefs ;
-  trefs :=
-    List.map
-      (fun (v : Observation.type_ref) ->
-        {v with tref_target= resolve v.tref_target} )
-      !trefs ;
-  flows :=
-    List.map
-      (fun (p : Observation.exec_paths) ->
-        { p with
-          alternatives=
-            List.map
-              (List.map (fun (s : Observation.path_step) ->
-                   { s with
-                     step_callee= resolve s.step_callee
-                   ; step_args= resolve_args s.step_args } ) )
-              p.alternatives } )
-      !flows ;
-  let site_key s =
-    (s.Observation.site_path, s.Observation.line, s.Observation.col)
-  in
-  let by_unit (a : Observation.call) (b : Observation.call) =
-    compare
-      ( a.Observation.call_unit
-      , a.Observation.caller
-      , a.Observation.callee
-      , site_key a.Observation.site )
-      ( b.Observation.call_unit
-      , b.Observation.caller
-      , b.Observation.callee
-      , site_key b.Observation.site )
-  in
-  let by_ref a b =
-    compare
-      ( a.Observation.ref_unit
-      , a.Observation.ref_caller
-      , a.Observation.ref_target
-      , site_key a.Observation.ref_site )
-      ( b.Observation.ref_unit
-      , b.Observation.ref_caller
-      , b.Observation.ref_target
-      , site_key b.Observation.ref_site )
-  in
-  let by_tref a b =
-    compare
-      ( a.Observation.tref_unit
-      , a.tref_caller
-      , a.tref_target
-      , site_key a.tref_site )
-      ( b.Observation.tref_unit
-      , b.tref_caller
-      , b.tref_target
-      , site_key b.tref_site )
   in
   let by_gap a b =
     compare
@@ -2354,30 +832,20 @@ let observe
     let for_path =
       List.filter (fun g -> String.equal g.Observation.gap_path path) !gaps
     in
-    if
-      List.exists
-        (fun g -> g.Observation.gap_code = "GAP-UNOBSERVED-SOURCE")
-        for_path
+    let has codes =
+      List.exists (fun g -> List.mem g.Observation.gap_code codes) for_path
+    in
+    if has ["GAP-UNOBSERVED-SOURCE"]
     then Some "unobserved"
     else if
-      List.exists
-        (fun g ->
-          List.mem
-            g.Observation.gap_code
-            [ "GAP-STALE-ARTIFACT"
-            ; "GAP-MISSING-INPUT"
-            ; "GAP-UNVERIFIABLE-TRANSFORMATION" ] )
-        for_path
+      has
+        [ "GAP-STALE-ARTIFACT"
+        ; "GAP-MISSING-INPUT"
+        ; "GAP-UNVERIFIABLE-TRANSFORMATION" ]
     then Some "stale"
-    else if
-      List.exists
-        (fun g -> g.Observation.gap_code = "GAP-ARTIFACT-READ")
-        for_path
+    else if has ["GAP-ARTIFACT-READ"]
     then Some "unreadable"
-    else if
-      List.exists
-        (fun g -> g.Observation.gap_code = "GAP-UNSUPPORTED-COMPILER")
-        for_path
+    else if has ["GAP-UNSUPPORTED-COMPILER"]
     then Some "unsupported-compiler"
     else None
   in
@@ -2405,168 +873,49 @@ let observe
            || String.starts_with
                 ~prefix:"complexity walk failed"
                 g.Observation.gap_detail ) )
-      !measure_gaps
+      !gaps
   in
-  let coverage_of path status provenance =
+  let coverage_of path =
+    let status =
+      match gap_status path with
+      | Some s -> s
+      | None when file_unmeasured path -> "unmeasurable"
+      | None -> "measured"
+    in
     { Observation.cov_path= path
-    ; cov_provenance= provenance
+    ; cov_provenance= Measurement.file_provenance path
     ; cov_status= status
     ; cov_functions= (if status = "measured" then count_fns path else 0) }
   in
-  let source_coverage =
-    List.map
-      (fun path ->
-        let status =
-          match gap_status path with
-          | Some s -> s
-          | None when file_unmeasured path -> "unmeasurable"
-          | None -> "measured"
-        in
-        coverage_of path status (Measurement.file_provenance path) )
-      sources
-  in
-  let extra_coverage =
+  (* Generated wrappers and other measured inputs that are not authored
+     sources under the roots still get a coverage record. *)
+  let extra_paths =
     List.sort_uniq
       compare
       ( !measured_paths
-      @ List.map (fun g -> g.Observation.gap_path) !measure_gaps )
-    |> List.filter (fun path ->
-        not (List.exists (fun (p, _) -> String.equal p path) source_files) )
-    |> List.map (fun path ->
-        let stale =
-          List.exists
-            (fun g ->
-              g.Observation.gap_code = "GAP-STALE-ARTIFACT"
-              && String.equal g.Observation.gap_path path )
-            !measure_gaps
-        in
-        let status =
-          if stale
-          then "stale"
-          else if file_unmeasured path
-          then "unmeasurable"
-          else "measured"
-        in
-        coverage_of path status (Measurement.file_provenance path) )
+      @ List.filter_map
+          (fun g ->
+            if
+              List.mem
+                g.Observation.gap_code
+                [ "GAP-UNMEASURABLE"
+                ; "GAP-STALE-ARTIFACT"
+                ; "GAP-MISSING-INPUT"
+                ; "GAP-UNVERIFIABLE-TRANSFORMATION"
+                ; "GAP-UNSUPPORTED-COMPILER" ]
+            then Some g.Observation.gap_path
+            else None )
+          !gaps )
+    |> List.filter (fun path -> not (List.mem path sources))
   in
   interfaces.validate () ;
   { Observation.project_root
   ; program_roots
   ; compiler_series= !compiler_series
-  ; units=
-      List.sort
-        (fun a b -> compare a.Observation.canonical b.Observation.canonical)
-        !units
-  ; calls= List.sort by_unit !calls
-  ; execution=
-      { Observation.definitions= List.sort_uniq compare !execution_definitions
-      ; returned_constructors=
-          List.map
-            (fun (source, name) -> (resolve source, name))
-            !returned_constructors
-          |> List.sort_uniq compare
-      ; value_origins=
-          List.map
-            (fun (target, source) -> (resolve target, resolve source))
-            !value_origins
-          |> List.sort_uniq compare
-      ; callback_collections=
-          List.map
-            (fun (source, target) -> (resolve source, resolve target))
-            !callback_collections
-          |> List.sort_uniq compare
-      ; returned_functions=
-          List.map
-            (fun (source, target) -> (resolve source, resolve target))
-            !returned_functions
-          |> List.sort_uniq compare
-      ; parameter_defaults=
-          List.map
-            (fun (source, target) -> (resolve source, resolve target))
-            !parameter_defaults
-          |> List.sort_uniq compare
-      ; functor_instances=
-          List.map
-            (fun (instance, fn, arg, site) ->
-              (resolve instance, resolve fn, resolve arg, site) )
-            !functor_instances
-          |> List.sort_uniq compare
-      ; invocations=
-          List.map
-            (fun (c : Observation.execution_call) ->
-              { c with
-                execution_callee= resolve c.execution_callee
-              ; execution_values=
-                  List.map
-                    (fun (i, value, site) -> (i, resolve value, site))
-                    c.execution_values
-              ; execution_args=
-                  List.map
-                    (fun (a : Observation.execution_arg) ->
-                      {a with target= resolve a.target} )
-                    c.execution_args } )
-            !execution_invocations
-          |> List.sort_uniq compare
-      ; ordered=
-          (let normalized_steps = Physical_ordered_step.create 128 in
-           let rec normalize step =
-             match Physical_ordered_step.find_opt normalized_steps step with
-             | Some normalized -> normalized
-             | None ->
-                 let normalized =
-                   match step with
-                   | Observation.Invoke c ->
-                       Observation.Invoke
-                         { c with
-                           execution_callee= resolve c.execution_callee
-                         ; execution_args=
-                             List.map
-                               (fun (a : Observation.execution_arg) ->
-                                 {a with target= resolve a.target} )
-                               c.execution_args }
-                   | Choose branches ->
-                       Choose
-                         (List.map
-                            (fun (label, steps) ->
-                              (label, List.map normalize steps) )
-                            branches )
-                   | Repeat (kind, site, condition, body) ->
-                       Repeat
-                         ( kind
-                         , site
-                         , List.map normalize condition
-                         , List.map normalize body )
-                   | step -> step
-                 in
-                 Physical_ordered_step.add normalized_steps step normalized ;
-                 normalized
-           in
-           List.map
-             (fun (symbol, steps) -> (symbol, List.map normalize steps))
-             !execution_ordered
-           |> List.sort compare ) }
-  ; exec_paths=
-      List.sort
-        (fun a b ->
-          compare
-            (a.Observation.paths_unit, a.Observation.paths_caller)
-            (b.Observation.paths_unit, b.Observation.paths_caller) )
-        !flows
-  ; value_refs= List.sort by_ref !vrefs
-  ; module_aliases
-  ; alias_only_units= List.sort_uniq compare !alias_only_units
-  ; defined_values= List.sort_uniq compare !defined_values
-  ; type_refs= List.sort by_tref !trefs
   ; functions
   ; coverage=
-      ( if not measurement
-        then []
-        else
-          List.sort
-            (fun a b -> compare a.Observation.cov_path b.Observation.cov_path)
-            (source_coverage @ extra_coverage) )
-  ; source_files
+      List.sort
+        (fun a b -> compare a.Observation.cov_path b.Observation.cov_path)
+        (List.map coverage_of (sources @ extra_paths))
   ; snapshot_digest
-  ; gaps= List.sort_uniq by_gap !gaps
-  ; measure_gaps=
-      (if measurement then List.sort_uniq by_gap !measure_gaps else []) }
+  ; gaps= List.sort_uniq by_gap !gaps }

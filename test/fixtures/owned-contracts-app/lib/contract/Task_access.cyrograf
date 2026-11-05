@@ -1,4 +1,0 @@
-rpc read(Common.Message) -> Result
-struct Result {
-  value: String
-}

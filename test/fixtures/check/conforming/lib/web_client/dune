@@ -1,0 +1,12 @@
+(library
+ (name web_client)
+ (libraries
+  task_manager_contract
+  task_manager_browser
+  order_manager_contract
+  notification_contract
+  clock
+  well.http
+  well.html
+  well.web
+  well.subscribe))

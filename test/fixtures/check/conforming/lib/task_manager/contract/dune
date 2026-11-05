@@ -1,0 +1,7 @@
+(library
+ (name task_manager_contract)
+ (libraries
+  (re_export app_types)
+  (re_export task_manager_wire)
+  (re_export yojson)
+  well.core))

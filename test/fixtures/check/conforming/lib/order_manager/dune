@@ -1,0 +1,7 @@
+(library
+ (name order_manager)
+ (libraries order_manager_contract task_access_api pricing_engine_contract))
+
+(library
+ (name order_manager_contract)
+ (libraries app_types))

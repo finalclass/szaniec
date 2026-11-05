@@ -49,7 +49,7 @@ if (dependencies.includes("not found")) throw new Error(dependencies);
 
 // POSIX sh is the Linux runtime launcher, not a build-time scripting dependency.
 // Explicit loader invocation preserves the application's working directory.
-// --argv0 keeps coverage's nested supervise launches on this same launcher.
+// --argv0 keeps the launcher identity in the process name.
 await Deno.writeTextFile(
   `${bundle}/szaniec`,
   `#!/bin/sh
@@ -70,58 +70,47 @@ try {
   await Deno.mkdir(relocated);
   await run("cp", ["-a", `${bundle}/.`, relocated]);
   const project = `${scratch}/application`;
-  await Deno.mkdir(project);
-  await Deno.mkdir(`${project}/lib`);
-  await Deno.writeTextFile(`${project}/dune-project`, "(lang dune 3.17)\n");
+  await Deno.mkdir(`${project}/lib/clock`, { recursive: true });
+  await Deno.mkdir(`${project}/lib/task_engine`, { recursive: true });
   await Deno.writeTextFile(
-    `${project}/szaniec.toml`,
-    `format = "szaniec-config/1"
-[policy]
-name = "release-smoke"
-roots = ["lib"]
-`,
+    `${project}/dune-project`,
+    "(lang dune 3.17)\n(implicit_transitive_deps false)\n",
+  );
+  await Deno.writeTextFile(
+    `${project}/lib/clock/dune`,
+    "(library (name clock))\n",
+  );
+  await Deno.writeTextFile(
+    `${project}/lib/task_engine/dune`,
+    "(library (name task_engine) (libraries clock))\n",
   );
   await Deno.symlink(`${relocated}/szaniec`, `${scratch}/szaniec`);
   const nested = `${project}/lib`;
-  await run(`${scratch}/szaniec`, ["approve"], nested);
-  const report = JSON.parse(
-    await run(`${scratch}/szaniec`, [
-      "check",
-      "--json",
-      "--no-callgraph",
-    ], nested),
+  const conforming = JSON.parse(
+    await run(`${scratch}/szaniec`, ["check", project, "--json"], nested),
   );
   if (
-    report.inputs.policy.name !== "release-smoke" ||
-    report.inputs.policy.approved !== true ||
-    !/^sha256:[a-f0-9]{64}$/.test(report.inputs.policy.approvedDigest)
+    conforming.format !== "szaniec-check/2" ||
+    conforming.status !== "conforming" || conforming.components.length !== 2
   ) {
-    throw new Error("Relocated bundle did not record a valid TOML approval.");
+    throw new Error("Relocated bundle did not check the smoke project.");
   }
-  const configPath = `${project}/szaniec.toml`;
+  // The working directory is the default project; a violation exits 1.
   await Deno.writeTextFile(
-    configPath,
-    (await Deno.readTextFile(configPath)).replace(
-      'name = "release-smoke"',
-      'name = "changed-policy"',
-    ),
+    `${project}/lib/clock/dune`,
+    "(library (name clock) (libraries task_engine))\n",
   );
-  const incomplete = await new Deno.Command(`${scratch}/szaniec`, {
-    args: ["check", "--json", "--no-callgraph"],
-    cwd: nested,
+  const violating = await new Deno.Command(`${scratch}/szaniec`, {
+    args: ["check", "--json"],
+    cwd: project,
   }).output();
-  const coached = JSON.parse(decoder.decode(incomplete.stdout));
-  const approval = coached.findings.find((finding: { rule: string }) =>
-    finding.rule === "GAP-POLICY-NOT-APPROVED"
-  );
+  const findings = JSON.parse(decoder.decode(violating.stdout)).findings;
   if (
-    incomplete.code !== 2 ||
-    approval?.coaching?.catalog !== "szaniec-coaching/1" ||
-    approval?.coaching?.id !== "approved-policy"
+    violating.code !== 1 || findings.length !== 1 ||
+    findings[0].rule !== "ID-UTILITY-BUSINESS" ||
+    !findings[0].coaching
   ) {
-    throw new Error(
-      "Relocated bundle did not preserve the gap and its local guide.",
-    );
+    throw new Error("Relocated bundle did not report the coached violation.");
   }
 } finally {
   await Deno.remove(scratch, { recursive: true });

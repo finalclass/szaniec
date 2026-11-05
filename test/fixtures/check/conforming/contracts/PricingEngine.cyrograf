@@ -1,0 +1,1 @@
+rpc price(PriceRequest) -> Price

@@ -1,7 +1,0 @@
-(library
- (name transformed)
- (libraries app_contract)
- (preprocess
-  (action
-   (run deno run --allow-read %{dep:transform.ts} %{input-file})))
- (preprocessor_deps transform.ts))

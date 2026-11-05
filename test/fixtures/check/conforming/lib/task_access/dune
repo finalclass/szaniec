@@ -1,0 +1,14 @@
+(library
+ (name task_access)
+ (libraries task_access_contract clock sqlite3 well.db)
+ (preprocess
+  (pps well.ppx)))
+
+(library
+ (name task_access_contract)
+ (libraries app_types))
+
+; A facet: an in-process surface of TaskAccess.
+(library
+ (name task_access_api)
+ (libraries task_access task_access_contract))
