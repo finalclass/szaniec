@@ -1,283 +1,305 @@
-# Contract: rule catalog
+# Rule catalog: szaniec-check/2, profile well-ocaml
 
-Catalog version: `szaniec-rules/3.3.0`.
+The rules judge declared dune dependencies (see the
+[check contract](check-contract.md)). They follow the closed architecture
+and design don'ts of Juval Löwy's *Righting Software* (chapter 3). This is
+not an official IDesign product. The OCaml source of truth is
+`lib/conformance_engine/rule_catalog.ml` (ids and coaching) and
+`lib/conformance_engine/profile.ml` (external library table);
+`test/check/run.ts` fails when the coaching below differs from the binary's.
 
-Rules evaluate the interpretation model against the service roles and
-the policy. There is no permitted-calls list: conformance follows the
-structural IDesign rules (the don'ts) and closed-architecture layering.
-See [the decision record](../decisions/donts-based-rules.md).
+## Components and roles
 
-## Layer model
+Classification (first match wins) of a library name, whether or not its
+stanza is in the scanned tree:
 
-Roles: Client, Manager, Engine, Access, Utility (inferred from name
-suffixes). Ownership classes: contract of service, implementation of
-service, composition root, external library, unclassified.
+1. ends with `_root` → composition root (exempt, like executables and tests);
+2. key equals a service key → service implementation;
+3. `<svc>_contract`, `<svc>_browser` → callable contract; `<svc>_spec`,
+   `<svc>_wire` → server surface and transport adapter (together: the
+   contract family);
+4. `<svc>_<anything>`, longest service prefix on `_` boundaries → facet;
+5. otherwise a local component.
 
-Allowed synchronous request/response edges between boundaries:
+Service-owned libraries take the service's role; local components take the
+role of their own name suffix (`manager`, `client`, `engine`, `access`,
+otherwise Utility). A key is the name lowercased with non-alphanumerics
+removed. A service is a `.cyrograf` file with `rpc` methods.
 
-- Client → Manager, Client → Utility, Client → Client.
-- Manager → Engine, Manager → Access, Manager → Utility.
-- Engine → Access, Engine → Utility, Engine → Manager (activity
-  delegation stays within the business layer's direction).
-- Utility → any (the utilities bar is cross-cutting infrastructure).
-- Access → Utility, Access → resource APIs.
+A **facet** is an in-process surface of a service (for example
+`security_api` of `Security`). Architecture rules apply to it by the owning
+service's role: other components reach it like `<svc>_contract`, and its
+own dependencies are judged as that role's.
 
-A synchronous Manager → Manager call is not in this list. Manager →
-Manager delegation is a queued command, defined with the queue rules
-below. Everything else between service boundaries is a violation by
-one of the rules below. The evaluator matches every role pair; it has
-no silent default.
+## Edge evaluation
 
-## Structural rules
+For each dependency of a stanza:
 
-### `ID-CLIENT-ACCESS`
-- Don't: clients reach the business layer only through Managers
-  (closed architecture; a Client calling an Access pulls the resource
-  layer into presentation).
-- Precondition: `service-request` interaction from a Client-role owner
-  to an Access-role service.
-- Evidence: call sites with the helper path from the boundary origin.
-- Outcome: violation.
+- Roots (executables, `_root` libraries) and tests are exempt from role and
+  profile rules; `DUNE-*` rules still apply.
+- A dependency on a `_root` library from anything else is `ROOT-LEAK`.
+- A contract-family library may depend only on its own family, local
+  Utilities and external libraries (`CONTRACT-LEAK`), and may use the
+  framework libraries.
+- Otherwise, edges within one component (an implementation, its facets and
+  its family) are allowed. An edge to another service's implementation,
+  `_spec` or `_wire` is `IMPL-CROSS-SERVICE`. An edge to another service's
+  `_contract`, `_browser` or facet, or to a local component, is judged by
+  the role matrix:
 
-### `ID-CLIENT-ENGINE`
-- Don't: clients must not call Engines (the only entry points to the
-  business layer are Managers).
-- Precondition: `service-request` interaction from a Client-role owner
-  to an Engine-role service.
-- Outcome: violation.
+| from \ to | Client | Manager | Engine | ResourceAccess | Utility |
+|---|---|---|---|---|---|
+| Client | ID-CLIENT-CLIENT | ok | ID-CLIENT-ENGINE | ID-CLIENT-ACCESS | ok |
+| Manager | ID-MANAGER-CLIENT | ID-MANAGER-MANAGER | ok | ok | ok |
+| Engine | ID-ENGINE-CLIENT | ID-ENGINE-MANAGER | ID-ENGINE-ENGINE | ok | ok |
+| ResourceAccess | ID-ACCESS-CLIENT | ID-ACCESS-OUTBOUND | ID-ACCESS-OUTBOUND | ID-ACCESS-ACCESS | ok |
+| Utility | ID-UTILITY-BUSINESS | ID-UTILITY-BUSINESS | ID-UTILITY-BUSINESS | ID-UTILITY-BUSINESS | ok |
 
-### `ID-ENGINE-ENGINE`
-- Don't: engines never call each other.
-- Precondition: `service-request` interaction between two Engine-role
-  services.
-- Outcome: violation.
+External libraries (names in the profile table, dotted names, and names
+that classify as a plain Utility) are judged by the well-ocaml profile:
 
-### `ID-ACCESS-ACCESS`
-- Don't: ResourceAccess services never call each other (an atomic
-  business verb cannot require another; the join belongs in one
-  service).
-- Precondition: `service-request` interaction between two Access-role
-  services.
-- Outcome: violation.
+| Category | Libraries | Allowed for (besides roots and tests) | Rule |
+|---|---|---|---|
+| framework | `well`, `well.core`, `well.cap`, `well.service`, `well.cli` | contract-family libraries | FRAMEWORK-BOUNDARY |
+| resource | `sqlite3`, `well.db`, `well.net`, `well.mail`, `well.auth`, `well.ppx` | ResourceAccess, Utility | RESOURCE-BOUNDARY |
+| publish | `well.publish` | Manager, Utility | EVT-PUBLISH-ROLE |
+| subscribe | `well.subscribe` | Manager, Client, Utility | EVT-SUBSCRIBE-ROLE |
+| presentation | `well.http`, `well.html`, `well.web` | Client, Utility | PRESENTATION-BOUNDARY |
+| other | everything else (`well.rpc`, `well.runtime`, `yojson`, `eio`, …) | everyone | — |
 
-### `ID-ACCESS-OUTBOUND`
-- Don't: Access services work for the layers above them; calls from an
-  Access service to a Manager or an Engine are upward calls.
-- Precondition: `service-request` interaction from an Access-role
-  service to a Manager- or Engine-role service.
-- Outcome: violation.
+## Rules
 
-### `ID-MANAGER-CLIENT`
-- Don't: closed architecture. A Manager does not call back into a Client.
-- Precondition: `service-request` from a Manager-role owner to a
-  Client-role service, including a call reached through a same-boundary
-  helper or a supported proxy.
-- Evidence: call sites and the helper path from the boundary origin.
-- Outcome: violation.
+Each finding carries the rule id, `from` and `to` endpoints, the location
+of the offending atom, a one-line message and the coaching below. Coaching
+instructs the implementing agent how to change the design; it never
+suggests editing dune files to silence the finding.
 
-### `ID-ENGINE-CLIENT`
-- Don't: closed architecture. An Engine does not call a Client.
-- Precondition: `service-request` from an Engine-role owner to a
-  Client-role service, including helpers and supported proxies.
-- Outcome: violation.
+### DUNE-TRANSITIVE
 
-### `ID-ACCESS-CLIENT`
-- Don't: closed architecture. An Access service does not call a Client.
-- Precondition: `service-request` from an Access-role owner to a
-  Client-role service, including helpers and supported proxies.
-- Outcome: violation.
+Dune-project must disable implicit transitive dependencies.
 
-### `ID-MANAGER-MANAGER`
-- Don't: Managers do not call each other synchronously. Delegation to
-  another Manager is a queued command.
-- Precondition: `service-request` from a Manager-role owner to a
-  different Manager-role service.
-- Outcome: violation. A `queued-command` whose resolved target is a
-  single Manager is not this rule.
+When: Any `dune-project` in the tree lacks `(implicit_transitive_deps false)`, sets it to another value, or declares `(lang dune X)` with X < 3.17. Location: the setting's value, else the `lang` version, else 1:1.
 
-## Use-case rules
+Coaching:
 
-Path evidence is the executable alternatives of one boundary entry.
-`if` and `match` arms are different alternatives. A call sequenced
-after a branch sits on every alternative that reaches it. Resolved
-helpers inside the same boundary are inlined; a call into another
-boundary stops the walk. `Client -> Manager -> Access` stays two
-interactions and is not a Client use-case that called Access.
+> Szaniec enforces the architecture through dune: every component is its own library and the compiler may only see direct dependencies. Declare (lang dune 3.17) or newer and (implicit_transitive_deps false) in dune-project. Without it a component can reach any library its dependencies use, so every other rule is void. Then add each library a component really uses to its (libraries ...) field and let the remaining findings show where the design is wrong.
 
-An entry is a value with no caller in the same boundary. When a
-function's alternatives cannot be built within the bounded summary contract,
-it contributes `GAP-AMBIGUOUS-PATH` naming the limiting construct and unevaluated
-checks. Direct, established witnesses remain findings alongside the gap.
-For recursive graphs and uncertain ordinary exception completion with all targets resolved, a conservative reachable-target
-bound proves fan-out absent when there is at most one Manager and one queued
-Manager. The exception bound includes every call in the body and handlers;
-it does not infer which handler executes or fabricate a co-execution path.
-This does not claim recursion terminates or order its invocations.
-Multiple recursive targets remain unverified rather than being combined into
-an invented execution path. See [observation limits](observation-schema.md#completeness).
+### DUNE-REEXPORT
 
-### `UC-CLIENT-MULTI-MANAGER`
-- Don't: a Client performs one use case through one Manager.
-- Precondition: one executable alternative of a Client entry reaches
-  two or more distinct Manager services by `service-request`.
-- Evidence: both call sites and the helper path.
-- Outcome: violation. Separate entries and mutually exclusive arms do
-  not combine.
+Re_export widens a component's surface.
 
-## Queue rules
+When: `(re_export X)` in a stanza that is not a contract-family library, or a contract-family library re-exporting anything other than its own family, a local Utility, or an external library outside the profile table.
 
-A queued command is a call to `Well.request` only. Its targets are the
-services that subscribe to the same topic. See the interpretation
-contract for the topic identity. The command is not a publication and
-not a synchronous service request.
+Coaching:
 
-### `Q-MULTI-MANAGER`
-- Don't: one executable path does not fan out queued commands to
-  several Managers.
-- Precondition: one alternative targets two or more distinct Manager
-  services, either by several `Well.request` calls or by one request
-  whose topic has several Manager subscribers.
-- Outcome: violation. Mutually exclusive arms stay distinct. The same
-  path cap and gap as `UC-CLIENT-MULTI-MANAGER` apply.
+> (re_export X) makes X visible to every consumer, which turns a private dependency into part of the public contract and lets callers bypass the closed architecture. Only a contract-family library may re-export, and only its own family, a Utility data library or a framework-neutral external library. Remove the re_export and let each consumer declare what it really uses; if the consumer is not allowed to depend on X, its design must change, not the export.
 
-### `Q-TARGET-ROLE`
-- Don't: a queued command is addressed to a Manager, not to an Engine
-  or an Access service.
-- Precondition: a resolved queued-command target whose role is Engine
-  or Access.
-- Evidence: the request site and the subscriber.
-- Outcome: violation.
+### DUNE-UNSUPPORTED
 
-## Event rules
+Construct hides or redirects dependencies.
 
-A publication is `Well.publish`, `Well.publish_keyed` or
-`Well.MessageBus.publish`. A subscription is `Well.subscribe`,
-`Well.subscribe_keyed`, `Well.MessageBus.subscribe` or
-`Well.MessageBus.once`. Neither becomes a `service-request` from the
-publisher to a subscriber.
+When: `copy_files`/`copy_files#` whose source is absolute, contains `..` or a `%{...}` variable; a library with `virtual_modules`, `implements` or `default_implementation`; a `%{...}` variable in a dependency position.
 
-### `EVT-PUBLISH-ROLE`
-- Don't: only Managers publish.
-- Precondition: a publication whose performing owner is not a Manager.
-  Engines, Access services (the resource layer), Clients, Utilities
-  and every other owner are included.
-- Outcome: violation.
+Coaching:
 
-### `EVT-SUBSCRIBE-ROLE`
-- Don't: only Clients and Managers subscribe. Engines, Access
-  services, Utilities and resources do not.
-- Precondition: a subscription whose performing owner is not a Client
-  and not a Manager.
-- Outcome: violation.
+> This dune construct compiles code or selects an implementation outside the declared (libraries ...) of a stanza, so the dependency structure Szaniec checks is no longer the one the compiler sees. Copy only files from the stanza's own directory, and replace virtual libraries (virtual_modules, implements, default_implementation) with an explicit contract library and a composition root that chooses the implementation.
 
-## Project-policy rules
+### IMPL-CROSS-SERVICE
 
-### `IMPL-ACCESS-CROSS-SERVICE`
-- Precondition: `implementation-access` interaction. The target is
-  another family's implementation, or an unclassified repository-local
-  module. Calls, resolved aliases, value references and callbacks all
-  count. A single consumer is enough. The target is not an approved
-  shared module of the approved policy, and the reference is not a
-  registration pattern.
-- Evidence: both owners (the caller's family and the target service or
-  module), source sites, and the helper or alias path.
-- Outcome: violation.
+Another service is reached outside its contract.
 
-Caller-owned continuations passed through an approved Utility facet retain their
-original owner. Passing them does not itself create reverse implementation access
-by the Utility; executable operations in their bodies remain checked. Private
-callbacks passed to non-Utility service facets retain the exposure rule.
+When: A service implementation, facet or local component depends on another service's implementation library, `_spec` or `_wire`.
 
-### `SHARED-UNAPPROVED`
-- Precondition: an unclassified in-scope unit is reached by executable
-  dependencies from more than one family. Executable dependencies are
-  calls, resolved aliases, value references and callbacks. Type-only
-  references do not count. The unit is not a contract, not an external
-  library, and not an approved shared module of the approved policy.
-  A module owned by one family is that family's implementation; another
-  family's use of it is `IMPL-ACCESS-CROSS-SERVICE`, not this rule.
-- Evidence: the shared module, the distinct consumer families, the
-  source sites, and the reference paths.
-- Outcome: violation naming the module and all consumers.
-- An unread artifact is not an empty consumer set. Confirmed accesses
-  from units that were read stay in the report; the observation gap
-  keeps the result at exit 2.
+Coaching:
 
-### `RESOURCE-BOUNDARY`
-- Precondition: `resource-access` interaction whose performing boundary
-  is not an Access-role service, not a Utility-role service, and not an
-  approved shared module of the approved policy.
-- Evidence: resource name, API path, call site.
-- Outcome: violation. Framework library approval never grants resource
-  access.
-- Access/Utility permission requires a declared service. A data contract,
-  serialization runtime or unowned module does not become a Utility service
-  because its name has no other role suffix.
+> A service is reached only through its contract library (<service>_contract, or <service>_browser from browser code). Depending on its implementation, server surface (_spec) or transport adapter (_wire) couples you to how it works instead of what it promises, and defeats encapsulation of its volatility. Depend on the service's _contract library and call the operation it declares; if the operation you need is missing, add it to the .cyrograf contract as a coarse-grained business operation, not as a pass-through of the internal function. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
 
-### `POLICY-UNCLASSIFIED`
-- Precondition: an in-scope, non-generated unit has no ownership class
-  and is not an approved shared module of the approved policy. A unit
-  whose artifact was not read (stale, missing or unsupported) is not
-  judged here. A unit already reported as `GAP-AMBIGUOUS-OWNERSHIP` is
-  not judged here either: ambiguous evidence is not "no owner".
-- Outcome: violation. No silent exclusion of unowned code.
+### CONTRACT-LEAK
 
-## Specification rules
+Contract family depends on implementation.
 
-### `SPEC-UNDECLARED-METHOD`
-- Precondition: a call resolves into a service's contract surface, the
-  final member name is not a known generated-code mechanic, and the name
-  is not among the `rpc` methods declared in the service's cyrograf
-  contract.
-- Outcome: violation — the code disagrees with the specification.
-  (Mechanic allowlist: `make_spec`, `spec`, `_service_ref`, `make`,
-  `to_wire`, `of_wire`, `to_data`, `from_data`, `to_drut`, `from_drut`,
-  `wire_of_storage`, `storage_of_wire`, `to_storage_value`,
-  `from_storage_value`.)
+When: A contract-family library (`_contract`, `_browser`, `_spec`, `_wire`) depends on a project library that is neither in its own family nor a local Utility (including its own implementation and facets).
 
-### `SPEC-UNREGISTERED-SERVICE`
-- Precondition: a cyrograf service declares `rpc` methods but no unit
-  binds its implementation (no `make_spec` call on its contract) or the
-  bound spec is never registered in a composition root. Not reported
-  when an artifact was stale, missing or unreadable: the registration
-  may sit in a unit that was not read.
-- Outcome: violation — the specification declares a service the program
-  does not mount.
+Coaching:
 
-## Gap diagnostics
+> A contract describes what a service does, never how. A contract, browser, spec or wire library may depend only on its own family, Utility data libraries and external libraries. A dependency on an implementation, on another service or on a business component leaks that component into every caller. Move the shared data types into a Utility data library (or into the contract itself) and keep behaviour in the implementation library. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
 
-| Identifier | Condition | Effect |
-|---|---|---|
-| `GAP-UNOBSERVED-SOURCE` | in-scope source file without artifact | exit 2 |
-| `GAP-STALE-ARTIFACT` | confirmed source/input content or interface mismatch | exit 2 |
-| `GAP-MISSING-INPUT` | authored or generated compiler input is missing | exit 2 |
-| `GAP-UNVERIFIABLE-TRANSFORMATION` | receipt for an MLX, action or compiler-applied transformation is absent or its dependency/tool identity changed; Dune-managed PPX rewrites need none | exit 2 |
-| `GAP-SOURCE-MAPPING` | MLX executable locations lack authored compiler mapping | exit 2 |
-| `GAP-LOCAL-SERVICE` | local boundary is unapproved, conflicting, missing or lacks fresh typed evidence | exit 2 |
-| `GAP-UNSUPPORTED-COMPILER` | artifact compiler series outside adapter support | exit 2 |
-| `GAP-ARTIFACT-READ` | artifact unreadable | exit 2 |
-| `GAP-UNRESOLVED-CALL` | dynamic callee in in-scope application code | exit 2 |
-| `GAP-CALLBACK-SEMANTICS` | an external API's callback execution is unknown | exit 2 |
-| `GAP-RETURNED-CLOSURE` | a factory result is invoked without a proven execution target | exit 2 |
-| `GAP-INCOMPLETE-ARTIFACT` | the compiler artifact contains only a partial typed implementation | exit 2 |
-| `GAP-UNSUPPORTED-CONSTRUCT` | construct the adapter cannot follow | exit 2 |
-| `GAP-AMBIGUOUS-OWNERSHIP` | family evidence disagrees, or one directory name matches several services | exit 2 |
-| `GAP-POLICY-NOT-APPROVED` | policy content ≠ approved digest | exit 2 |
-| `GAP-PROFILE-UNSUPPORTED` | policy requests an unknown profile | exit 2 |
-| `GAP-AMBIGUOUS-PATH` | execution summary exceeds a stated bound or contains unresolved exception/recursive control flow | exit 2 |
-| `GAP-UNRESOLVED-TARGET` | execution/binding evidence is unavailable (with its upstream reason), or a queued topic/subscriber cannot be resolved | exit 2 |
+### ID-CLIENT-CLIENT
 
-Gap rules require no policy approval: they report limits of analysis.
-Violations and gaps coexist in one report; gaps force exit 2.
-`GAP-UNRESOLVED-CALL` still covers a callee that is itself unresolved;
-it is not used to guess a queue or event kind.
+Client calls another Client.
 
-## Deliberately absent from this catalog
+When: Client → Client.
 
-- Any role or ownership inference beyond the accepted name-suffix rule.
-- Volatility/decomposition quality judgments.
-- Cyclomatic-complexity thresholds. The inventory itself is
-  [szaniec-cognitive/1](complexity-metric.md); it is not a conformance finding.
-- Treating `Well.Service.cast`, `Well.replay` or a shared transport
-  library as a queued command, a publication or a subscription. Those
-  calls stay external calls.
+Coaching:
+
+> Clients never call each other. Each Client is an entry point for its own audience and volatility; a Client calling a Client chains presentation concerns and hides a use case. Put the shared use case behind a Manager contract that both Clients call, and share pure presentation helpers only through a Utility. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-CLIENT-ENGINE
+
+Client calls an Engine.
+
+When: Client → Engine.
+
+Coaching:
+
+> Clients enter the business layer only through a Manager. Calling an Engine directly moves use-case orchestration into the Client and bypasses the Manager that owns the workflow. Add the operation to a Manager contract; the Manager calls the Engine. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-CLIENT-ACCESS
+
+Client calls ResourceAccess.
+
+When: Client → ResourceAccess.
+
+Coaching:
+
+> Clients enter the business layer only through a Manager. Calling ResourceAccess directly skips the use case and couples the Client to atomic business verbs and resources. Add the operation to a Manager contract; the Manager composes the ResourceAccess calls. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-MANAGER-MANAGER
+
+Manager calls another Manager synchronously.
+
+When: Manager → Manager.
+
+Coaching:
+
+> Managers never call each other synchronously: a sideways call couples use cases and signals functional decomposition. If the other Manager must act as a consequence, queue a command to it through the queue Utility or publish an event; if both need the same activity, that activity is an Engine or ResourceAccess shared by both - extract it. Never move it into a Utility to dodge the rule. Do not edit dune files to silence this.
+
+### ID-MANAGER-CLIENT
+
+Manager calls a Client.
+
+When: Manager → Client.
+
+Coaching:
+
+> Don't call up. A Manager serves Clients and must not know them; a call up into the Client layer indicates the need for queuing or pub/sub. Return data to the caller, or publish an event the Client subscribes to. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ENGINE-ENGINE
+
+Engine calls another Engine.
+
+When: Engine → Engine.
+
+Coaching:
+
+> Engines never call each other; the Manager orchestrates them. An Engine encapsulates one volatile activity; chaining Engines hard-codes a workflow inside the business logic. Return the result to the Manager and let the Manager call the next Engine. If two Engines share an algorithm, that is either one Engine or a Utility with no business knowledge. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ENGINE-MANAGER
+
+Engine calls a Manager.
+
+When: Engine → Manager.
+
+Coaching:
+
+> Don't call up. An Engine serves its Manager; a call up indicates the need for queuing or pub/sub. Return data to the caller, or publish an event through the Manager's workflow. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ENGINE-CLIENT
+
+Engine calls a Client.
+
+When: Engine → Client.
+
+Coaching:
+
+> Don't call up. Engines never depend on presentation; a call up indicates the need for queuing or pub/sub. Return data to the Manager, which returns it to the Client. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ACCESS-ACCESS
+
+ResourceAccess calls another ResourceAccess.
+
+When: ResourceAccess → ResourceAccess.
+
+Coaching:
+
+> ResourceAccess services never call each other; atomic business verbs are composed by the Manager. Return the data to the Manager and let it call the other ResourceAccess. If both need the same resource helper, put it in a Utility with no business knowledge. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ACCESS-OUTBOUND
+
+ResourceAccess calls a Manager or Engine.
+
+When: ResourceAccess → Manager or Engine.
+
+Coaching:
+
+> Don't call up. ResourceAccess exposes atomic business verbs over a resource and is called by Managers and Engines; a call up indicates the need for queuing or pub/sub. Return data to the caller instead. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-ACCESS-CLIENT
+
+ResourceAccess calls a Client.
+
+When: ResourceAccess → Client.
+
+Coaching:
+
+> Don't call up. ResourceAccess never depends on presentation; a call up indicates the need for queuing or pub/sub. Return data to the caller instead. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ID-UTILITY-BUSINESS
+
+Utility depends on a business component.
+
+When: Utility → Manager, Engine, ResourceAccess or Client.
+
+Coaching:
+
+> Utilities are infrastructure any layer may use - the 'cappuccino machine' test: it could serve any system - and must not depend on business components (Managers, Engines, ResourceAccess, Clients). Invert the dependency: the business component calls the Utility and passes the data it needs. If the code really encodes business rules, it is not a Utility; make it an Engine or ResourceAccess and name it accordingly. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### ROOT-LEAK
+
+Component depends on the composition root.
+
+When: A library that is not a composition root depends on a `_root` library. Executables, tests and other `_root` libraries may.
+
+Coaching:
+
+> The composition root wires services: it links implementations, specs and wires and chooses which implementation serves each contract. Components must never reach back into it - that would make every component depend on the whole system. Only executables, tests and other _root libraries may depend on a _root library. Depend on the contract of the service you need instead, and let the root pass it in. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### FRAMEWORK-BOUNDARY
+
+Component uses the full framework.
+
+When: A framework library (`well`, `well.core`, `well.cap`, `well.service`, `well.cli`) used by anything other than a root, test or contract-family library.
+
+Coaching:
+
+> Only the composition root wires services and may use the full framework (registry, dispatch by name, process wiring); contract libraries may use the framework surface generated code needs. A service implementation receives its collaborators through their contracts and implements its own spec; it never looks services up by name. Move the wiring into the executable that composes the system. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### RESOURCE-BOUNDARY
+
+Component touches a resource directly.
+
+When: A resource library (`sqlite3`, `well.db`, `well.net`, `well.mail`, `well.auth`, pps `well.ppx`) used by anything other than ResourceAccess, a Utility, a root or a test.
+
+Coaching:
+
+> Only ResourceAccess (and infrastructure Utilities) touch resources such as the database, network, mail or authentication store. Get the data through a ResourceAccess contract that exposes atomic business verbs, not CRUD over the resource. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### EVT-PUBLISH-ROLE
+
+Event published outside a Manager.
+
+When: `well.publish` used by anything other than a Manager, a Utility, a root or a test.
+
+Coaching:
+
+> Only Managers publish events: an event is a fact about a use case. Return the data to the Manager that runs the use case and let it publish. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### EVT-SUBSCRIBE-ROLE
+
+Event subscription outside a Manager or Client.
+
+When: `well.subscribe` used by anything other than a Manager, a Client, a Utility, a root or a test.
+
+Coaching:
+
+> Only Managers and Clients subscribe to events. Engines and ResourceAccess are called by Managers; if they must react to an event, the subscribing Manager calls them. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### PRESENTATION-BOUNDARY
+
+Presentation outside a Client.
+
+When: `well.http`, `well.html` or `well.web` used by anything other than a Client, a Utility, a root or a test.
+
+Coaching:
+
+> HTTP, HTML and web rendering belong to Clients. Business components return data; the Client presents it. Move the rendering into the Client and return structured data from the Manager. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.

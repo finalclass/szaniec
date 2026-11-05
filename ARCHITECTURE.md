@@ -1,41 +1,40 @@
 # Architecture
 
-This document records the accepted architectural direction. Concrete file formats,
-method signatures, and compiler integration still need implementation-level design.
-The first target is OCaml and [Well](https://github.com/finalclass/well).
+Szaniec protects an IDesign architecture expressed as dune libraries, and
+measures OCaml Cognitive Complexity. Its first and only target is the DG
+project. The approach is recorded in
+[dune structural enforcement](docs/decisions/dune-structural-enforcement.md).
 
 ## Purpose
 
-Check the current implementation against an approved architecture and a declared
-profile of structural IDesign rules. Report evidence, violations, and limits of
-analysis. Architectural quality and volatility discovery in the inspected project
-are outside the product's scope.
+`szaniec check` verifies that every dependency a dune file declares is
+allowed by the IDesign closed-architecture rules and the Well library
+profile. Together with `(implicit_transitive_deps false)`, which makes the
+compiler reject any use of a library that is not a direct dependency, this
+enforces the architecture without analyzing calls. Whether the architecture
+was correctly decomposed around volatility is outside the product's scope.
 
-Inputs are a program snapshot, a selected approved policy, and an analysis profile.
-The output is a deterministic report tied to those inputs and adapter/rule versions.
+`szaniec complexity` inventories every OCaml function from compiler-typed
+artifacts and reports its local Cognitive Complexity. It is a measurement,
+not a conformance rule.
 
 ## Volatility analysis
 
-| Potential change | Reason for change | Risk without a boundary | Owning component |
-|---|---|---|---|
-| Invocation and presentation | Terminal, CI, editor protocols, output formats | Evaluation depends on a client protocol | CheckClient |
-| Inspection workflow | Full checks, additional build targets, later reuse of evidence | Clients and adapters duplicate orchestration | InspectionManager |
-| Acquisition of program facts | Language, compiler, build system, generated code, artifact formats | Toolchain details leak into rules | ProgramAccess |
-| Architectural meaning of code | Framework proxy, routing, DI, queue and library conventions | Every rule must understand every framework | InterpretationEngine |
-| Conformance criteria | New rules, exceptions, evidence requirements | Policy changes force extractor changes | ConformanceEngine |
-| Access to approved architecture | Manifest or deterministic projection of an existing specification | Analysis depends on document storage and syntax | ArchitectureAccess |
+| Potential change | Reason for change | Owning component |
+|---|---|---|
+| Invocation and presentation | Terminal, CI, output formats | CheckClient |
+| Use-case sequence | New inputs to a check, build before measuring | InspectionManager |
+| Reading the build description | dune syntax, directory rules, stanza forms | ProjectAccess |
+| Reading the approved services | `.cyrograf` syntax and location | ArchitectureAccess |
+| Reading compiler artifacts | Compiler version, `.cmt` format, preprocessors | ProgramAccess |
+| Conformance criteria | Naming conventions, role matrix, library profile, coaching | ConformanceEngine |
 
-Service lists, roles, approved edges, and library versions are input variability.
-They do not justify a component per service, rule, or library. A new language adds
-an adapter within an existing boundary.
-
-The two Engines isolate independent changes: how code expresses an interaction,
-and whether that interaction is allowed. A Well proxy change belongs to the former;
-a sharing-policy change belongs to the latter.
+Services, libraries and rules are input variability. They do not justify a
+component per service, rule or library.
 
 ## Components
 
-These are logical components within one local program, not separately deployed services.
+These are logical components within one local program.
 
 ```static-architecture
 Szaniec
@@ -44,239 +43,80 @@ Who
 - [CheckClient]
 
 What
-- [InspectionManager] [SuggestionManager]
+- [InspectionManager]
 
 How
-- [InterpretationEngine] [ConformanceEngine]
+- [ConformanceEngine]
 
 How-to-access -> Where
-- [ProgramAccess]->(AnalyzedProgram)
-- [ArchitectureAccess]->(ApprovedArchitecture)
-- [ModelAccess]->(JudgmentProvider)
+- [ProjectAccess]->(DuneFiles)
+- [ArchitectureAccess]->(CyrografContracts)
+- [ProgramAccess]->(CompilerArtifacts)
 ```
 
-| Component | Responsibility | Conceptual operation |
+| Component | Library | Responsibility |
 |---|---|---|
-| CheckClient | Accept a request, render text/JSON, map the result to an exit status | Run the check, the complexity inventory, or the suggestion review |
-| InspectionManager | Coordinate policy resolution, observation, interpretation and evaluation | Check |
-| SuggestionManager | Select local candidates, apply judgment templates, compose the suggestion report | Suggest |
-| ProgramAccess | Supply program facts, the complexity inventory, and the suggestion catalog while hiding compiler, build and artifact access | Observe, Catalog |
-| ArchitectureAccess | Supply a consistent policy with its approved identity, and service ownership | Resolve |
-| ModelAccess | Submit bounded typed questions and return typed answers | Judge |
-| InterpretationEngine | Bind code to architectural boundaries and interpret interactions | Interpret |
-| ConformanceEngine | Evaluate the model and policy, preserving evidence and analysis gaps | Evaluate |
+| CheckClient | `bin/` | Parse arguments, render text/JSON, map results to exit status |
+| InspectionManager | `szaniec_inspection_manager` | Run `check` (read, then evaluate) and `complexity` (build, then measure) |
+| ProjectAccess | `szaniec_project_access` | Walk the tree like dune; parse `dune-project` and `dune` files into stanzas, dependencies and positions |
+| ArchitectureAccess | `szaniec_architecture_access` | Read `.cyrograf` files in the walked directories; return services |
+| ProgramAccess | `szaniec_program_access` | Check `.cmt` freshness and measure every syntactic function |
+| ConformanceEngine | `szaniec_conformance_engine` | Classify stanzas and dependency names, evaluate rules, attach coaching |
 
-CheckClient calls InspectionManager for a check and for the complexity
-inventory, and SuggestionManager for suggestions. InspectionManager calls ProgramAccess, ArchitectureAccess, and both
-Engines. SuggestionManager calls ProgramAccess, ArchitectureAccess, and
-ModelAccess. It does not call either Engine. InspectionManager does not call
-ModelAccess or SuggestionManager. The Engines do not call each other. Access
-components do not call each other. Rendering belongs to the Client. Conformance
-diagnostics stay in the inspection contract; suggestion text stays in the
-suggestion contract. A suggestion run does not change check findings or the
-check exit status.
+Permitted calls: CheckClient calls InspectionManager. InspectionManager calls
+ProjectAccess, ArchitectureAccess, ConformanceEngine and ProgramAccess.
+Access components do not call each other: InspectionManager passes the
+directories walked by ProjectAccess to ArchitectureAccess. ConformanceEngine
+is pure: it receives facts and returns a report, and reads no files.
+CheckClient does not call Access components or the Engine.
 
-CheckClient owns local, versioned [diagnostic coaching](docs/contracts/coaching.md)
-selected from existing findings and suggestions. Guides explain repair intent,
-steps, misleading fixes, examples and verification without changing evaluation
-or introducing provider calls. Suggestion presentation also belongs to CheckClient.
+`szaniec_model` holds the data contracts exchanged between components:
+`Structure` (dune and service facts, produced by ProjectAccess and
+ArchitectureAccess, consumed by ConformanceEngine), `Conformance` (the check
+report, produced by ConformanceEngine, rendered by CheckClient),
+`Observation` and `Complexity` (measurement facts from ProgramAccess, the
+report assembled by InspectionManager), and `Version`. It contains types and
+trivial projections only.
 
-Coverage measurement uses the same components. CheckClient adds `szaniec coverage`.
-InspectionManager sequences the instrumented build, the scenario process, and
-collection. ProgramAccess owns the Dune instrumentation facade, runtime flush,
-and point-to-function evidence. ConformanceEngine does not score coverage and
-does not apply a threshold. The facade is not an architectural service of the
-program under check. See [the coverage contract](docs/contracts/coverage.md).
+Szaniec's own `dune-project` declares `(implicit_transitive_deps false)`, so
+these permitted calls are enforced by the compiler in this repository too.
 
-Config is approved input infrastructure owned by CheckClient. CheckClient
-loads the document once and supplies typed sections to InspectionManager,
-SuggestionManager and ArchitectureAccess. These consumers may use the data
-contract; only CheckClient performs configuration discovery, loading and writing.
-The Engines and ProgramAccess do not depend on Config.
+## Check
 
-## Adapters
+1. ProjectAccess walks the tree from the project root. It skips `_` and `.`
+   directories by default, honours `dirs`, `data_only_dirs` and
+   `vendored_dirs`, follows `subdir` and `include`, and never enters
+   `_build`. A file that cannot be parsed fails the check (exit 2).
+2. ArchitectureAccess reads the services from `.cyrograf` files with `rpc`
+   methods in the walked directories.
+3. ConformanceEngine classifies every stanza and every dependency name by
+   naming convention (service implementation, contract family, facet,
+   composition root, local component), assigns roles, and evaluates each
+   declared dependency. Findings carry the rule id, both endpoints, the
+   `path:line:col` of the offending atom, a message and coaching.
 
-Language/toolchain adapters live inside ProgramAccess. They extract symbol identity,
-calls, implementation and type dependencies, module relationships, generated-code
-provenance, and available control-flow context. They expose common facts rather than
-a compiler-specific AST. They do not judge IDesign conformance.
-
-Framework/library adapters live inside InterpretationEngine. They interpret facts
-as service calls, proxy targets, DI bindings, resource access, queued commands,
-publication, or subscription. They receive configuration and registration evidence
-with the observation; they do not read the repository or call ProgramAccess themselves.
-
-Start with an OCaml/toolchain adapter and a Well adapter. Each adapter declares its
-version, supported constructs, and evidence capabilities. Profiles select compatible
-adapters and their required capabilities. Missing evidence, unsupported versions,
-and conflicting interpretations produce explicit gaps, not guessed relationships.
-Built-in adapters are sufficient initially; a plugin marketplace is unnecessary.
-
-## Evidence model
-
-Preserve one evidence model with two views: code dependencies and architectural
-interactions. The service graph is a projection, not the only retained information.
-
-- Code elements: modules, symbols, operations, libraries, generated proxies and resources.
-- Ownership: service boundary, public contract, approved infrastructure, or unclassified code.
-- Code dependencies: calls, implementation references, and type/contract-only references.
-  An import is not automatically a call.
-- Interaction kinds: request/response, queued command, publish, subscribe and resource access.
-  Asynchronous syntax alone does not establish queue semantics.
-- Context: entry point, operation, known use case, conditions and possible targets where available.
-- Provenance: source span, snapshot/build identity, adapter version and interpretation evidence.
-  Resolved targets, possible target sets and unresolved targets are distinct.
-
-Follow helper and proxy evidence to reveal `Client -> local helper -> Access`.
-Stop collapsing the path at a real approved service boundary: legitimate
-`Client -> Manager -> Access` does not imply a prohibited direct Client–Access edge.
-Do not treat the transitive closure of all calls as direct architectural calls.
-
-Repetition is execution evidence owned by ProgramAccess and interpreted by
-InterpretationEngine. Keep loops within an operation distinct from recurring
-activations of independent work (timers and listeners). Retain per-path context
-in the call graph, including origins outside RPC methods. Recording this fact
-does not itself establish a conformance violation or authorize an exception.
-
-Keep publication, channel and subscription separate; do not turn an event into a
-direct call from its publisher to each subscriber. Commands and events can use the
-same transport while having different architectural meaning.
-
-## Approved policy and code sharing
-
-Policy defines components and roles, source/symbol ownership, public contracts,
-allowed interactions, resources, and library usage. If the architecture already has
-an authoritative specification, use a deterministic projection rather than another
-independently maintained list. The projection format remains to be designed.
-
-If the architecture has contract files (`.cyrograf`), services are read
-from them: a contract declaring `rpc` methods is a service, and its
-declared methods are its public surface. Roles are inferred from the
-service name suffix (`manager`, `client`, `engine`, `access`; any other
-name is a Utility) — see
-[the decision record](docs/decisions/donts-based-rules.md).
-
-Data-only contracts establish public data ownership without declaring a
-service. Approved generated bindings preserve that ownership through native
-and browser projections. An explicitly owned in-process facet identifies
-exact members and consumers; it remains part of its service boundary and is
-subject to structural rules. These declarations belong to approved policy,
-not to the shared implementation whitelist; see
-[public contracts](docs/contracts/policy-format.md#public-contracts).
-
-RPC-free local boundaries use explicitly approved exact source roots, validated
-against fresh compiler ownership evidence by ArchitectureAccess. Implicit Client
-families may expose exact local facets without declaring RPCs. Neither mechanism
-approves arbitrary helper sharing or conceals the facet's implementation calls.
-
-A private helper belongs to a service family only when its source path
-lies in that family's directory tree (nested directories and nested
-modules included) or compiler evidence binds the unit to the service.
-One observed caller does not move an outside module into the family.
-A name such as `Shared`, `Common` or `Utils` does not create a boundary
-and does not approve infrastructure.
-
-New in-scope code without ownership produces a diagnostic.
-Distinguish:
-
-1. A private helper within one service: inside its boundary.
-2. Another service's implementation used outside its public contract: boundary violation.
-3. Shared executable code consumed by multiple services without approval: project-policy violation.
-4. Approved contracts, generated code, infrastructure and external libraries: evaluate their
-   declared permissions. Approving a SQL library does not permit Clients to access the database.
-
-Shared code is not categorically forbidden. The checker enforces approved sharing
-boundaries without needing to infer whether arbitrary code contains business logic.
-
-An approved Utility facet may accept a caller-owned continuation. The Utility
-owns its technical orchestration; the continuation retains its lexical service
-owner and all checks on its body. Passing that continuation is not reverse
-implementation reuse by the Utility. This does not approve direct references to
-another service's private methods, nor private callbacks passed to business
-service facets. Stored invocation targets still require provenance evidence.
-
-Use an explicitly selected approved policy identity. CI selects this outside the
-implementation patch; an architect selects it locally. A modified manifest in the
-same patch is not automatically approved. Record the selected identity in the report.
-Szaniec does not implement the organization's approval process.
-
-## Evaluation
-
-Evaluate both structural IDesign rules and concrete project constraints. A valid
-layer direction can still be an unapproved project dependency. Managers may call
-ResourceAccess; do not implement a naive rule allowing only the next numbered layer.
-
-Rules have stable identifiers, rationale and evidence requirements. Findings retain
-participants, source locations and helper paths. Potential violations from ambiguous
-targets are distinct from confirmed violations.
-
-Use-case rules require use-case boundaries and sufficient path evidence. Multiple
-edges aggregated across handlers or mutually exclusive branches do not prove that
-both calls execute in one use case. Insufficient evidence marks the rule unverified.
-
-## Check workflow and results
-
-InspectionManager resolves policy and profile, obtains current program observations,
-requests interpretation, then requests evaluation. It returns the report and input
-identities. The Client renders the result.
-
-Compiler artifacts must match the source and build configuration. Rebuild according
-to the selected profile or report incomplete analysis. Never silently analyze stale
-artifacts. Inspect the whole declared program, including newly added build inputs;
-diff-only inspection can miss changed dependencies in unchanged callers.
+The rules, conventions and coaching are the
+[rule catalog](docs/contracts/rule-catalog.md); the invocation and report
+are the [check contract](docs/contracts/check-contract.md).
 
 | Exit status | Meaning |
 |---|---|
-| 0 | No violations and all required evidence is available for the declared profile |
-| 1 | Violations found with complete required analysis |
-| 2 | Incomplete analysis or execution failure, including when violations were also found |
+| 0 | Conforming |
+| 1 | Violations |
+| 2 | Usage error, unreadable or unparseable input |
 
-Retain both violations and gaps when both occur. A successful result claims only the
-coverage of its declared profile. Tests and build tools have explicit scope; silently
-skipping files is not an acceptable coverage strategy.
+## Complexity
 
-## Suggestions
-
-`szaniec suggestions` is a separate review for narrow code-quality
-judgments. The deterministic checker stays authoritative: a suggestion is
-not a violation, a complexity gate, or an input to `szaniec check`.
-
-SuggestionManager reads the function catalog and service ownership, selects
-a bounded candidate set, and asks ModelAccess for one typed judgment per
-selected criterion. Exact duplicate bodies are recognized locally and are
-not sent to the provider. ModelAccess talks to the configured judgment
-provider only for this command. Missing credentials, timeouts, and error
-responses are an unavailable review, not an empty successful one. Reports
-cache by snapshot, rubric, model id, budgets, and question state. The
-coding agent records `apply`, `reject`, or `defer` with a rationale; the
-tool does not edit the program.
-
-The rubric, retrieval rules, experimental pilot criteria, and report shape
-are the [suggestion contract](docs/contracts/suggestion-contract.md). Every
-category stays experimental until a live evaluation records cost and
-latency. Similar code in different service families is not a license to
-introduce a shared business library.
-
-## Contracts
-
-Implementation-level contracts resolved under this architecture:
-
-- [Project configuration](docs/contracts/configuration.md) — one root TOML document and CheckClient-owned Config infrastructure.
-- [Policy format](docs/contracts/policy-format.md) — embedded TOML policy, approved-policy selection, ownership matching.
-- [Observation schema](docs/contracts/observation-schema.md) — program snapshot identity and normalized facts.
-- [Interpretation schema](docs/contracts/interpretation-schema.md) — Well adapter evidence, interactions and suppressions.
-- [Inspection contract](docs/contracts/inspection-contract.md) — CLI, report JSON, `szaniec.json` call network, determinism and exit statuses.
-- [Rule catalog](docs/contracts/rule-catalog.md) — `szaniec-rules/3.3.0`, don'ts-based.
-- [Complexity metric](docs/contracts/complexity-metric.md) — `szaniec-cognitive/1`, local function inventory.
-- [Coverage contract](docs/contracts/coverage.md) — `szaniec-coverage/1`, instrumentation facade, scenario collection, point coverage and CRAP inputs.
-- [Suggestion contract](docs/contracts/suggestion-contract.md) — `szaniec-suggestions/1`, optional and non-blocking.
-- [Diagnostic coaching](docs/contracts/coaching.md) — `szaniec-coaching/1`, local repair guidance in text and JSON reports.
-- [Stack decision](docs/decisions/stack.md) — product language, compiler coupling, investigation evidence.
-- [Decision record](docs/decisions/donts-based-rules.md) — don'ts-only rules, suffix roles, cyrograf-discovered services, call network artifact.
+InspectionManager optionally runs the project's build command, then asks
+ProgramAccess for a measurement of the selected source roots. ProgramAccess
+reads only artifacts that are current for their sources (or vouched for by a
+successful rebuild); anything stale, missing, unreadable, from another
+compiler series or not measurable is a gap, and the report is incomplete
+(exit 2). See the [complexity contract](docs/contracts/complexity-metric.md).
 
 ## Basis
 
-The approach is inspired by Juval Lowy's *Righting Software*: volatility-based
-decomposition in chapter 2, and closed architecture, Utilities and Design Don'ts in
-chapter 3. The component design and evidence model above are original project design
-decisions. They are not a claim of official IDesign certification.
+The rules follow Juval Löwy's *Righting Software*: closed architecture,
+Utilities and the design don'ts in chapter 3. The component design above is
+original project design. It is not a claim of official IDesign
+certification.

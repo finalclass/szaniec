@@ -1,6 +1,7 @@
 # Scope transformation receipts to their own inputs
 
-Status: accepted (adapter `szaniec-ocaml-adapter/1.13.0`).
+Status: accepted (adapter `szaniec-ocaml-adapter/1.13.0`); since `2.0.0` it
+applies to `szaniec complexity` only.
 
 ## Context
 
@@ -20,8 +21,8 @@ changed. Three independent causes were found:
    `_build/default/.ppx`. On `dg` these drivers are relinked with different
    bytes by each build although the rewritten output is identical.
 
-MLX must stay checked: it is the client layer, where direct calls to Access
-services must be detected. The receipt model itself is kept.
+MLX must stay checked: an unverified transformation must not become a
+measured, current function body. The receipt model itself is kept.
 
 ## Decision
 
@@ -39,11 +40,9 @@ services must be detected. The receipt model itself is kept.
 
 ## Verification
 
-`test/acceptance/capabilities.ts` edits an unrelated source and an unrelated Dune
-file, runs an ordinary `dune build`, and requires the real MLX unit to stay
-current. The existing scenarios still require a new receipt when the authored MLX,
-a preprocessor dependency or a compiler-applied transformation changes.
-
-On `dg`: `check --rebuild` (0 gaps), then an edit of
-`lib/document_access/db.ml` and an ordinary `make build`, then `check` without
-`--rebuild`: 0 gaps and 0 violations.
+When accepted, an acceptance suite edited an unrelated source and an unrelated
+Dune file, ran an ordinary `dune build`, and required the real MLX unit to stay
+current; on `dg`, `check --rebuild`, an unrelated edit and an ordinary
+`make build` left 0 gaps. That suite was removed with the call-graph pipeline;
+the receipt behaviour now serves `complexity` and is covered only by the
+action-preprocessor regression in `test/complexity/run.ts`.

@@ -13,6 +13,8 @@ absent: ConformanceEngine does not judge this number.
 
 ProgramAccess extracts definitions and counts decisions from the typed
 tree of a fresh, supported `.cmt`. CheckClient renders the inventory.
+Complexity is independent of `szaniec check`: it needs compiler artifacts,
+the check does not.
 A definition the metric cannot measure is a gap with null complexity.
 A measured straight-line cognitive score of 0 is valid.
 
@@ -106,7 +108,8 @@ are visited without an increment for the send itself. Anonymous functions passed
 as method arguments retain their own inventory entries and scores. Resolving the
 method implementation is not required by this local, syntactic measurement.
 
-Executable examples in `test/complexity/run.ts` prove the intended distinction:
+Executable examples in `test/complexity/run.ts` and the specimens of
+`test/complexity/fixture.ts` prove the intended distinction:
 a flat 20-arm dispatcher scores **1** (cyclomatic 20), seven nested binary
 matches score **28** (cyclomatic 8), and three sequential Result bindings
 score **0** (cyclomatic 1). The suite also covers boolean sequences, guards,
@@ -114,9 +117,8 @@ else-if chains, defaults, recursion, callbacks and cached metric selection.
 
 ## Legacy cyclomatic decision count: szaniec-cc/1
 
-Select with `--metric cyclomatic` or `[complexity].metric = "cyclomatic"`.
-This remains available for path-count analysis and CRAP; cognitive scores
-must never be substituted into the CRAP formula.
+Select with `--metric cyclomatic`. This remains available for path-count
+analysis; cognitive scores are not path counts.
 
 The complexity of a measured body is `1 + decisions`. Only nodes whose
 location is not a compiler ghost location contribute. Ghost locations
@@ -163,32 +165,56 @@ An object or a class construction inside a function makes that
 function `unmeasurable`. Its complexity is null. The report carries
 `GAP-UNMEASURABLE` and status `incomplete`. A class definition at
 module scope produces the same gap. These gaps belong to the complexity
-report. They are not conformance findings.
+report. They are not `check` findings.
 
-## Provenance and ownership
+## Provenance
 
 - `authored` — an in-scope implementation file.
 - `test` — a path segment `test` or `tests`.
 - `generated` — a `.ml-gen` wrapper, or a definition whose own location
   is a ghost location (a compiler- or ppx-inserted function).
 
-Dune wrapper units are inventoried with provenance `generated`. They
-stay out of the conformance unit list. A `.ml-gen` path that dune keeps
-only under `_build` is not a stale project source: the artifact is
-measured, and the coverage row stays `generated` / `measured`.
+Dune wrapper units are inventoried with provenance `generated`. A `.ml-gen`
+path that dune keeps only under `_build` is not a stale project source: the
+artifact is measured, and the coverage row stays `generated` / `measured`.
 
-Module ownership travels with the canonical unit. Service ownership is
-joined from the interpretation when the unit has one. A missing class
-does not drop the function: `ownership` is `unclassified` and `service`
-is null. A direct module-level function whose name is a declared `rpc`
-method of that service is reported as `binding: "rpc"`. Every other
-definition is `binding: "function"`.
+Service ownership is not part of this report. Earlier versions joined
+`service`, `ownership` and `binding: "rpc"` from the removed call-graph
+interpretation, and `inputs.policyName`, `policyDigest` and `approved` from
+the removed `szaniec.toml`; those fields are gone. Which library a function
+belongs to follows from its `location.path` and `module`.
+
+## Invocation
+
+```text
+szaniec complexity [--project-root <dir>] [--rebuild] [--build <command>]
+                   [--root <dir>]... [--json] [--sort location|complexity]
+                   [--metric cognitive|cyclomatic]
+```
+
+There is no configuration file. `--project-root` defaults to the current
+directory. `--root` selects a source directory relative to the project root
+and may be repeated; the default is `lib`. `--rebuild` first runs the build
+command through `/bin/sh` in the project root, with its output on stderr;
+`--build` sets that command (default `dune build`) and requires `--rebuild`.
+After a successful rebuild every existing artifact is current; without
+`--rebuild`, each artifact is checked against its source, interface and
+imports, and anything stale becomes a gap. A failing build command is
+`GAP-BUILD` and makes the report incomplete.
+
+The DG project runs:
+
+```sh
+szaniec complexity --rebuild --build "make build" --root lib \
+  --metric cognitive --json --sort complexity
+```
 
 ## Report
 
-`szaniec complexity` defaults to Cognitive Complexity and prints the inventory as text or as one JSON
-document (`--json`). `--metric cognitive|cyclomatic` overrides the configured
-metric. The report and every entry carry the selected metric identifier; the
+`szaniec complexity` defaults to Cognitive Complexity and prints the
+inventory as text or, with `--json`, as one JSON document on a single line
+that starts with `{"format":"szaniec-complexity/1"` (consumers locate the
+report by that prefix). `--metric cognitive|cyclomatic` selects the metric. The report and every entry carry the selected metric identifier; the
 JSON format stays `szaniec-complexity/1`. Consumers must check `metric` rather
 than assume that `complexity` is a path count. Default order is source order
 (`path`, `line`, `col`, `id`). `--sort complexity` orders by descending
@@ -207,6 +233,37 @@ coverage means the typedtree is not a complete implementation (the
 source did not type-check) or the walk failed; that file contributes
 no function records and a `GAP-UNMEASURABLE` entry. A measured file
 may still list individual functions with null complexity when only
-those bodies contain an unsupported construct. Policy approval is
-recorded on the report and does not by itself make the inventory
-incomplete.
+those bodies contain an unsupported construct.
+
+JSON shape (abridged):
+
+```json
+{"format":"szaniec-complexity/1","metric":"szaniec-cognitive/1",
+ "status":"ok","sort":"complexity",
+ "inputs":{"profile":"ocaml-5.4","programRoots":["lib"],
+           "snapshotDigest":"…","compiler":"5.4",
+           "programAccess":"szaniec-ocaml-adapter/2.0.0"},
+ "functions":[{"id":"App.Orders.place","name":"place","qualname":"place",
+   "kind":"named","nested":false,"provenance":"authored",
+   "module":"App.Orders","location":{"path":"lib/orders.ml","line":3,"col":0},
+   "end":{"line":9,"col":12},"complexity":4,"status":"measured",
+   "metric":"szaniec-cognitive/1"}],
+ "coverage":[{"path":"lib/orders.ml","provenance":"authored",
+   "status":"measured","functions":1}],
+ "gaps":[{"code":"GAP-STALE-ARTIFACT","path":"…","detail":"…"}],
+ "exclusions":["…"],
+ "summary":{"functions":1,"measured":1,"unmeasurable":0,
+            "maxComplexity":4,"gaps":0}}
+```
+
+Gap codes: `GAP-BUILD`, `GAP-STALE-ARTIFACT`, `GAP-MISSING-INPUT`,
+`GAP-UNVERIFIABLE-TRANSFORMATION`, `GAP-UNOBSERVED-SOURCE`,
+`GAP-ARTIFACT-READ`, `GAP-UNSUPPORTED-COMPILER`, `GAP-UNMEASURABLE`.
+
+ProgramAccess caches per-artifact measurements under
+`_build/.szaniec-observations` and revalidates source and artifact digests on
+every run; `SZANIEC_OBSERVATION_CACHE=off` disables it. Preprocessed inputs
+(ppx, MLX) are trusted when Dune rewrote them in the same build or when a
+transformation receipt recorded by a `--rebuild` run still matches; see
+[PPX rewriter trust](../decisions/ppx-rewriter-trust.md) and
+[transformation receipt scope](../decisions/transformation-receipt-scope.md).

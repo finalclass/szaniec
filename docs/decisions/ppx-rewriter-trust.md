@@ -1,20 +1,22 @@
 # Trust Dune-managed PPX rewrites
 
-Status: accepted (adapter `szaniec-ocaml-adapter/1.12.0`).
+Status: accepted (adapter `szaniec-ocaml-adapter/1.12.0`); since
+`2.0.0` it applies to `szaniec complexity` only.
 
 ## Context
 
 Before this decision every transformed compiler input needed a local receipt
-written by `check --rebuild`. A receipt identity covers the digest of all project
+written by `check --rebuild` (now `complexity --rebuild`). A receipt identity covers the digest of all project
 build inputs, so any edit followed by an ordinary build turned every transformed
 unit into `GAP-UNVERIFIABLE-TRANSFORMATION`. On the `dg` application this produced
 548 such gaps from `ppx_deriving` and `well.ppx` alone. A complete
 `--rebuild` check took 22 minutes in one measurement taken while another
 test suite was running.
 
-PPX rewriters are not used to introduce calls between services. They do emit
-calls that matter for architecture: `well.ppx` expands `let%query` into direct
-SQLite access.
+PPX rewriters are not used to introduce calls between services. (At the time
+the generated code also mattered for call-graph evidence; architecture is now
+checked from dune files, so this trust only decides whether a measured
+function body is current.)
 
 ## Decision
 
@@ -25,13 +27,12 @@ rewriter and its `preprocessor_deps` as build dependencies, so the compiled
 compiler digest matches `x.pp.ml` and Dune's `_build` copy of the source equals
 the authored file. No receipt or `--rebuild` is needed.
 
-Generated code is still analyzed. Skipping it would hide `let%query` resource
-access, so rewrites are trusted for freshness only, never excluded from evidence.
+Generated code is still measured; rewrites are trusted for freshness only,
+never excluded from the inventory.
 
 The trust does not cover:
 
-- MLX (`.mlx.pp.ml`, `.mlx.ml`). MLX is the client layer, where direct calls to
-  Access services must be detected; it keeps receipt evidence.
+- MLX (`.mlx.pp.ml`, `.mlx.ml`), which keeps receipt evidence.
 - action preprocessors and `per_module` specifications;
 - transformations applied through compiler `-pp`/`-ppx` flags, which Dune does
   not track as rewriter dependencies.
@@ -42,13 +43,13 @@ hide the following stanza.
 
 ## Verification
 
-`test/acceptance/ppx_rewriters.ts` builds the tasks-app fixture with a
-compiler-libs PPX driver through an ordinary `dune build` and checks that:
+When accepted, an acceptance suite built a fixture with a compiler-libs PPX
+driver through an ordinary `dune build` and checked that the external build is
+current without `--rebuild`, an unbuilt authored edit is `GAP-STALE-ARTIFACT`,
+and compiler-applied `-pp` still requires a receipt. On `dg` after an ordinary
+`make build`, the gaps fell from 636 to 33, all from MLX units.
 
-- the external build is current without `--rebuild`;
-- an unbuilt authored edit is `GAP-STALE-ARTIFACT`;
-- a client-to-access call emitted by the rewriter is `ID-CLIENT-ACCESS`;
-- compiler-applied `-pp` still requires a receipt.
-
-On `dg` after an ordinary `make build`, the gaps fell from 636 to 33, all from
-MLX units and paths through them.
+That suite was removed with the call-graph pipeline. The current regression
+(`test/complexity/run.ts`) covers only the action-preprocessor case: an
+external build of a transformed file is `GAP-UNVERIFIABLE-TRANSFORMATION`
+until `complexity --rebuild` records a receipt.

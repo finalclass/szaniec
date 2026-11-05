@@ -25,9 +25,10 @@ this local cycle detector's scope.
 The report shape remains `szaniec-complexity/1`; both the report and its entries
 identify their metric. Consumers must validate that identifier. The default
 changes the meaning of the numeric field, including allowing measured zeroes.
-`--metric cyclomatic` and `[complexity].metric = "cyclomatic"` retain
-`szaniec-cc/1` for explicit path-count uses. CRAP still requires cyclomatic
-input and rejects cognitive, missing and unknown metric identifiers.
+`--metric cyclomatic` retains `szaniec-cc/1` for explicit path-count uses.
+(The configuration key and the CRAP calculation that consumed cyclomatic
+scores were removed with `szaniec.toml` and `szaniec coverage`; see
+[dune structural enforcement](dune-structural-enforcement.md).)
 
 ProgramAccess records both scores in one measurement walk. Observation format
 `szaniec-observation/7` and OCaml adapter `1.9.0` invalidate earlier extraction
@@ -47,10 +48,9 @@ is a separate project policy decision.
 `test/complexity/run.ts` checks hand-derived cognitive and cyclomatic scores
 on compiled source, including dispatch, deep nesting, boolean sequences, guards,
 else-if chains, exception handling, optional defaults, refutable parameters,
-Result operators, callbacks and recursion. It also checks cache determinism,
-configuration selection and CLI override. The existing complexity acceptance
-suite retains stale/unreadable/unsupported evidence and deterministic reporting.
-Coverage unit tests reject the wrong metric before calculating CRAP.
+Result operators, callbacks and recursion. It also checks cache determinism
+and metric selection. `test/complexity/fixture.ts` retains the fixture
+specimens, stale/partial/unsupported evidence and deterministic reporting.
 
 Method sends retain receiver and argument decisions without requiring a resolved
 implementation, as ordinary function calls do. The compiled metric examples cover
