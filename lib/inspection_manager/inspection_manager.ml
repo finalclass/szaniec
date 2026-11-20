@@ -26,11 +26,22 @@ let check ~(project_root : string) : (Conformance.report, check_error) result =
         ~directories:project.Structure.directories
     with
     | Error message -> Error {error_at= None; error_message= message}
-    | Ok services ->
-        Ok
-          (Szaniec_conformance_engine.Conformance_engine.evaluate
-             ~project
-             ~services ) )
+    | Ok services -> (
+      match
+        Szaniec_source_access.Source_access.comments
+          ~root:project_root
+          ~directories:project.Structure.directories
+      with
+      | Error e ->
+          Error
+            { error_at= Some e.Szaniec_source_access.Source_access.error_at
+            ; error_message= e.error_message }
+      | Ok comments ->
+          Ok
+            (Szaniec_conformance_engine.Conformance_engine.evaluate
+               ~project
+               ~services
+               ~comments ) ) )
 
 type complexity_request =
   { project_root: string

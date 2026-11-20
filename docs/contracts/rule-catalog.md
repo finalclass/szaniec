@@ -1,7 +1,7 @@
-# Rule catalog: szaniec-check/2, profile well-ocaml
+# Rule catalog: szaniec-check/3, profile well-ocaml
 
-The rules judge declared dune dependencies (see the
-[check contract](check-contract.md)). They follow the closed architecture
+The rules judge declared dune dependencies and the comments in source
+files (see the [check contract](check-contract.md)). They follow the closed architecture
 and design don'ts of Juval Löwy's *Righting Software* (chapter 3). This is
 not an official IDesign product. The OCaml source of truth is
 `lib/conformance_engine/rule_catalog.ml` (ids and coaching) and
@@ -293,6 +293,16 @@ When: `well.subscribe` used by anything other than a Manager, a Client, a Utilit
 Coaching:
 
 > Only Managers and Clients subscribe to events. Engines and ResourceAccess are called by Managers; if they must react to an event, the subscribing Manager calls them. Do not edit dune files, rename libraries or move code into a Utility just to silence this finding; change the design.
+
+### SOURCE-COMMENT
+
+Source code contains a comment.
+
+When: A source file read by SourceAccess (see the [check contract](check-contract.md#source-files)) contains a comment of any kind: line, block or documentation comment, including tool directives written as comments (`// deno-lint-ignore`, `// @ts-expect-error`, `/// <reference>`, `#requires`). A shebang on the first line is not a comment. Location: the first character of the comment; `end` is the position just after it.
+
+Coaching:
+
+> Source code carries no comments: not explanations, not documentation comments, not notes about work left for later and not directives that silence a linter, formatter or type checker. Make the code say what the comment said. Name the function, value, type or module after its intent; extract a well-named function for a step that needed a remark; encode an assumption in a type or a checked condition. A comment about missing, temporary or wrong behaviour is not a substitute for the work: build or fix it now. Change code that a tool directive was hiding until the tool accepts it. Record design rationale in the repository documentation. Only a shebang on the first line of a script is allowed.
 
 ### PRESENTATION-BOUNDARY
 

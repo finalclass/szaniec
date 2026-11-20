@@ -1,6 +1,6 @@
 # Contract: szaniec check
 
-Report identifier: `szaniec-check/2`. Profile: `well-ocaml`.
+Report identifier: `szaniec-check/3`. Profile: `well-ocaml`.
 Rules: [rule catalog](rule-catalog.md). Rationale:
 [dune structural enforcement](../decisions/dune-structural-enforcement.md).
 
@@ -18,7 +18,7 @@ go to stderr.
 |---|---|
 | 0 | conforming: no findings |
 | 1 | violations: at least one finding |
-| 2 | usage error, unreadable file, unparseable dune file, missing `dune-project` |
+| 2 | usage error, unreadable file, unparseable dune file, unreadable source file, missing `dune-project` |
 
 On exit 2 nothing is printed to stdout; stderr carries
 `szaniec: path:line:col: message` when a location is known.
@@ -59,6 +59,37 @@ ArchitectureAccess reads `.cyrograf` files in the walked directories; a file
 with at least one `rpc name(Req) -> Res` line is a service named after its
 file stem.
 
+## Source files
+
+SourceAccess reads the source files in the directories ProjectAccess walked
+(so `_build`, `.`/`_` directories, directories excluded by `(dirs ...)` and
+vendored directories are never read). Inside a git work tree it reads only
+files git lists as tracked or untracked-and-not-ignored
+(`git ls-files --cached --others --exclude-standard`), so generated files
+covered by `.gitignore` are skipped; outside a git work tree it reads every
+file of those directories.
+
+| Language | Files | Comments recognised |
+|---|---|---|
+| OCaml | `.ml`, `.mli`, `.mlx` | `(* *)` nested, `(** *)` documentation; strings, quoted strings `{id\|…\|id}` / `{%ext\|…\|}` and character literals are skipped |
+| TypeScript, JavaScript | `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`; scripts run by `deno`, `bun`, `node` | `//`, `/* */`, `/** */`; strings, template literals with nested `${}` and regular expression literals are skipped |
+| C | `.c`, `.h` | `//`, `/* */` |
+| CSS | `.css` | `/* */` |
+| shell | `.sh`, `.bash`; scripts run by `sh`, `bash`, `dash`, `zsh`, `ksh` | `#` at the start of a word; quotes, `$'…'`, `${…}`, `$((…))`, `$#` and here-documents are skipped |
+| PowerShell | `.ps1`, `.psm1`, `.psd1`; scripts run by `pwsh` | `#` at the start of a token, `<# #>`; strings and here-strings are skipped |
+| VBA | `.bas`, `.cls`, `.frm` | `'` and `Rem` statements |
+| Power Query M | `.pq`, `.pqm` | `//`, `/* */`; strings and `#"…"` identifiers are skipped |
+| batch | `.cmd`, `.bat` | `rem` and `::` lines |
+
+An extensionless file starting with `#!` is read in the language of its
+interpreter (`/usr/bin/env` and its options are skipped); any other
+interpreter fails the check (exit 2). Other files (Markdown, JSON, TOML,
+YAML, dune, Makefiles, `.cyrograf` contracts) are not source code for this
+check. A shebang on line 1 is never a finding. An unterminated comment,
+string or here-document fails the check (exit 2) at its opening position.
+Code embedded in string literals (CSS in a template literal, a shell script
+in a TypeScript string) is string content and is not read.
+
 ## Classification
 
 See the table in the [decision record](../decisions/dune-structural-enforcement.md#naming-conventions-are-the-policy).
@@ -77,7 +108,7 @@ Otherwise it is evaluated like a project library, and its endpoint kind is
 
 ```json
 {
-  "format": "szaniec-check/2",
+  "format": "szaniec-check/3",
   "status": "violations",
   "project": "/abs/path",
   "profile": "well-ocaml",
@@ -97,6 +128,7 @@ Otherwise it is evaluated like a project library, and its endpoint kind is
      "to": {"name": "task_access_api", "kind": "library", "class": "facet",
             "role": "access"},
      "location": {"path": "lib/admin/dune", "line": 3, "col": 13},
+     "end": null,
      "message": "Client admin_client depends on facet task_access_api of ResourceAccess TaskAccess",
      "coaching": "Clients enter the business layer only through a Manager. …"}
   ]
@@ -109,11 +141,17 @@ Otherwise it is evaluated like a project library, and its endpoint kind is
   `engine`, `access`, `utility`, or null for roots and tests; `service` is
   the owning service or null. `location` is the name atom.
 - `from`/`to` endpoints: `kind` is a stanza kind, `undefined-library`,
-  `external`, `dune-project`, `directory`, `construct` or `setting`;
+  `external`, `dune-project`, `directory`, `construct`, `setting`,
+  `source-file` or `comment`;
   `class` is a component class, `external`, `external:<category>`
   (`framework`, `resource`, `publish`, `subscribe`, `presentation`),
   `project` or `dune`.
-- `location` is the offending atom: the dependency name, the field name of
+- For `SOURCE-COMMENT`, `from` is `{"name": <path>, "kind": "source-file",
+  "class": <language>}`, `to` is `{"name": "line comment" | "block comment" |
+  "documentation comment", "kind": "comment", "class": "source"}`, and `end`
+  is the position just after the comment (it does not include the line
+  break). `end` is null for every other rule.
+- `location` is the first character of a comment, or the offending atom: the dependency name, the field name of
   an unsupported construct, the `copy_files` glob, or the
   `implicit_transitive_deps` / `lang` value in `dune-project` (1:1 when
   neither exists).

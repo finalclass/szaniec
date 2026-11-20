@@ -74,3 +74,21 @@ type service =
   { service_name: string (* file stem, e.g. "AIAccess" *)
   ; service_source: string (* relative path of the .cyrograf file *)
   ; service_methods: string list }
+
+type comment_kind =
+  | Line_comment
+  | Block_comment
+  | Documentation_comment
+  | Shebang
+
+let comment_kind_name = function
+  | Line_comment -> "line comment"
+  | Block_comment -> "block comment"
+  | Documentation_comment -> "documentation comment"
+  | Shebang -> "shebang"
+
+type comment =
+  { comment_language: string
+  ; comment_kind: comment_kind
+  ; comment_at: position
+  ; comment_end: position }

@@ -210,6 +210,20 @@ let rules =
          ResourceAccess are called by Managers; if they must react to an \
          event, the subscribing Manager calls them."
         ^ no_silencing }
+  ; { id= "SOURCE-COMMENT"
+    ; title= "source code contains a comment"
+    ; coaching=
+        "Source code carries no comments: not explanations, not documentation \
+         comments, not notes about work left for later and not directives that \
+         silence a linter, formatter or type checker. Make the code say what \
+         the comment said. Name the function, value, type or module after its \
+         intent; extract a well-named function for a step that needed a \
+         remark; encode an assumption in a type or a checked condition. A \
+         comment about missing, temporary or wrong behaviour is not a \
+         substitute for the work: build or fix it now. Change code that a tool \
+         directive was hiding until the tool accepts it. Record design \
+         rationale in the repository documentation. Only a shebang on the \
+         first line of a script is allowed." }
   ; { id= "PRESENTATION-BOUNDARY"
     ; title= "presentation outside a Client"
     ; coaching=

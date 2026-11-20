@@ -4,6 +4,7 @@
   szaniec_model
   szaniec_project_access
   szaniec_architecture_access
+  szaniec_source_access
   szaniec_conformance_engine
   szaniec_program_access
   unix))

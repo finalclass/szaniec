@@ -1,7 +1,7 @@
 # Szaniec
 
-**Protect an IDesign architecture expressed as dune libraries, and measure
-OCaml Cognitive Complexity.**
+**Protect an IDesign architecture expressed as dune libraries, keep source
+code free of comments, and measure OCaml Cognitive Complexity.**
 
 Szaniec is a local CLI for people and coding agents working on the DG
 project. Architecture is enforced by structure: every service is its own
@@ -18,7 +18,7 @@ IDesign product.
 
 | Command | Status | Purpose |
 |---|---|---|
-| `szaniec check` | works | Check dune dependencies against IDesign rules; no build, no config |
+| `szaniec check` | works | Check dune dependencies against IDesign rules and reject comments in source code; no build, no config |
 | `szaniec complexity` | works | Inventory functions and their Cognitive Complexity from compiler artifacts |
 
 `init`, `approve`, `coverage`, `suggestions`, `szaniec.toml` and the
@@ -37,6 +37,10 @@ What works:
   `ppx_runtime_libraries`, `public_name` resolution, and every comment form.
 - Classification of dependency names by convention even when the library is
   generated and absent from the tree.
+- `SOURCE-COMMENT`: every comment in OCaml, TypeScript/JavaScript, C, CSS,
+  shell, PowerShell, VBA, Power Query M and batch sources is a violation,
+  including documentation comments and tool directives; only a shebang is
+  allowed. Files git ignores are not read.
 - `szaniec check` on the migrated DG (22 services, 145 stanzas) takes about
   30 ms.
 - `szaniec complexity` with `szaniec-cognitive/1` and `szaniec-cc/1` for
@@ -44,6 +48,8 @@ What works:
 
 What does not:
 
+- Comments inside code embedded in string literals (CSS in a template
+  literal, a shell script in a TypeScript string) are not detected.
 - `check` judges declared dependencies only. It relies on
   `(implicit_transitive_deps false)` for the guarantee that code uses
   nothing else; without it the check reports `DUNE-TRANSITIVE` and the

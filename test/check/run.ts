@@ -23,6 +23,7 @@ type Finding = {
   from: Endpoint;
   to: Endpoint;
   location: Position;
+  end: Position | null;
   message: string;
   coaching: string;
 };
@@ -97,7 +98,7 @@ Deno.test("conforming project exits 0 with classified components", async () => {
   const dir = `${fixtures}/conforming`;
   const { code, json } = await report(dir);
   assert(code === 0, `exit ${code}: ${JSON.stringify(json.findings)}`);
-  assert(json.format === "szaniec-check/2", "format");
+  assert(json.format === "szaniec-check/3", "format");
   assert(json.status === "conforming" && json.findings.length === 0, "status");
   assert(json.profile === "well-ocaml", "profile");
   assert(
@@ -730,6 +731,89 @@ Deno.test("unparseable dune files and missing projects exit 2", async () => {
   }
 });
 
+Deno.test("comments in every source language are violations; shebangs are not", async () => {
+  const { code, json } = await report(`${fixtures}/comments`);
+  assert(code === 1 && json.status === "violations", `exit ${code}`);
+  const seen = json.findings.map((f) => {
+    assert(f.rule === "SOURCE-COMMENT", `rule ${f.rule}`);
+    assert(f.from.kind === "source-file" && f.to.kind === "comment", "kinds");
+    return `${f.location.path}:${f.location.line}:${f.location.col}-${f.end?.line}:${f.end?.col} ${f.from.class} ${f.to.name}`;
+  });
+  const expected = [
+    "integrations/Module.bas:2:12-2:25 VBA line comment",
+    "integrations/Module.bas:3:3-3:10 VBA line comment",
+    "integrations/query.pq:1:31-1:43 Power Query M line comment",
+    "integrations/start.cmd:2:1-2:10 batch line comment",
+    "integrations/start.cmd:3:1-3:8 batch line comment",
+    "integrations/tool.ps1:1:4-1:21 PowerShell line comment",
+    "integrations/tool.ps1:2:14-2:24 PowerShell line comment",
+    "integrations/tool.ps1:3:1-3:12 PowerShell block comment",
+    "lib/sample/sample.ml:2:1-2:12 OCaml block comment",
+    "lib/sample/sample.ml:5:1-5:21 OCaml documentation comment",
+    "lib/sample/sample.ml:7:16-7:44 OCaml block comment",
+    "scripts/run:6:1-6:16 shell line comment",
+    "styles/site.css:1:70-1:79 CSS block comment",
+    "web/app.ts:2:36-2:47 TypeScript line comment",
+    "web/app.ts:5:1-5:21 TypeScript documentation comment",
+    "web/app.ts:6:29-6:40 TypeScript block comment",
+  ];
+  assert(
+    JSON.stringify(seen) === JSON.stringify(expected),
+    `findings ${JSON.stringify(seen, null, 1)}`,
+  );
+});
+
+Deno.test("comment check skips files git ignores and reads untracked ones", async () => {
+  const root = await copy("conforming");
+  try {
+    const git = (...args: string[]) =>
+      new Deno.Command("git", { args: ["-C", root, ...args] }).output();
+    assert((await git("init", "-q")).success, "git init");
+    await Deno.mkdir(`${root}/generated`);
+    await Deno.writeTextFile(`${root}/.gitignore`, "generated/\n");
+    await Deno.writeTextFile(`${root}/generated/gen.ml`, "(* generated *)\n");
+    const clean = await report(root);
+    assert(
+      clean.code === 0,
+      `ignored file reported: ${JSON.stringify(clean.json.findings)}`,
+    );
+    await Deno.writeTextFile(
+      `${root}/fresh.ts`,
+      "export const a = 1; // new\n",
+    );
+    const fresh = await report(root);
+    assert(
+      fresh.code === 1 && fresh.json.findings.length === 1 &&
+        fresh.json.findings[0].location.path === "fresh.ts",
+      `untracked file: ${JSON.stringify(fresh.json.findings)}`,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("unterminated comments and unknown script interpreters fail the check", async () => {
+  const cases: [string, string, string][] = [
+    ["lib/open.ml", "let a = 1\n(* never closed\n", "lib/open.ml:2:1:"],
+    ["web/open.ts", "const a = `never closed;\n", "web/open.ts:1:11:"],
+    ["tools/run", "#!/usr/bin/env python3\nprint(1)\n", "tools/run:1:1:"],
+  ];
+  for (const [file, text, location] of cases) {
+    const root = await copy("conforming");
+    try {
+      await Deno.mkdir(`${root}/${file.slice(0, file.lastIndexOf("/"))}`, {
+        recursive: true,
+      });
+      await Deno.writeTextFile(`${root}/${file}`, text);
+      const r = await check(root, "--json");
+      assert(r.code === 2 && r.stdout === "", `${file}: exit ${r.code}`);
+      assert(r.stderr.includes(location), `${file}: ${r.stderr}`);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+});
+
 Deno.test("check never reads _build", async () => {
   const root = await copy("conforming");
   try {
@@ -751,7 +835,7 @@ Deno.test("every catalog rule is exercised and documented verbatim", async () =>
     new URL("../../docs/contracts/rule-catalog.md", import.meta.url),
   );
   const documented = [...doc.matchAll(/^### ([A-Z-]+)$/gm)].map((m) => m[1]);
-  assert(documented.length === 23, `documented rules ${documented.length}`);
+  assert(documented.length === 24, `documented rules ${documented.length}`);
   for (const rule of documented) {
     const text = coaching.get(rule);
     assert(text, `${rule} is never reported by the tests`);

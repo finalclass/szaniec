@@ -45,6 +45,10 @@ let json (r : report) : string =
       ; ("from", endpoint_json f.from_)
       ; ("to", endpoint_json f.to_)
       ; ("location", position_json f.at)
+      ; ( "end"
+        , match f.until with
+          | Some p -> position_json p
+          | None -> `Null )
       ; ("message", `String f.message)
       ; ("coaching", `String f.coaching) ]
   in

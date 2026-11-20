@@ -14,6 +14,10 @@ compiler reject any use of a library that is not a direct dependency, this
 enforces the architecture without analyzing calls. Whether the architecture
 was correctly decomposed around volatility is outside the product's scope.
 
+The same check rejects every comment in the project's source code
+(`SOURCE-COMMENT`): code must explain itself through names and structure,
+and a comment must never stand in for unbuilt or unfixed behaviour.
+
 `szaniec complexity` inventories every OCaml function from compiler-typed
 artifacts and reports its local Cognitive Complexity. It is a measurement,
 not a conformance rule.
@@ -26,6 +30,7 @@ not a conformance rule.
 | Use-case sequence | New inputs to a check, build before measuring | InspectionManager |
 | Reading the build description | dune syntax, directory rules, stanza forms | ProjectAccess |
 | Reading the approved services | `.cyrograf` syntax and location | ArchitectureAccess |
+| Reading source comments | Language comment syntaxes, which files are source (git ignore rules) | SourceAccess |
 | Reading compiler artifacts | Compiler version, `.cmt` format, preprocessors | ProgramAccess |
 | Conformance criteria | Naming conventions, role matrix, library profile, coaching | ConformanceEngine |
 
@@ -51,6 +56,7 @@ How
 How-to-access -> Where
 - [ProjectAccess]->(DuneFiles)
 - [ArchitectureAccess]->(CyrografContracts)
+- [SourceAccess]->(SourceFiles)
 - [ProgramAccess]->(CompilerArtifacts)
 ```
 
@@ -60,13 +66,15 @@ How-to-access -> Where
 | InspectionManager | `szaniec_inspection_manager` | Run `check` (read, then evaluate) and `complexity` (build, then measure) |
 | ProjectAccess | `szaniec_project_access` | Walk the tree like dune; parse `dune-project` and `dune` files into stanzas, dependencies and positions |
 | ArchitectureAccess | `szaniec_architecture_access` | Read `.cyrograf` files in the walked directories; return services |
+| SourceAccess | `szaniec_source_access` | Read the source files in the walked directories that git does not ignore; return their comments |
 | ProgramAccess | `szaniec_program_access` | Check `.cmt` freshness and measure every syntactic function |
 | ConformanceEngine | `szaniec_conformance_engine` | Classify stanzas and dependency names, evaluate rules, attach coaching |
 
 Permitted calls: CheckClient calls InspectionManager. InspectionManager calls
-ProjectAccess, ArchitectureAccess, ConformanceEngine and ProgramAccess.
-Access components do not call each other: InspectionManager passes the
-directories walked by ProjectAccess to ArchitectureAccess. ConformanceEngine
+ProjectAccess, ArchitectureAccess, SourceAccess, ConformanceEngine and
+ProgramAccess. Access components do not call each other: InspectionManager
+passes the directories walked by ProjectAccess to ArchitectureAccess and
+SourceAccess. ConformanceEngine
 is pure: it receives facts and returns a report, and reads no files.
 CheckClient does not call Access components or the Engine.
 
@@ -89,11 +97,15 @@ these permitted calls are enforced by the compiler in this repository too.
    `_build`. A file that cannot be parsed fails the check (exit 2).
 2. ArchitectureAccess reads the services from `.cyrograf` files with `rpc`
    methods in the walked directories.
-3. ConformanceEngine classifies every stanza and every dependency name by
+3. SourceAccess reads the source files of the walked directories that git
+   does not ignore and lexes each language's comments. An unterminated
+   comment or string fails the check (exit 2).
+4. ConformanceEngine classifies every stanza and every dependency name by
    naming convention (service implementation, contract family, facet,
    composition root, local component), assigns roles, and evaluates each
-   declared dependency. Findings carry the rule id, both endpoints, the
-   `path:line:col` of the offending atom, a message and coaching.
+   declared dependency; every comment except a shebang is a finding.
+   Findings carry the rule id, both endpoints, the `path:line:col` of the
+   offending atom or comment, a message and coaching.
 
 The rules, conventions and coaching are the
 [rule catalog](docs/contracts/rule-catalog.md); the invocation and report

@@ -1,0 +1,6 @@
+#!/bin/sh
+echo "$#" ${#HOME} "a # b" 'c # d' a#b $((1 << 2))
+cat <<'EOF2'
+# inside a here-document
+EOF2
+# shell comment

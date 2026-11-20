@@ -59,6 +59,7 @@ type finding =
   ; from_: endpoint
   ; to_: endpoint
   ; at: Structure.position
+  ; until: Structure.position option
   ; message: string
   ; coaching: string }
 

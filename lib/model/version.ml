@@ -1,7 +1,7 @@
 (* Versions of Szaniec's output contracts and the measurement adapter.
    Bumped together with the documents under docs/contracts. *)
 
-let check_format = "szaniec-check/2"
+let check_format = "szaniec-check/3"
 
 let complexity_format = "szaniec-complexity/1"
 

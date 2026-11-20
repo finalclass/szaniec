@@ -194,7 +194,44 @@ let endpoint_of (c : component) =
   ; endpoint_role= c.component_role }
 
 let finding rule ~from_ ~to_ ~at message =
-  {rule; from_; to_; at; message; coaching= (Rule_catalog.find rule).coaching}
+  { rule
+  ; from_
+  ; to_
+  ; at
+  ; until= None
+  ; message
+  ; coaching= (Rule_catalog.find rule).coaching }
+
+let comment_findings (comments : comment list) : finding list =
+  List.filter_map
+    (fun (c : comment) ->
+      match c.comment_kind with
+      | Shebang -> None
+      | kind ->
+          let kind_name = comment_kind_name kind in
+          Some
+            { (finding
+                 "SOURCE-COMMENT"
+                 ~from_:
+                   { endpoint_name= c.comment_at.path
+                   ; endpoint_kind= "source-file"
+                   ; endpoint_class= c.comment_language
+                   ; endpoint_role= None }
+                 ~to_:
+                   { endpoint_name= kind_name
+                   ; endpoint_kind= "comment"
+                   ; endpoint_class= "source"
+                   ; endpoint_role= None }
+                 ~at:c.comment_at
+                 (Printf.sprintf
+                    "%s %s ends at %d:%d; source code must explain itself"
+                    c.comment_language
+                    kind_name
+                    c.comment_end.line
+                    c.comment_end.col ) )
+              with
+              until= Some c.comment_end } )
+    comments
 
 let version_at_least (v : string) (major, minor) =
   match String.split_on_char '.' v |> List.map int_of_string_opt with
@@ -255,7 +292,10 @@ let transitive_findings (project : project) : finding list =
       | _ -> [] )
     project.dune_projects
 
-let evaluate ~(project : project) ~(services : service list) : report =
+let evaluate
+    ~(project : project)
+    ~(services : service list)
+    ~(comments : comment list) : report =
   let by_key = Hashtbl.create 32 in
   List.iter (fun s -> Hashtbl.replace by_key (key s.service_name) s) services ;
   let components =
@@ -495,6 +535,7 @@ let evaluate ~(project : project) ~(services : service list) : report =
            u.detail ) )
     project.unsupported ;
   List.iter add (transitive_findings project) ;
+  List.iter add (comment_findings comments) ;
   let order (a : finding) (b : finding) =
     compare
       (a.at.path, a.at.line, a.at.col, a.rule, a.to_.endpoint_name)

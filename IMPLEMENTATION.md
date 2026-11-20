@@ -7,7 +7,8 @@ are in [dune structural enforcement](docs/decisions/dune-structural-enforcement.
 
 Two commands:
 
-- `szaniec check` — dune-file conformance for the `well-ocaml` profile.
+- `szaniec check` — dune-file conformance for the `well-ocaml` profile and
+  comment-free source code.
   Contracts: [check contract](docs/contracts/check-contract.md),
   [rule catalog](docs/contracts/rule-catalog.md).
 - `szaniec complexity` — local Cognitive Complexity inventory.
@@ -49,6 +50,9 @@ editor integration, servers and databases.
 | Missing, disabled or too-old `implicit_transitive_deps` | `DUNE-TRANSITIVE`, exit 1 | `test/check/run.ts` |
 | Unparseable dune file or missing `dune-project` | Exit 2 with `path:line:col`, no report | `test/check/run.ts` |
 | `_build` contains dune or `.cyrograf` files | Ignored | `test/check/run.ts` |
+| Comments in every supported source language, next to look-alikes in strings, regular expressions, here-documents and character literals | One `SOURCE-COMMENT` per comment with start and end; shebangs not reported | `test/check/run.ts` |
+| Git-ignored and untracked source files | Ignored files skipped, untracked files read | `test/check/run.ts` |
+| Unterminated comment or template literal, unknown script interpreter | Exit 2 with `path:line:col`, no report | `test/check/run.ts` |
 | Coaching | Identical in binary and rule catalog document; every rule exercised | `test/check/run.ts` |
 | Cognitive and cyclomatic specimens | Hand-derived scores | `test/complexity/run.ts`, `fixture.ts` |
 | Cached, uncached and repeated runs | Byte-identical reports | `test/complexity/run.ts`, `fixture.ts` |
