@@ -90,7 +90,7 @@ try {
     await run(`${scratch}/szaniec`, ["check", project, "--json"], nested),
   );
   if (
-    conforming.format !== "szaniec-check/2" ||
+    conforming.format !== "szaniec-check/3" ||
     conforming.status !== "conforming" || conforming.components.length !== 2
   ) {
     throw new Error("Relocated bundle did not check the smoke project.");

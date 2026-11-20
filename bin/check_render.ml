@@ -1,5 +1,5 @@
 (* CheckClient rendering of the check report: human text grouped by rule,
-   or szaniec-check/2 JSON. *)
+   or szaniec-check/3 JSON. *)
 
 open Szaniec_model
 open Conformance

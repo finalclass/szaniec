@@ -110,7 +110,7 @@ ResourceAccess; everyone may use Utilities; nobody calls sideways or up.
 Other services are reached only through `_contract`, `_browser` or a facet.
 
 The [rule catalog](docs/contracts/rule-catalog.md) lists every rule, the
-library profile and the coaching. The JSON report (`szaniec-check/2`) is
+library profile and the coaching. The JSON report (`szaniec-check/3`) is
 specified in the [check contract](docs/contracts/check-contract.md).
 
 ## Inspect function complexity
